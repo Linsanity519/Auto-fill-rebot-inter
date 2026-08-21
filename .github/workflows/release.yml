@@ -44,7 +44,10 @@ jobs:
             $env:GITHUB_REF_NAME -replace '^v', ''
           }
           if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "版本号必须是 X.Y.Z：$version" }
-          python tools/set_version.py $version
+          $sourceVersion = python -c "from src import __version__; print(__version__)"
+          if ($sourceVersion -ne $version) {
+            throw "源码版本是 $sourceVersion；请先把 src/__init__.py 更新为 $version 并提交，再创建标签。"
+          }
           $env:RELEASE_VERSION = $version
           cmd /c build.bat
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
