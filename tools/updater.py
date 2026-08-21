@@ -24,6 +24,17 @@ import time
 import zipfile
 from pathlib import Path
 
+# ⚠ 这个脚本会往 stdout 打中文。英文 Windows / CI 上，输出被重定向时 Python 取的是
+#   ANSI 代码页（cp1252）而不是 chcp 设的 65001，直接 UnicodeEncodeError 崩掉，
+#   而且崩在打印那一行 —— 看起来像是功能出错，其实只是编码。实测在 GitHub
+#   Actions 上炸过一次。main.py 开头也做了同样的事。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
 APP_EXE = "配置助手.exe"
 BACKUP_DIR = ".backup"
 # 代码包负责整体替换的这几样。payload.json 是包自带的说明（版本 + 运行时代号）。

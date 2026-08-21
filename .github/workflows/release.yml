@@ -34,6 +34,11 @@ jobs:
     env:
       CI: true
       GH_TOKEN: ${{ github.token }}
+      # ⚠ 打包脚本会打印中文。runner 是英文环境，输出又被重定向，Python 会用
+      #   cp1252 编码 stdout 直接崩（实测炸过一次，报在 print 那一行，像功能出错
+      #   其实只是编码）。工具脚本自己也 reconfigure 了，这里再兜一层。
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
       # 统计回传地址默认取仓库里的 config/webhook.txt，不配 Secret 也能正常打包。
       # 配了这个 Secret 就以它为准（想换统计群时用），见 tools/inject_release_config.py。
       USAGE_WEBHOOK_URL: ${{ secrets.USAGE_WEBHOOK_URL }}
