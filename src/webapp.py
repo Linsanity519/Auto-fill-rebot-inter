@@ -29,6 +29,7 @@ import webview
 import yaml
 
 from . import chrome, notify, registry, update, usage
+from . import settings as settings_defaults
 from .paths import app_dir, resource, user_path
 from .ui import BaseUI, Stopped
 
@@ -50,7 +51,7 @@ def _load_settings() -> dict:
     if not path.exists():
         raise FileNotFoundError(
             f"找不到配置文件：{path}\n请确认 config 文件夹和程序放在同一目录下。")
-    s = yaml.safe_load(path.read_text(encoding="utf-8"))
+    s = settings_defaults.apply_defaults(yaml.safe_load(path.read_text(encoding="utf-8")))
     for key in ("state_file", "result_file", "log_file", "screenshot_dir", "data_file"):
         v = s.get(key)
         if v and not Path(v).is_absolute():
@@ -234,18 +235,23 @@ class Api:
     def download_update(self) -> dict:
         return self._updater.download()
 
-    def install_update(self, installer: str) -> dict:
-        """交棒给独立 EXE。当前窗口随后退出，避免占用待替换的程序文件。"""
-        if not self._updater.is_verified_installer(installer):
-            return {"ok": False, "error": "安装包校验未通过，请重新下载"}
+    def install_update(self, package: str) -> dict:
+        """交棒给独立 EXE。当前窗口随后退出，避免占用待替换的程序文件。
+
+        ⚠ 不信前端传回来的路径：verify_downloaded 会重算摘要并确认它就在
+          output/updates 里，否则等于让页面指定「拿哪个文件覆盖程序」。
+        """
+        kind = self._updater.verify_downloaded(package)
+        if not kind:
+            return {"ok": False, "error": "更新包校验未通过，请重新下载"}
         helper = ROOT / "配置助手更新器.exe"
         if not helper.is_file():
             return {"ok": False, "error": f"找不到更新器：{helper}"}
-        log_path = ROOT / "output" / "update-install.log"
+        log_path = ROOT / "output" / "update-run.log"
         try:
             subprocess.Popen([
-                str(helper), "--pid", str(os.getpid()), "--installer", installer,
-                "--log", str(log_path),
+                str(helper), "--pid", str(os.getpid()),
+                f"--{kind}", package, "--target", str(ROOT), "--log", str(log_path),
             ], cwd=str(ROOT), creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
             # 让本次 API 返回先送达前端，再销毁窗口；更新器会等本进程真正退出。
             threading.Timer(0.5, self._window.destroy).start()

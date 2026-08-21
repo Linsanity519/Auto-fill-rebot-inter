@@ -1,6 +1,5 @@
 playwright>=1.44
-openpyxl>=3.1
-pandas>=2.2
+openpyxl>=3.1        # 读写 xlsx；datasource.py 用它替掉了 pandas
 PyYAML>=6.0
 pywebview>=6.0
 Pillow>=10.0

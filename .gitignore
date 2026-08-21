@@ -1,5 +1,6 @@
 # 登录凭据 —— 绝对不能分发或提交
 .chrome-profile/
+.chrome-profile-*/
 
 # 运行产物
 output/
@@ -8,6 +9,8 @@ dist/
 build.prepackage-*/
 dist.prepackage-*/
 *.spec
+# 但主程序的打包配方要进仓库 —— 它不是 PyInstaller 生成的，是手写的
+!build_app.spec
 
 # 数据（可能含业务敏感信息）
 data/
@@ -20,3 +23,10 @@ __pycache__/
 
 # 企微文档机器人的 apikey —— 全权限，绝不能进仓库或分发包
 tools/.mcp_key
+
+# 统计回传地址 —— 随分发包发出去，但绝不能进公开仓库。
+# 打包时由 build.bat / CI 从 USAGE_WEBHOOK_URL 生成，见 src/report.py。
+config/webhook.txt
+
+# 打包时从 config/settings.yaml 拷过去的默认值副本，见 src/settings.py
+assets/settings.default.yaml

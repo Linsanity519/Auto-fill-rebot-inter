@@ -275,6 +275,15 @@
 
   // 更新检查不影响主流程：服务器暂不可用时只在侧栏给出「可重试」提示，
   // 绝不能让用户因为更新服务故障而不能配置业务。
+  function fmtSize(info) {
+    if (!info.size) return "";
+    const big = info.kind !== "payload";
+    const size = info.size >= 1048576
+      ? `${(info.size / 1048576).toFixed(0)}MB`
+      : `${Math.round(info.size / 1024)}KB`;
+    return big ? `（完整安装包 ${size}，用时较久）` : `（${size}）`;
+  }
+
   function renderUpdate(info) {
     const box = $("#updateBox");
     const label = $("#updateLabel");
@@ -289,7 +298,9 @@
     check.textContent = "检查更新";
     install.classList.add("hidden");
     if (info.state === "available") {
-      label.textContent = `发现新版本 ${info.version}${info.notes ? `：${info.notes}` : ""}`;
+      // 下载量差着两个数量级（代码包 ~300KB vs 完整安装包 ~45MB），而 GitHub 在
+      // 内网只有几十 KB/s —— 不写清楚的话，点下去要等 40 分钟的人会以为卡死了。
+      label.textContent = `发现新版本 ${info.version}${fmtSize(info)}${info.notes ? `：${info.notes}` : ""}`;
       install.classList.remove("hidden");
     } else if (info.state === "current") {
       label.textContent = "当前已是最新版本";
@@ -315,6 +326,7 @@
     install.disabled = true;
     check.disabled = true;
     install.textContent = "正在下载…";
+    $("#updateLabel").textContent = "正在下载更新，请稍候…";
     callApi("download_update").then((download) => {
       if (!download || !download.ok) throw new Error((download && download.error) || "下载失败");
       $("#updateLabel").textContent = `已下载 ${download.version}，正在安装并重启…`;

@@ -18,30 +18,70 @@ pip install -r requirements.txt
 build.bat
 ```
 
-产出 `dist\配置助手-Setup-X.Y.Z.exe`。首次把这个安装包发给同事；它会安装到当前用户的
-`%LOCALAPPDATA%\配置助手`，对方只需要 Chrome，不需要 Python 或管理员权限。
+产出**两个**包：
 
-从带更新功能的首版开始，在 `config/settings.yaml` 填入 `update.manifest_url` 并启用更新。
-每次发新版后，执行：
+| 产物 | 大小 | 什么时候用 |
+|---|---|---|
+| `dist\ConfigAssistant-<ver>.zip` | ~300KB | **日常发版**。只含 `src/` + `assets/` + `main.py` |
+| `dist\ConfigAssistant-Setup-<ver>.exe` | ~45MB | 首次安装；以及动了 `requirements.txt` 时 |
+
+### 为什么拆成两个
+
+整个程序 98MB，其中真正每次会变的只有 `src/` + `assets/`，1.6MB，压缩后 300KB；
+剩下 98% 是 playwright / Pillow / CPython 这些几乎从不变的运行时。
+而 GitHub Release 在内网实测只有 **20~40KB/s** —— 300KB 约 8 秒，98MB 要 40 分钟。
+
+所以打包时把两者拆开（`build_app.spec` 用 onedir，`src/`、`assets/` 以普通文件放在
+exe 旁边而不冻进包里），日常更新只换代码。运行时代号记在仓库根的 `RUNTIME_ID`：
+**只有改了 `requirements.txt` 才手动 +1**。代码包声明 `min_runtime`，本机
+`runtime.txt` 达不到就自动改走完整安装包，不会出现「新代码 import 到本机没有的库」。
+
+### 发布
+
+推一个 `vX.Y.Z` 标签，GitHub Actions 会自动打包并把三个文件（代码包、安装包、
+`latest.json`）发布成 Release，不需要本机装 Inno Setup 或 GitHub CLI。
+
+手动发版：
 
 ```bash
-python tools\make_update_manifest.py --version X.Y.Z --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --base-url https://你的发布目录 --notes "本次更新说明"
-```
-
-将安装包和生成的 `dist\latest.json` 发布到同一个目录。当前默认发布到 GitHub Releases：
-
-```bash
-python tools\make_update_manifest.py --version X.Y.Z --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z --notes "本次更新说明"
+python tools\make_update_manifest.py --version X.Y.Z --runtime 1 --payload dist\ConfigAssistant-X.Y.Z.zip --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z
 python tools\publish_github_release.py --version X.Y.Z --notes "本次更新说明"
 ```
 
-也可以直接推送 `vX.Y.Z` 标签，仓库内的 GitHub Actions 会在 Windows 构建机自动打包、生成
-`latest.json` 并创建 Release，不需要本机安装 Inno Setup 或 GitHub CLI。GitHub 的
-`releases/latest/download/latest.json` 是程序读取的稳定更新地址。程序启动后会后台检查，
-发现新版时由用户点击「更新并重启」完成下载、校验、安装与重启。
+`latest.json` 里每个包可以给**多个下载地址**，程序按顺序试到通为止。想加速就在
+仓库变量 `MIRROR_BASE_URL` 里填一个国内镜像（如 Gitee Releases），CI 会把它排在
+GitHub 前面。
 
-升级只替换程序、表单映射和团队统计快照；`data/`、`output/`、`.chrome-profile/`、本地策略和
-准备参数都会保留。`config/settings.yaml` 也不会被覆盖，新增配置项应由版本迁移或手动补充。
+程序启动后后台检查更新，发现新版时由用户点「更新并重启」，界面上会写明这次要下多大。
+
+### 升级会动什么、不会动什么
+
+**会覆盖**：程序本体、`src/`、`assets/`、`config/forms/`、`config/team.json`、
+`config/webhook.txt`。
+
+**一律保留**：`data/`、`output/`、`.chrome-profile/`、`config/settings.yaml`、
+`config/strategies/`、`config/prep/`。
+
+`settings.yaml` 不被覆盖，但新版本新增的配置项会由 `src/settings.py` 用
+`assets/settings.default.yaml` 自动兜底补上 —— 否则从老版本升上来的人会因为
+配置里没有 `update:` 段而**永远收不到下一次更新**。
+
+### 从老的绿色版迁移
+
+老同事手上是解压出来的 `配置助手分发包_vX.Y.Z\` 文件夹，而安装包装到
+`%LOCALAPPDATA%\配置助手` —— 是个全新的空目录。所以安装向导里有一步「从旧版本迁移」，
+会自动探测常见位置，把旧文件夹里的 `config/`（策略、准备参数、settings）、`data/`
+和使用统计搬过来。不迁移的话，第一次升级在同事眼里就是「恢复出厂设置」。
+
+浏览器登录态（`.chrome-profile`）不迁移，装好后需要重新登录一次。
+
+### 统计回传地址
+
+仓库是公开的，企微群机器人的 key 不能进 git。它放在 `config/webhook.txt`（已 gitignore），
+打包时由 `tools/inject_release_config.py` 从环境变量 `USAGE_WEBHOOK_URL` 注入；
+CI 从 Secret `USAGE_WEBHOOK_URL` 取。安装包用 `ignoreversion` 发它，
+所以每次升级都会刷新 —— 这点是必需的：升级不覆盖 `settings.yaml`，
+如果地址只存在那里，老用户升上来后统计就静默失效了。
 
 **`.chrome-profile` 目录含登录凭据，不要从旧分发文件夹复制或发送给他人。**
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from src import settings as settings_defaults
 from src.paths import app_dir, user_path
 
 ROOT = app_dir()
@@ -70,7 +71,8 @@ def main():
     settings_path = Path(args.settings)
     if not settings_path.is_absolute():
         settings_path = ROOT / settings_path
-    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+    settings = settings_defaults.apply_defaults(
+        yaml.safe_load(settings_path.read_text(encoding="utf-8")))
     settings.setdefault("_root", str(ROOT))
     for key in ("state_file", "result_file", "log_file", "screenshot_dir", "data_file"):
         if settings.get(key) and not Path(settings[key]).is_absolute():

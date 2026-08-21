@@ -1,5 +1,15 @@
 name: Build and publish release
 
+# 发一版会产出三个文件：
+#   ConfigAssistant-<ver>.zip        代码包，~300KB —— 日常更新下的是它
+#   ConfigAssistant-Setup-<ver>.exe  完整安装包，~45MB —— 首次安装 / 运行时变了才需要
+#   latest.json                      更新描述，客户端按它决定下哪个
+#
+# ⚠ GitHub Release 在国内实测只有 20~40KB/s。所以：
+#   ① 日常更新走 300KB 的代码包（约 8 秒），而不是几十 MB 的安装包；
+#   ② 仓库变量 MIRROR_BASE_URL 若配了国内镜像，会被写在下载地址列表的**最前面**，
+#     GitHub 只作兜底。客户端按顺序试到通为止（见 src/update.py 的 _fetch_to）。
+
 on:
   push:
     tags:
@@ -7,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "发布版本号，例如 1.0.7"
+        description: "发布版本号，例如 1.0.9"
         required: true
         type: string
 
@@ -20,6 +30,9 @@ jobs:
     env:
       CI: true
       GH_TOKEN: ${{ github.token }}
+      # 统计回传地址。不进仓库（公开），由 Secret 注入到 config/webhook.txt。
+      # ⚠ 没配这个 Secret 的话，打出来的包统计是静默失效的 —— 见 src/report.py。
+      USAGE_WEBHOOK_URL: ${{ secrets.USAGE_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +47,14 @@ jobs:
           pip install -r requirements.txt pyinstaller
           choco install innosetup --no-progress --yes
 
-      - name: Build installer
+      - name: Warn if stats webhook is missing
+        shell: pwsh
+        run: |
+          if (-not $env:USAGE_WEBHOOK_URL) {
+            Write-Warning "未配置 USAGE_WEBHOOK_URL Secret：这一版发出去后，同事那边的使用统计不会回传。"
+          }
+
+      - name: Build installer and payload
         id: build
         shell: pwsh
         run: |
@@ -48,19 +68,41 @@ jobs:
           if ($sourceVersion -ne $version) {
             throw "源码版本是 $sourceVersion；请先把 src/__init__.py 更新为 $version 并提交，再创建标签。"
           }
+          $runtime = (Get-Content RUNTIME_ID -Raw).Trim()
           $env:RELEASE_VERSION = $version
           cmd /c build.bat
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "version=$version" >> $env:GITHUB_OUTPUT
+          "runtime=$runtime" >> $env:GITHUB_OUTPUT
 
       - name: Generate update manifest
         shell: pwsh
         run: |
           $version = "${{ steps.build.outputs.version }}"
-          python tools/make_update_manifest.py --version $version --installer "dist/ConfigAssistant-Setup-$version.exe" --base-url "https://github.com/${{ github.repository }}/releases/download/v$version" --notes "配置助手 v$version"
+          $runtime = "${{ steps.build.outputs.runtime }}"
+          $gh = "https://github.com/${{ github.repository }}/releases/download/v$version"
+          # 国内镜像放前面，GitHub 兜底。没配镜像就只有 GitHub。
+          $bases = @()
+          if ("${{ vars.MIRROR_BASE_URL }}") {
+            $bases += "--base-url"
+            $bases += "${{ vars.MIRROR_BASE_URL }}/v$version"
+          }
+          $bases += "--base-url"
+          $bases += $gh
+          python tools/make_update_manifest.py `
+            --version $version `
+            --runtime $runtime `
+            --payload "dist/ConfigAssistant-$version.zip" `
+            --installer "dist/ConfigAssistant-Setup-$version.exe" `
+            --notes "配置助手 v$version" `
+            @bases
 
       - name: Create GitHub Release
         shell: pwsh
         run: |
           $version = "${{ steps.build.outputs.version }}"
-          gh release create "v$version" "dist/ConfigAssistant-Setup-$version.exe" "dist/latest.json" --title "配置助手 v$version" --generate-notes --repo "${{ github.repository }}"
+          gh release create "v$version" `
+            "dist/ConfigAssistant-$version.zip" `
+            "dist/ConfigAssistant-Setup-$version.exe" `
+            "dist/latest.json" `
+            --title "配置助手 v$version" --generate-notes --repo "${{ github.repository }}"

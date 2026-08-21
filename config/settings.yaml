@@ -34,6 +34,13 @@ update:
   enabled: true
   # GitHub 会始终把「最新 Release」中同名资产映射到这个稳定地址。
   # 每次发布时把最新生成的 latest.json 也作为 Release 资产上传即可。
+  #
+  # ⚠ 更新分两种包，程序自己挑（见 src/update.py）：
+  #     代码包 ~300KB   日常发版走它。整个程序 98MB 里真正会变的只有 src/+assets/。
+  #     安装包 ~45MB    只有动了 requirements.txt（运行时变了）才需要。
+  #   GitHub Release 在内网实测 20~40KB/s：代码包 8 秒，安装包 40 分钟 ——
+  #   这就是拆包的全部理由。latest.json 里每个包可以给多个地址，
+  #   把国内镜像排在 GitHub 前面，程序会按顺序试到通为止。
   manifest_url: "https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/latest/download/latest.json"
   check_interval_hours: 12
   timeout_seconds: 10
@@ -61,7 +68,11 @@ usage:
   #   泄露的最坏情况只是有人往那个群里发消息。
   #   （企微文档机器人那把 apikey 能读能写、更方便，但它没法限权、一把覆盖持有人
   #     名下所有文档，绝不能进分发包 —— 它只留在收集端 tools/.mcp_key。）
-  # 每个部署自行填写专用统计群机器人的 Webhook；公开仓库和分发包默认留空。
+  # ⚠ 这里留空是**故意**的，不是忘了填：仓库是公开的，key 不能进 git。
+  #   实际地址放在 config/webhook.txt（不进仓库，打包时由
+  #   tools/inject_release_config.py 从 USAGE_WEBHOOK_URL 注入），
+  #   安装包用 ignoreversion 每次升级都刷新它。
+  #   这里填了就以这里为准（本机想换个群时用）。解析顺序见 src/report.py。
   webhook_url: ""
 
   # 上报里显示的名字。留空就只有匿名指纹（8 位哈希），反推不回是谁。

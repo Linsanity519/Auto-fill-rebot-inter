@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox, ttk
 import yaml
 
 from . import chrome, notify, registry, theme
+from . import settings as settings_defaults
 from .paths import app_dir, resource, user_path
 from .theme import (BG, BORDER, CARD, CONSOLE_BG, CONSOLE_FG, DANGER, PINK,
                     PINK_LIGHT, SUCCESS, TEXT, TEXT_MUTED, TEXT_SUB, WARNING,
@@ -129,7 +130,7 @@ class App:
                 f"找不到配置文件：{path}\n"
                 f"请确认 config 文件夹和程序放在同一目录下。")
 
-        s = yaml.safe_load(path.read_text(encoding="utf-8"))
+        s = settings_defaults.apply_defaults(yaml.safe_load(path.read_text(encoding="utf-8")))
         for key in ("state_file", "result_file", "log_file", "screenshot_dir", "data_file"):
             v = s.get(key)
             if v and not Path(v).is_absolute():

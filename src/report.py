@@ -23,14 +23,42 @@ import logging
 import urllib.error
 import urllib.request
 
+from .paths import user_path
+
 log = logging.getLogger(__name__)
 
 TIMEOUT = 3          # 内网偶尔抽风，三秒不通就算了，下次再补
 MAX_BYTES = 1800     # 企微 text 消息上限 2048 字节，留点余量
 
 
+def _webhook_from_file() -> str:
+    """从 config/webhook.txt 读回传地址。
+
+    ⚠ 为什么不直接写在 settings.yaml 里：仓库已经公开，那个 key 不能进 git。
+      但它又必须跟着分发包发出去（不然同事那边统计就是死的）。所以拆成一个
+      **不进仓库、打包时注入**的单独文件：
+        · 本机打包 → build.bat 从环境变量 USAGE_WEBHOOK_URL 或已有文件生成
+        · CI 打包   → GitHub Actions 从 Secret 注入
+      安装包用 ignoreversion 发它，所以老用户升级时也会被刷新 —— 这点很关键：
+      升级不覆盖 settings.yaml（怕冲掉用户改的配置），如果地址只存在
+      settings.yaml 里，从 1.0.6 升上来的人就永远是空的。
+    ⚠ 文件缺失是正常情况（比如别人自己 clone 打的包），此时静默不上报。
+    """
+    p = user_path("config", "webhook.txt")
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
+    except OSError:
+        pass
+    return ""
+
+
 def webhook_url(settings: dict) -> str:
-    return (((settings or {}).get("usage") or {}).get("webhook_url") or "").strip()
+    """settings.yaml 里显式填了就用它（本机自定义优先），否则用随包注入的那份。"""
+    explicit = (((settings or {}).get("usage") or {}).get("webhook_url") or "").strip()
+    return explicit or _webhook_from_file()
 
 
 def enabled(settings: dict) -> bool:
