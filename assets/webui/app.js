@@ -1,0 +1,2815 @@
+/* 阶段2：三步面板接上真实 Runner。
+ *
+ * Python 端（src/webapp.py）：
+ *   - load_and_check / row_detail / make_template / pick_file / clear_state / open_output_dir
+ *     是一问一答的普通调用
+ *   - start_run 之后，Runner 在后台线程跑，通过 window.app.onLog/onProgress/onConfirm/
+ *     onAskContinue/onFinished/onRunDone these 几个入口把事件推过来（WebUI._push 调的
+ *     就是这几个），不是本文件主动去问
+ *
+ * hasBackend()=false（比如直接拿普通浏览器打开这个文件核对样式）时，
+ * callApi() 走本地假数据，方便不启动 pywebview 也能看外壳。
+ */
+(function () {
+  "use strict";
+
+  // ⚠ 不能缓存成常量：pywebview 的 window.pywebview.api 是异步注入的，
+  //   脚本刚执行的这一刻它大概率还没就绪。缓存下来的话第一次判断落到
+  //   false 就永远走假数据分支了（实测：browser_status 轮询一直卡在
+  //   "未连接"，即使真的连上了）。改成每次调用现查。
+  function hasBackend() { return !!(window.pywebview && window.pywebview.api); }
+
+  // 只有网址上带 ?demo 才允许拿假的统计数据充数，见 callApi 里的说明
+  const DEMO = String(location.search || "").indexOf("demo") >= 0;
+
+  // group / label / *_order 对应 config/forms/*.yaml 里的 nav 段，
+  // 真实值来自 list_forms，这里只是没有后端时的样子货
+  const STUB_FORMS = [
+    { name: "DMP延期", mode: "dmp_extension", group: "DMP人群包", group_order: 1, label: "DMP人群延期", order: 1, desc: "大会员 DMP 人群管理 - 批量把人群有效期延长", scopes: [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]] },
+    { name: "AB实验延期", mode: "ab_extension", group: "AB实验", group_order: 2, label: "AB实验延期", order: 1, desc: "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", scopes: [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]] },
+    { name: "DMP人群新建", mode: null, group: "DMP人群包", group_order: 1, label: "DMP人群新建", order: 2, desc: "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", scopes: [] },
+    { name: "价格配置", mode: null, group: "价格", group_order: 3, label: "价格策略配置", order: 1, desc: "策略中心 - 算法价格人群配置", scopes: [] },
+    { name: "资源位投放", mode: "wizard", group: "大会员资源位", group_order: 4, label: "常规资源位配置", order: 1, desc: "大会员投放系统 - 活动 / 单元 / 创意 三步配置", scopes: [] },
+    { name: "原生商广", mode: "ad_native", group: "商业化广告", group_order: 5, label: "原生商广", order: 1, desc: "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", scopes: [] },
+    { name: "预定会议室", mode: "meeting_reserve", group: "日常办公", group_order: 6, label: "预定会议室", order: 1, desc: "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", scopes: [] },
+  ];
+
+  // 没有后端时的假抢占任务数据：只够看清任务行的排版，真实楼栋清单来自
+  // config/forms/预定会议室.yaml 的 buildings，不在这里维护第二份
+  const STUB_MEETING = {
+    meeting: true,
+    buildings: ["国正中心/2号楼", "国正中心/1号楼", "国正中心/3号楼"],
+    default_task: {
+      enabled: true, repeat_weekly: false, date: "", weekday: 1,
+      start: "14:00", end: "15:00", min_capacity: 6,
+      building: "国正中心/2号楼", building_only: false, room: "", subject: "会议", remarks: "",
+    },
+    weekday_names: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+    rule_text: "10点之前只能预定5个工作日之内的会议室，10点之后才可预定第6个工作日的会议室",
+    open_time: "10:00",
+    tasks: [],
+    issues: [],
+  };
+
+  // 没有后端时的假 wizard 数据：只够看清资源位 chip、策略中心两栏排版对不对，
+  // 真实清单来自 config/forms/*.yaml，不在这里维护第二份
+  const STUB_WIZARD = {
+    wizard: true,
+    positions: [
+      { name: "播放页催费条", scene: "OGV播放页", system: "v1", strategy_fields: ["生效平台", "展示不超过", "人群选组"] },
+      { name: "会员中心弹窗", scene: "会员中心", system: "v1", strategy_fields: ["生效平台", "限频规则", "人群选组"] },
+      { name: "端外PUSH", scene: "消息渠道", system: "新版", strategy_fields: ["投放流量池"] },
+    ],
+    strategy_fields: [
+      { name: "生效平台", kind: "multi", options: ["Android", "iPhone", "PC"], required: true, positions: ["播放页催费条", "会员中心弹窗"], scheme_group: "", when: null, group: "定向投放" },
+      { name: "展示不超过", kind: "text", options: [], required: false, positions: ["播放页催费条"], scheme_group: "", when: null, group: "投放设置" },
+      { name: "限频规则", kind: "single", options: ["达到频次限制后不再投放", "未达到频次限制时投放被点击，不再投放"], required: true, positions: ["会员中心弹窗"], scheme_group: "", when: null, group: "投放设置" },
+      { name: "投放流量池", kind: "single", options: ["日常池", "特殊最优池"], required: true, positions: ["端外PUSH"], scheme_group: "", when: null, group: "投放设置" },
+      { name: "人群选组", kind: "single", options: ["不限", "指定人群"], required: true, positions: ["播放页催费条", "会员中心弹窗"], scheme_group: "audience", when: null, group: "人群" },
+      { name: "我想投放", kind: "multi", options: ["未登录", "在期大会员", "过期大会员"], required: true, positions: ["播放页催费条", "会员中心弹窗"], scheme_group: "audience", when: ["人群选组", "指定人群"], group: "人群" },
+      { name: "过期大会员天数", kind: "range", options: [], required: true, positions: ["播放页催费条", "会员中心弹窗"], scheme_group: "audience", when: ["我想投放", "过期大会员"], group: "人群" },
+      { name: "生效内容", kind: "single", options: ["全部", "部分分区"], required: true, positions: ["播放页催费条", "会员中心弹窗"], scheme_group: "content", when: null, group: "内容限制" },
+    ],
+    groups: ["定向投放", "投放设置"],
+    scheme_groups: [
+      { key: "audience", name: "人群", exception_field: "人群方案", fields: ["人群选组", "我想投放", "过期大会员天数"] },
+      { key: "content", name: "内容限制", exception_field: "内容限制方案", fields: ["生效内容"] },
+    ],
+  };
+  const STUB_STRATEGY = {
+    active: "默认策略",
+    items: {
+      默认策略: {
+        rules: {},
+        groups: {
+          audience: {
+            mode: "fixed", scheme: "新客", rules: [{ keywords: ["新客", "拉新"], schemes: ["新客"] }],
+            fallback: [], schemes: { 新客: { 人群选组: "指定人群" }, 即期: { 人群选组: "指定人群" } },
+          },
+          content: {
+            mode: "fixed", scheme: "常规", rules: [], fallback: [],
+            schemes: { 常规: { 生效内容: "全部" } },
+          },
+        },
+        exceptions: [], updated_at: "",
+      },
+    },
+  };
+
+  // 原生商广准备参数的假数据，同样只为了在普通浏览器里核对样式
+  const STUB_AD = {
+    ad: true,
+    fields: [
+      { name: "计划名称", type: "text", required: true, ph: "如【26年8月】原生内容素材-整合版" },
+      { name: "已有计划ID", type: "text", ph: "留空 = 本次新建计划" },
+      { name: "转化目标", type: "select", required: true, options: ["表单提交"] },
+      { name: "出价", type: "number", required: true, unit: "元/转化" },
+      { name: "投放时间", type: "segmented", required: true, options: ["长期投放", "设置起止时间"] },
+      { name: "投放起止时间", type: "text", when: ["投放时间", "设置起止时间"] },
+      { name: "指定人群", type: "text" },
+      { name: "排除人群", type: "text" },
+    ],
+    values: { 转化目标: "表单提交", 出价: "200", 投放时间: "设置起止时间" },
+    grouping: {},
+  };
+
+  // 首页/数据统计的假数据，同样只为了在普通浏览器里核对样式
+  const STUB_USAGE = {
+    since: "2026-07-01", people: 3, people_opened: 5, shared: false, me: "abc12345",
+    opens: 12, retries: 1, dry_runs: 2,
+    saving: { mode: "baseline", multiplier: 3, default_seconds: 120, per_item_seconds: {} },
+    report: { on: true, pending: 2, snapshot_at: "", error: "连不上网", syncing: false },
+    snapshot_at: "2026-08-21T13:00:00+08:00",
+    totals: { runs: 9, items: 143, failed: 4, skipped: 6, attempted: 153,
+              seconds: 5400, human: 47000, saved: 41600, ok_rate: 0.972 },
+    week: { items: 21, seconds: 900, saved: 7000 },
+    longest: { seconds: 2400, items: 40, form: "资源位投放", ts: "2026-08-18T10:00:00+08:00" },
+    forms: [{ name: "资源位投放", runs: 5, ok: 100, failed: 2, skipped: 0, total: 102,
+              seconds: 4000, human: 48000, saved: 44000, last: "2026-08-20T09:00:00+08:00" }],
+    weeks: [{ week: "2026-08-17", label: "08-17", items: 21, seconds: 900, saved: 7000 }],
+    recent: [{ ts: "2026-08-20T09:00:00+08:00", form: "资源位投放", mode: "auto",
+               uid: "abc12345", ok: 20, total: 20, seconds: 900 }],
+  };
+
+  function callApi(name, ...args) {
+    if (hasBackend() && window.pywebview.api[name]) {
+      return window.pywebview.api[name](...args);
+    }
+    // 没有 Python 后端时的假数据，只为了能在普通浏览器里核对样式
+    if (name === "list_forms") return Promise.resolve(STUB_FORMS);
+    if (name === "browser_status") return Promise.resolve(false);
+    if (name === "wizard_meta") return Promise.resolve(STUB_WIZARD);
+    if (name === "ad_meta") return Promise.resolve(STUB_AD);
+    if (name === "meeting_meta") return Promise.resolve(STUB_MEETING);
+    if (name === "meeting_save") return Promise.resolve({ ok: true, tasks: args[1] || [], issues: [] });
+    if (name === "prep_save") return Promise.resolve({ ok: true, values: {}, issues: [] });
+    if (name === "strategy_get") return Promise.resolve({ ok: true, path: "config/strategies/…json", doc: STUB_STRATEGY });
+    // ⚠ 统计的样子货只在网址带 ?demo 时给。别的样子货最多让界面长得不对，
+    //   这一份不一样 —— 它会变成首页上一串**看起来像真的**的数字。
+    //   宁可首页空着，也不能让人对着编出来的「省下 12 小时」做判断。
+    if (name === "usage_summary") return Promise.resolve(DEMO ? STUB_USAGE : null);
+    return Promise.resolve(null);
+  }
+
+  const state = {
+    forms: [],
+    activeForm: null,
+    view: "home",           // home = 首页（统计/导航） / form = 某个配置类型的三步流程
+    version: "",            // app_info 返回的版本号，显示在侧栏底部
+    usage: null,            // usage_summary 返回的聚合结果
+    step: "prepare",
+    logOpen: false,
+    logCount: 0,
+    logErrors: 0,
+    runMode: "confirm",
+    scopeValue: null,
+    dataFile: "",
+    loaded: false,          // 当前配置类型是否已经成功载入过一次
+    previewRows: [],        // load_and_check 返回的行摘要（不含 payload）
+    reviewFilter: "all",    // all | bad | done
+    browserConnected: false,
+    running: false,
+
+    // wizard（资源位投放）专用
+    wizardMeta: null,       // wizard_meta 返回的资源位 / 策略字段定义
+    positions: [],          // 本次勾选的资源位，和「生成模板」解耦，是独立的一步
+    activityMode: "new",    // new = 本次新建活动 / existing = 挂到已有活动
+    activityId: "",
+    strategyDoc: null,      // 策略中心整份文档 {active, items}
+    wizardTab: "deliver",   // 资源位投放下面的二级 Tab：deliver=投放配置 / strategy=策略中心
+
+    // 原生商广专用
+    adMeta: null,           // ad_meta 返回的准备阶段字段定义
+    prepValues: {},         // 准备阶段当前填的值，存盘走 prep_save
+
+    // 预定会议室专用
+    meetingMeta: null,      // meeting_meta 返回的楼栋清单 / 默认值 / 提前天数
+    meetingTasks: [],       // 抢占任务清单，存盘走 meeting_save
+  };
+
+  function modeIs(mode) {
+    const meta = state.forms.find((f) => f.name === state.activeForm);
+    return !!(meta && meta.mode === mode);
+  }
+  function isWizard() { return modeIs("wizard"); }
+  function isAdNative() { return modeIs("ad_native"); }
+  function isMeeting() { return modeIs("meeting_reserve"); }
+
+  // 资源位勾选 / 活动设置记在本地，换个配置类型再切回来不用重勾
+  function prefsKey() { return `formbot.wizard.${state.activeForm}`; }
+  function savePrefs() {
+    if (!isWizard()) return;
+    try {
+      localStorage.setItem(prefsKey(), JSON.stringify({
+        positions: state.positions, activityMode: state.activityMode,
+        activityId: state.activityId,
+      }));
+    } catch (e) { /* 忽略：localStorage 不可用不影响主流程 */ }
+  }
+  function loadPrefs() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(prefsKey()) || "null"); } catch (e) { saved = null; }
+    state.positions = (saved && Array.isArray(saved.positions)) ? saved.positions : [];
+    state.activityMode = (saved && saved.activityMode === "existing") ? "existing" : "new";
+    state.activityId = (saved && saved.activityId) || "";
+  }
+
+  const STEP_ORDER = ["prepare", "review", "execute"];
+  const STEP_LABEL = { prepare: "准备", review: "核对", execute: "执行" };
+
+  const $ = (sel) => document.querySelector(sel);
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  function escapeHtml(s) {
+    const d = document.createElement("div");
+    d.textContent = String(s == null ? "" : s);
+    return d.innerHTML;
+  }
+
+  // ---------------- 日志抽屉 ----------------
+  function appendLog(msg, level) {
+    level = level || "info";
+    const console_ = $("#logConsole");
+    const line = el("div", "line");
+    const ts = new Date().toTimeString().slice(0, 8);
+    const span = el("span", `lvl-${level}`, msg);
+    line.appendChild(el("span", "ts", `${ts}  `));
+    line.appendChild(span);
+    console_.appendChild(line);
+    console_.scrollTop = console_.scrollHeight;
+
+    state.logCount++;
+    $("#logCountPill").textContent = String(state.logCount);
+    if (level === "error") {
+      state.logErrors++;
+      const p = $("#logErrorPill");
+      p.textContent = `${state.logErrors} 报错`;
+      p.classList.remove("hidden");
+    }
+  }
+
+  function setLogOpen(open) {
+    state.logOpen = open;
+    $("#logDrawer").classList.toggle("open", open);
+    $("#logToggleHint").textContent = open ? "收起 ⌃" : "展开 ⌄";
+  }
+
+  // ---------------- 主题 ----------------
+  function applyTheme(dark) {
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    $("#themeToggle").classList.toggle("on", dark);
+    try { localStorage.setItem("formbot.theme", dark ? "dark" : "light"); } catch (e) { /* 忽略 */ }
+  }
+
+  // 版本号来自 Python 端的 src/__init__.py，全项目只有那一个
+  function renderVersion() {
+    callApi("app_info").then((info) => {
+      state.version = (info && info.version) || "";
+      $("#appVersion").textContent = state.version ? `版本 ${state.version}` : "";
+    });
+  }
+
+  // 更新检查不影响主流程：服务器暂不可用时只在侧栏给出「可重试」提示，
+  // 绝不能让用户因为更新服务故障而不能配置业务。
+  function renderUpdate(info) {
+    const box = $("#updateBox");
+    const label = $("#updateLabel");
+    const install = $("#btnInstallUpdate");
+    const check = $("#btnCheckUpdate");
+    if (!info || info.state === "disabled") {
+      box.classList.add("hidden");
+      return;
+    }
+    box.classList.remove("hidden");
+    check.disabled = false;
+    check.textContent = "检查更新";
+    install.classList.add("hidden");
+    if (info.state === "available") {
+      label.textContent = `发现新版本 ${info.version}${info.notes ? `：${info.notes}` : ""}`;
+      install.classList.remove("hidden");
+    } else if (info.state === "current") {
+      label.textContent = "当前已是最新版本";
+    } else {
+      label.textContent = info.message || "检查更新失败，可稍后重试";
+    }
+  }
+
+  function checkForUpdate(force) {
+    const box = $("#updateBox");
+    const label = $("#updateLabel");
+    if (force) {
+      box.classList.remove("hidden");
+      label.textContent = "正在检查更新…";
+      $("#btnCheckUpdate").disabled = true;
+    }
+    return callApi("check_update", !!force).then(renderUpdate);
+  }
+
+  function downloadAndInstallUpdate() {
+    const install = $("#btnInstallUpdate");
+    const check = $("#btnCheckUpdate");
+    install.disabled = true;
+    check.disabled = true;
+    install.textContent = "正在下载…";
+    callApi("download_update").then((download) => {
+      if (!download || !download.ok) throw new Error((download && download.error) || "下载失败");
+      $("#updateLabel").textContent = `已下载 ${download.version}，正在安装并重启…`;
+      install.textContent = "正在安装…";
+      return callApi("install_update", download.path);
+    }).then((installed) => {
+      if (!installed || !installed.ok) throw new Error((installed && installed.error) || "启动安装失败");
+      // Python 端会在本次桥接调用返回后主动退出窗口，独立更新器再启动安装包。
+    }).catch((err) => {
+      $("#updateLabel").textContent = `更新失败：${err.message || err}`;
+      install.disabled = false;
+      install.textContent = "重新下载";
+      check.disabled = false;
+    });
+  }
+
+  function initTheme() {
+    let dark = false;
+    try {
+      const saved = localStorage.getItem("formbot.theme");
+      if (saved) dark = saved === "dark";
+    } catch (e) { /* 忽略 */ }
+    applyTheme(dark);
+    $("#themeToggle").addEventListener("click", () => {
+      applyTheme(document.documentElement.getAttribute("data-theme") !== "dark");
+    });
+  }
+
+  // ---------------- 通用弹窗 ----------------
+  function showModal({ title, desc, buttons, extraHtml }) {
+    $("#modalTitle").textContent = title || "";
+    $("#modalDesc").textContent = desc || "";
+    const extra = $("#modalExtra");
+    if (extraHtml) {
+      extra.innerHTML = extraHtml;
+      extra.classList.remove("hidden");
+    } else {
+      extra.innerHTML = "";
+      extra.classList.add("hidden");
+    }
+    const actions = $("#modalActions");
+    actions.innerHTML = "";
+    (buttons || []).forEach((b) => {
+      const btn = el("button", "btn" + (b.primary ? " btn-primary" : ""), b.label);
+      btn.addEventListener("click", () => {
+        hideModal();
+        if (b.onClick) b.onClick();
+      });
+      actions.appendChild(btn);
+    });
+    $("#modalOverlay").classList.remove("hidden");
+  }
+  function hideModal() { $("#modalOverlay").classList.add("hidden"); }
+
+  // ---------------- 侧栏 ----------------
+  // 侧栏是两层：主 Tab（yaml 的 nav.group）+ 它下面的分 Tab（nav.label）。
+  // 只有分 Tab 能点选，主 Tab 只负责收起 / 展开。
+  function formLabel(name) {
+    const f = state.forms.find((x) => x.name === name);
+    return (f && f.label) || name || "";
+  }
+  function formGroup(name) {
+    const f = state.forms.find((x) => x.name === name);
+    return (f && f.group) || "";
+  }
+
+  // 归类 + 排序。组的次序取组内最小的 group_order，这样同组的几份 yaml
+  // 只要写一样的 group_order 就行，写歪了也不会把组拆成两半。
+  function groupedForms() {
+    const groups = [];
+    const index = {};
+    state.forms.forEach((f) => {
+      const gname = f.group || "其他";
+      let g = index[gname];
+      if (!g) {
+        g = { name: gname, order: 99, items: [] };
+        index[gname] = g;
+        groups.push(g);
+      }
+      const go = (f.group_order == null) ? 99 : f.group_order;
+      if (go < g.order) g.order = go;
+      g.items.push(f);
+    });
+    const num = (v) => (v == null ? 99 : v);
+    groups.forEach((g) => g.items.sort(
+      (a, b) => num(a.order) - num(b.order) || String(a.label || a.name).localeCompare(String(b.label || b.name), "zh")));
+    groups.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "zh"));
+    return groups;
+  }
+
+  // 收起哪些组记在本地，下次打开还是这个样子。
+  // ⚠ 默认（从没手动展开过）是全部收起 —— 平时侧栏只剩「首页」+ 六个大类，
+  //   要用哪个自己点开。所以这里要区分「存过一个空数组」（= 全展开）和
+  //   「压根没存过」（= 还没表过态，按默认全收起），不能用 || "[]" 把两者抹平。
+  function collapsedGroups() {
+    try {
+      const raw = localStorage.getItem("formbot.nav.collapsed");
+      if (raw == null) return null;                    // 没表过态
+      const saved = JSON.parse(raw);
+      return Array.isArray(saved) ? saved : null;
+    } catch (e) { return null; }
+  }
+  function collapsedNow() {
+    const saved = collapsedGroups();
+    return saved || groupedForms().map((g) => g.name);
+  }
+  function saveCollapsedGroups(names) {
+    try { localStorage.setItem("formbot.nav.collapsed", JSON.stringify(names)); } catch (e) { /* 忽略 */ }
+  }
+
+  function renderSidebar() {
+    const list = $("#sidebarList");
+    const collapsed = collapsedNow();
+    list.innerHTML = "";
+    groupedForms().forEach((g) => {
+      const box = el("div", "nav-group");
+      box.dataset.group = g.name;
+      if (collapsed.indexOf(g.name) >= 0) box.classList.add("collapsed");
+
+      const head = el("div", "nav-group-head");
+      head.appendChild(el("span", "nav-group-name", g.name));
+      head.appendChild(el("span", "nav-group-dot"));   // 收起时用它提示「当前那项在这组里」
+      head.appendChild(el("span", "caret", "⌄"));
+      head.addEventListener("click", () => toggleGroup(g.name));
+      box.appendChild(head);
+
+      const items = el("div", "nav-group-items");
+      g.items.forEach((f) => {
+        const item = el("div", "sidebar-item");
+        item.dataset.name = f.name;
+        item.appendChild(el("span", null, f.label || f.name));
+        item.appendChild(el("span", "badge", ""));
+        item.addEventListener("click", () => selectForm(f.name));
+        items.appendChild(item);
+      });
+      box.appendChild(items);
+      list.appendChild(box);
+    });
+    updateSidebarActive();
+  }
+
+  function groupBox(name) {
+    let hit = null;
+    document.querySelectorAll(".nav-group").forEach((n) => {
+      if (n.dataset.group === name) hit = n;
+    });
+    return hit;
+  }
+
+  function toggleGroup(name) {
+    const box = groupBox(name);
+    if (!box) return;
+    box.classList.toggle("collapsed");
+    const collapsed = collapsedNow().filter((n) => n !== name);
+    if (box.classList.contains("collapsed")) collapsed.push(name);
+    saveCollapsedGroups(collapsed);
+    updateSidebarActive();
+  }
+
+  function updateSidebarActive() {
+    const onForm = state.view === "form";
+    document.querySelectorAll(".sidebar-item").forEach((n) => {
+      if (n.id === "navHome" || n.id === "navStats") return;   // 钉住的两项单独处理
+      n.classList.toggle("active", onForm && n.dataset.name === state.activeForm);
+      const badge = n.querySelector(".badge");
+      badge.textContent = (onForm && n.dataset.name === state.activeForm && state.loaded)
+        ? String(state.previewRows.length) : "";
+    });
+    $("#navHome").classList.toggle("active", state.view === "home");
+    $("#navStats").classList.toggle("active", state.view === "stats");
+    const activeGroup = onForm ? formGroup(state.activeForm) : null;
+    document.querySelectorAll(".nav-group").forEach((box) => {
+      box.classList.toggle("has-active", box.dataset.group === activeGroup);
+    });
+  }
+
+  // 点分 Tab 时若它所在的组是收起的（比如从别处跳过来），把组展开，
+  // 不然选中了却看不见
+  function expandGroupOf(name) {
+    const g = formGroup(name);
+    if (!g) return;
+    const box = groupBox(g);
+    if (!box || !box.classList.contains("collapsed")) return;
+    box.classList.remove("collapsed");
+    saveCollapsedGroups(collapsedNow().filter((n) => n !== g));
+  }
+
+  function currentFormMeta() {
+    return state.forms.find((f) => f.name === state.activeForm) || null;
+  }
+
+  function selectForm(name, opts) {
+    if (state.running) {
+      appendLog("正在跑，先停止再切换配置类型", "warn");
+      return;
+    }
+    state.view = "form";
+    state.activeForm = name;
+    state.dataFile = "";
+    state.loaded = false;
+    state.previewRows = [];
+    state.reviewFilter = "all";
+    $("#dataFileInput").value = "";
+    $("#failedSection").classList.add("hidden");
+    // 从首页跳过来时要把它所在的组打开，不然选中了却看不见；
+    // 启动时那次「铺状态」不展开（expand:false）—— 人还停在首页
+    if (!opts || opts.expand !== false) expandGroupOf(name);
+    updateSidebarActive();
+    renderTopbar();
+    renderScopeRow();
+    renderWizardCard();
+    renderAdCard();
+    renderMeetingCard();
+    syncModeSegmented();
+    renderReviewTable();
+    goToStep("prepare");
+  }
+
+  // ---------------- 首页 ----------------
+  // 两个受众：用的人要一个「值得用」的理由，维护的人要成就感和「下一步修哪儿」。
+  // 数据来自 usage_summary（口径见 src/usage.py 的 summarize）。
+  // ⚠ 一个字的业务内容都没有 —— 埋点里就没记，这里也变不出来。
+  function showHome() { showOverview("home"); }
+  function showStats() { showOverview("stats"); }
+
+  function showOverview(view) {
+    if (state.running) {
+      appendLog("正在跑，先停止再看这些", "warn");
+      return;
+    }
+    state.view = view;
+    $("#wizardTabs").classList.add("hidden");
+    $(".stepbar").classList.add("hidden");
+    $(".footer-bar").classList.add("hidden");
+    $("#filterPills").classList.add("hidden");
+    document.querySelectorAll(".step-panel").forEach((n) => {
+      n.classList.toggle("active", n.dataset.panel === view);
+    });
+    $("#topTitle").textContent = view === "home" ? "首页" : "数据统计";
+    $("#topSubtitle").textContent = view === "home"
+      ? "这工具能帮你干什么，以及替大家干了多少" : "全部明细";
+    updateSidebarActive();
+    loadUsage().then((sum) => (view === "home" ? paintHome(sum) : paintStats(sum)));
+  }
+
+  // 统计读一次就够，不用每次点都去捞：数据源（本机 jsonl / 以后的企微表格）都不是
+  // 实时变的，跑完一轮会把缓存置空，「数据统计」页上还有「刷新」按钮兜底。
+  function loadUsage(force) {
+    if (state.usage && !force) return Promise.resolve(state.usage);
+    return callApi("usage_summary").then((sum) => {
+      state.usage = sum || null;
+      return state.usage;
+    });
+  }
+
+  function fmtDuration(sec) {
+    sec = Math.max(0, Number(sec) || 0);
+    if (sec < 90) return `${Math.round(sec)} 秒`;
+    if (sec < 3600) return `${Math.round(sec / 60)} 分钟`;
+    const h = sec / 3600;
+    return `${h < 10 ? h.toFixed(1) : Math.round(h)} 小时`;
+  }
+  function fmtWorkdays(sec) {
+    const d = (Number(sec) || 0) / 3600 / 8;
+    if (d < 0.1) return "";
+    return `≈ ${d < 10 ? d.toFixed(1) : Math.round(d)} 个工作日`;
+  }
+  function fmtWhen(ts) {
+    if (!ts) return "";
+    const t = new Date(ts);
+    if (isNaN(t)) return String(ts).slice(0, 10);
+    const mins = (Date.now() - t.getTime()) / 60000;
+    if (mins < 1) return "刚刚";
+    if (mins < 60) return `${Math.round(mins)} 分钟前`;
+    if (mins < 60 * 24) return `${Math.round(mins / 60)} 小时前`;
+    if (mins < 60 * 24 * 7) return `${Math.round(mins / 60 / 24)} 天前`;
+    return ts.slice(5, 10);
+  }
+
+  // 首页 = 能干什么（主角）+ 关键数据一屏（配角，详情去「数据统计」看）
+  function paintHome(sum) {
+    const box = $("#homeBody");
+    box.innerHTML = "";
+    const t = (sum && sum.totals) || {};
+    const used = new Set(((sum && sum.forms) || []).map((f) => f.name));
+    const hasData = (t.runs || 0) > 0;
+
+    if (!hasData) box.appendChild(homeWelcome());
+    box.appendChild(homeCatalog(used, hasData));
+    if (hasData) box.appendChild(homeHero(sum, t, true));
+    box.appendChild(homeFootnote(sum));
+  }
+
+  // 数据统计页 = 首页放不下的全部明细
+  function paintStats(sum) {
+    const box = $("#statsBody");
+    box.innerHTML = "";
+    const t = (sum && sum.totals) || {};
+    if (!sum || sum.error || !(t.runs || 0)) {
+      const tip = el("div", "card col home-card");
+      tip.style.padding = "24px 18px";
+      tip.appendChild(el("b", null, "还没有统计数据"));
+      tip.appendChild(el("div", "home-note",
+        (sum && sum.error) || "跑一次配置，这里就有数了"));
+      box.appendChild(tip);
+      if (sum) box.appendChild(homeFootnote(sum));
+      return;
+    }
+    box.appendChild(homeHero(sum, t, false));
+    box.appendChild(homeForms(sum));
+    box.appendChild(homeTrend(sum));
+    box.appendChild(homeRecent(sum));
+    box.appendChild(homeFootnote(sum));
+  }
+
+  function homeCard(title, hint) {
+    const c = el("div", "card col home-card");
+    if (title) {
+      const sect = el("div", "sect");
+      sect.appendChild(el("span", "bar"));
+      sect.appendChild(el("b", null, title));
+      if (hint) sect.appendChild(el("span", null, hint));
+      c.appendChild(sect);
+    }
+    return c;
+  }
+
+  // ① 顶部四宫格
+  function homeHero(sum, t, brief) {
+    const c = homeCard();
+    c.classList.add("home-hero");
+    const grid = el("div", "kpi-grid");
+    const rate = (t.ok_rate == null) ? "—" : `${(t.ok_rate * 100).toFixed(1)}%`;
+    const many = (sum.people || 1) > 1;      // 接上汇总、真有别人在用时才显示人数
+    const saved = (t.saved == null) ? t.seconds : t.saved;
+    const items = [
+      ["累计处理", `${t.items || 0}`, "条", (sum.week && sum.week.items)
+        ? `本周 +${sum.week.items}` : "本周还没动过"],
+      // 「省下工时」= 人工基准 × 条数 − 机器实跑。口径见 src/usage.py 的 saved_seconds
+      ["省下工时", fmtDuration(saved), "", fmtWorkdays(saved) || "还没攒够"],
+      ["一次做对", rate, "", (t.failed ? `失败 ${t.failed} 条` : "还没失败过")],
+      many
+        ? ["在用人数", `${sum.people}`, "人", `另有 ${(sum.people_opened || 0) - sum.people} 人只打开过`]
+        : ["跑过", `${t.runs || 0}`, "次", (sum.retries ? `另有 ${sum.retries} 次返工` : "没返过工")],
+    ];
+    items.forEach(([label, value, unit, sub]) => {
+      const k = el("div", "kpi");
+      k.appendChild(el("div", "kpi-label", label));
+      const v = el("div", "kpi-value", value);
+      if (unit) v.appendChild(el("span", "kpi-unit", unit));
+      k.appendChild(v);
+      k.appendChild(el("div", "kpi-sub", sub));
+      grid.appendChild(k);
+    });
+    c.appendChild(grid);
+    const mine = sum.mine && sum.mine.totals;
+    if (many && mine) {
+      c.appendChild(el("div", "home-note",
+        `其中你自己跑了 ${mine.items || 0} 条，省下 ${fmtDuration(mine.saved == null ? mine.seconds : mine.saved)}。`));
+    }
+    c.appendChild(el("div", "home-note", savingNote(sum, t)));
+    if (brief) {
+      // 首页只给这一屏关键数字，剩下的去「数据统计」看
+      const more = el("div", "row");
+      more.style.cssText = "margin-top:2px";
+      const link = el("button", "btn btn-sm", "查看详情 →");
+      link.addEventListener("click", showStats);
+      more.appendChild(link);
+      c.appendChild(more);
+    }
+    return c;
+  }
+
+  /** 顶部那行口径小字。⚠ 必须说清哪半截是实测、哪半截是估的 —— 这行字是这个数字
+   *  可信不可信的全部区别。 */
+  function savingNote(sum, t) {
+    const machine = fmtDuration(t.seconds);
+    const cfg = sum.saving || {};
+    if (cfg.mode === "multiplier") {
+      return `「省下工时」= 机器实跑 ${machine}（实测，已扣掉等你点确认的时间）`
+        + ` × ${cfg.multiplier} 倍 − 机器实跑。倍数在 settings.yaml 的 usage.saving 里改。`;
+    }
+    return `「省下工时」= 同样这些条数人工要花的时间 ${fmtDuration(t.human)}（按每种配置一条`
+      + `多少分钟估的，见 settings.yaml 的 usage.saving）− 机器实跑 ${machine}`
+      + `（实测，已扣掉等你点确认的时间）。`;
+  }
+
+  // ② 用在哪儿了：横向条形
+  function homeForms(sum) {
+    const c = homeCard("用在哪儿了", "条数最多的，未必是最费时间的");
+    const rows = (sum.forms || []).slice();
+    const max = Math.max(1, ...rows.map((r) => r.ok || 0));
+    const meetingNames = state.forms.filter((f) => f.mode === "meeting_reserve").map((f) => f.name);
+
+    rows.forEach((r) => {
+      // 抢会议室按「抢中率」讲才有意义，按条数/耗时讲等于没有价值
+      const isMeeting = meetingNames.includes(r.name);
+      const row = el("div", "bar-row");
+      row.appendChild(el("div", "bar-name", formLabel(r.name)));
+      const track = el("div", "bar-track");
+      const fill = el("i");
+      fill.style.width = `${Math.max(2, Math.round((r.ok / max) * 100))}%`;
+      track.appendChild(fill);
+      row.appendChild(track);
+      row.appendChild(el("div", "bar-num", isMeeting
+        ? `抢中 ${r.ok}/${r.total}` : `${r.ok} 条`));
+      row.appendChild(el("div", "bar-side", isMeeting
+        ? fmtWhen(r.last)
+        : `省下 ${fmtDuration(r.saved == null ? r.seconds : r.saved)} · 机器实跑 ${fmtDuration(r.seconds)}`));
+      row.title = `跑了 ${r.runs} 次，最近一次 ${fmtWhen(r.last)}` + (r.failed ? `，失败 ${r.failed} 条` : "");
+      row.addEventListener("click", () => selectForm(r.name));
+      c.appendChild(row);
+    });
+    return c;
+  }
+
+  // ③ 近 12 周
+  function homeTrend(sum) {
+    const weeks = sum.weeks || [];
+    const c = homeCard("近 12 周", "按周看，这类工具本来就是攒一批集中跑");
+    const chart = el("div", "spark");
+    const max = Math.max(1, ...weeks.map((w) => w.items || 0));
+    weeks.forEach((w) => {
+      const col = el("div", "spark-col");
+      col.title = `${w.week} 那周：${w.items} 条 · 省下 ${fmtDuration(w.saved == null ? w.seconds : w.saved)}`
+        + ` · 机器实跑 ${fmtDuration(w.seconds)}`;
+      const bar = el("i");
+      bar.style.height = `${w.items ? Math.max(4, Math.round((w.items / max) * 100)) : 0}%`;
+      if (!w.items) bar.classList.add("empty");
+      col.appendChild(bar);
+      col.appendChild(el("span", null, w.label.slice(-5)));
+      chart.appendChild(col);
+    });
+    c.appendChild(chart);
+    return c;
+  }
+
+  // ④ 最近几次 + 最长的一次
+  function homeRecent(sum) {
+    const c = homeCard("最近跑的", "");
+    (sum.recent || []).forEach((r) => {
+      const line = el("div", "feed-row");
+      line.appendChild(el("span", "feed-when", fmtWhen(r.ts)));
+      line.appendChild(el("span", "feed-form", formLabel(r.form)));
+      const okAll = r.ok >= r.total;
+      const stat = el("span", okAll ? "feed-stat" : "feed-stat bad",
+        okAll ? `${r.ok} 条全成` : `${r.ok}/${r.total} 条`);
+      line.appendChild(stat);
+      line.appendChild(el("span", "feed-cost", fmtDuration(r.seconds)));
+      c.appendChild(line);
+    });
+    const L = sum.longest;
+    if (L && L.seconds > 60) {
+      c.appendChild(el("div", "home-note",
+        `最长的一次：${formLabel(L.form)} 连着跑了 ${fmtDuration(L.seconds)}，一口气 ${L.items} 条。`));
+    }
+    return c;
+  }
+
+  // 没数据时的开场白
+  function homeWelcome() {
+    const c = homeCard();
+    c.classList.add("home-hero");
+    c.appendChild(el("div", "home-welcome-title", "还没用它跑过东西"));
+    c.appendChild(el("div", "home-welcome-sub",
+      "它能替你干下面这些活 —— 挑一个，按「准备 → 核对 → 执行」走一遍就行。"
+      + "跑完这里会记下替你干了多少、花了多久。"));
+    return c;
+  }
+
+  // 功能导航 / 覆盖度：没用过的那些才是这一块的重点
+  function homeCatalog(used, hasData) {
+    const groups = groupedForms();
+    const total = state.forms.length;
+    const c = homeCard(hasData ? "还能干什么" : "能干什么",
+      hasData ? `${total} 个配置类型，你用过 ${used.size} 个` : "");
+    const wrap = el("div", "catalog");
+    groups.forEach((g) => {
+      g.items.forEach((f) => {
+        const it = el("div", "catalog-item" + (used.has(f.name) ? " used" : ""));
+        const head = el("div", "catalog-head");
+        head.appendChild(el("span", "catalog-group", g.name));
+        head.appendChild(el("span", "catalog-name", f.label || f.name));
+        if (used.has(f.name)) head.appendChild(el("span", "catalog-tag", "用过"));
+        it.appendChild(head);
+        // description 前半截是系统名（「大会员 DMP 人群管理 - …」），和上面的主 Tab 重复，
+        // 砍掉只留真正说事的后半句；完整原文留在 tooltip 里
+        const parts = String(f.desc || "").split(" - ");
+        it.appendChild(el("div", "catalog-desc",
+          parts.length > 1 ? parts.slice(1).join(" - ") : parts[0]));
+        it.title = f.desc || "";
+        it.addEventListener("click", () => selectForm(f.name));
+        wrap.appendChild(it);
+      });
+    });
+    c.appendChild(wrap);
+    return c;
+  }
+
+  function homeFootnote(sum) {
+    sum = sum || {};        // 没后端时 usage_summary 是 null，别让页脚把整个首页带崩
+    const wrap = el("div", "col");
+    wrap.style.cssText = "gap:6px;padding:2px 4px 6px";
+    const line = el("div", "row");
+    line.style.cssText = "gap:10px;align-items:center";
+    const n = el("div", "home-foot");
+    n.style.padding = "0";
+    const bits = [];
+    if (sum.since) bits.push(`统计自 ${sum.since}`);
+    const rep = sum.report || {};
+    // ⚠ 全团队那份是随包分发的快照，不是实时的 —— 这句话必须说出来，
+    //   不然人会拿一个上周的数字当今天的用
+    if (sum.snapshot_at) {
+      bits.push(`全团队数字截至 ${String(sum.snapshot_at).slice(0, 10)}（随版本更新）`);
+    } else if (rep.on) {
+      bits.push("全团队数字要等下个版本带过来");
+    } else {
+      bits.push("只统计这台机器");
+    }
+    bits.push("只记条数和耗时，不记任何业务内容");
+    if (state.version) bits.push(`版本 ${state.version}`);
+    n.textContent = bits.join("　·　");
+    line.appendChild(n);
+    wrap.appendChild(line);
+
+    // 欠着没上报的，必须说出来 —— 这类失败原来是完全静默的，人根本不知道数据没上去
+    if (rep.pending) {
+      const warn = el("div", "home-foot");
+      warn.style.cssText = "padding:0;color:var(--bad)";
+      warn.textContent = `还有 ${rep.pending} 周的使用统计没回传成功`
+        + (rep.error ? `（${rep.error}）` : "")
+        + "。数据没丢，都在本机记着，下次开程序会自动补 —— 一直是这句话就找开发看看。";
+      wrap.appendChild(warn);
+    }
+    return wrap;
+  }
+
+  // ---------------- 准备页：wizard 卡片（资源位 / 活动 / 策略）----------------
+  function renderWizardCard() {
+    const card = $("#wizardCard");
+    if (!isWizard()) {
+      card.classList.add("hidden");
+      $("#wizardTabs").classList.add("hidden");
+      $(".stepbar").classList.remove("hidden");
+      $(".footer-bar").classList.remove("hidden");
+      state.wizardMeta = null;
+      state.positions = [];
+      strategyUI.draft = null;
+      return;
+    }
+    card.classList.remove("hidden");
+    $("#wizardTabs").classList.remove("hidden");
+    loadPrefs();
+    renderActivityRow();
+
+    state.wizardTab = "deliver";
+    strategyUI.draft = null;
+    setWizardTab("deliver");
+
+    callApi("wizard_meta", state.activeForm).then((meta) => {
+      // meta 到位之后策略中心才渲染得出来；没配过策略的直接把人带到策略中心那一页
+      // （规则没配就生成模板，模板是对的但跑起来会卡在「策略中心没配」）
+      if (!meta || !meta.wizard) return;
+      state.wizardMeta = meta;
+      const known = meta.positions.map((p) => p.name);
+      state.positions = state.positions.filter((p) => known.includes(p));
+      renderPosChips();
+    });
+    refreshStrategy();
+  }
+
+  // ---------------- 准备页：原生商广卡片（本批共用的投放参数）----------------
+  // 字段清单来自 yaml 的 prep_fields，这里只按 type 决定长什么样，
+  // 所以往 yaml 里加一项（比如再来个「投放时段」）不用改这段代码。
+  function renderAdCard() {
+    const card = $("#adCard");
+    if (!isAdNative()) {
+      card.classList.add("hidden");
+      state.adMeta = null;
+      state.prepValues = {};
+      return;
+    }
+    card.classList.remove("hidden");
+    $("#adPrepFields").innerHTML = "";
+    $("#adPrepHint").textContent = "读取中…";
+
+    callApi("ad_meta", state.activeForm).then((meta) => {
+      if (!meta || !meta.ad) return;
+      state.adMeta = meta;
+      state.prepValues = Object.assign({}, meta.values || {});
+      renderPrepFields();
+    });
+
+    $("#btnSavePrep").onclick = savePrep;
+  }
+
+  function renderPrepFields() {
+    const box = $("#adPrepFields");
+    box.innerHTML = "";
+    const fields = (state.adMeta && state.adMeta.fields) || [];
+    fields.forEach((f) => {
+      // when: [字段名, 值] —— 只有那个字段等于该值时这一项才出现
+      if (f.when && String(state.prepValues[f.when[0]] || "") !== String(f.when[1])) return;
+
+      const row = el("div", "row");
+      row.style.cssText = "gap:10px;align-items:flex-start";
+      const label = el("span", "form-label", f.name + (f.required ? " *" : ""));
+      row.appendChild(label);
+
+      const right = el("div", "col");
+      right.style.cssText = "flex:1;gap:4px;min-width:0";
+      right.appendChild(prepControl(f));
+      if (f.note) {
+        const note = el("div", null, f.note);
+        note.style.cssText = "color:var(--mu);font-size:11px";
+        right.appendChild(note);
+      }
+      row.appendChild(right);
+      box.appendChild(row);
+    });
+    renderPrepHint();
+  }
+
+  function prepControl(f) {
+    const cur = String(state.prepValues[f.name] == null ? "" : state.prepValues[f.name]);
+
+    if (f.type === "segmented" || (f.type === "select" && (f.options || []).length <= 3)) {
+      const seg = el("div", "segmented");
+      (f.options || []).forEach((opt) => {
+        const it = el("div", "seg-item" + (opt === cur ? " active" : ""), opt);
+        it.addEventListener("click", () => {
+          state.prepValues[f.name] = opt;
+          renderPrepFields();      // 可能有 when 依赖它，整块重画
+        });
+        seg.appendChild(it);
+      });
+      return seg;
+    }
+
+    if (f.type === "select") {
+      const sel = el("select", "field");
+      sel.style.cssText = "width:220px;flex:none";
+      (f.options || []).forEach((opt) => {
+        const o = el("option", null, opt);
+        o.value = opt;
+        if (opt === cur) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => {
+        state.prepValues[f.name] = sel.value;
+        renderPrepFields();
+      });
+      return sel;
+    }
+
+    const wrap = el("div", "row");
+    wrap.style.cssText = "gap:6px;align-items:center";
+    const inp = el("input", "field");
+    inp.value = cur;
+    inp.placeholder = f.ph || "";
+    if (f.type === "number") inp.style.cssText = "width:120px;flex:none";
+    inp.addEventListener("input", () => {
+      state.prepValues[f.name] = inp.value;
+      renderPrepHint();
+    });
+    wrap.appendChild(inp);
+    if (f.unit) {
+      const u = el("span", null, f.unit);
+      u.style.cssText = "color:var(--sub);font-size:12px";
+      wrap.appendChild(u);
+    }
+    return wrap;
+  }
+
+  function renderPrepHint() {
+    const fields = (state.adMeta && state.adMeta.fields) || [];
+    const missing = fields
+      .filter((f) => f.required && !String(state.prepValues[f.name] || "").trim())
+      .filter((f) => !f.when || String(state.prepValues[f.when[0]] || "") === String(f.when[1]))
+      .map((f) => f.name);
+    $("#adPrepHint").textContent = missing.length
+      ? "还没填：" + missing.join("、")
+      : "改完记得点保存；生成模板和载入检查都读保存后的值";
+  }
+
+  // ⚠ 必须显式保存：生成模板和「载入并检查」都是 Python 端重新读盘上的 json，
+  //   不保存就会拿到上一次的值 —— renderPrepHint 里那句提示说的就是这件事。
+  function savePrep() {
+    if (!isAdNative()) return;
+    callApi("prep_save", state.activeForm, state.prepValues).then((r) => {
+      if (!r) return;
+      if (!r.ok) {
+        appendLog("准备参数保存失败：" + (r.error || ""), "error");
+        return;
+      }
+      state.prepValues = Object.assign({}, r.values || state.prepValues);
+      renderPrepFields();
+      const issues = r.issues || [];
+      appendLog(issues.length ? "准备参数已保存，但还有问题：" + issues.join("；") : "准备参数已保存",
+                issues.length ? "warn" : "ok");
+      $("#adPrepHint").textContent = issues.length ? issues.join("；") : "已保存";
+    });
+  }
+
+  // ---------------- 准备页：预定会议室卡片（抢占任务清单）----------------
+  // ⚠ 这个 mode 不吃 Excel。每条任务的日期/时段/人数都不一样，还要支持「每周循环」，
+  //   在界面上加行比来回导 Excel 顺手。清单存 config/prep/预定会议室.json，
+  //   「载入并检查」时 Python 端重新读盘 —— 所以改完必须点保存，和原生商广那张卡一个规矩。
+  function renderMeetingCard() {
+    const card = $("#meetingCard");
+    if (!isMeeting()) {
+      card.classList.add("hidden");
+      $("#dataFileRow").classList.remove("hidden");
+      $("#dataSourceTitle").textContent = "配置来源";
+      $("#dataSourceHint").textContent = "选择数据文件，勾选延期范围（如果有）";
+      state.meetingMeta = null;
+      state.meetingTasks = [];
+      return;
+    }
+    card.classList.remove("hidden");
+    // 抢会议室没有「数据文件」这一说，整行藏掉，免得看着像少填了什么
+    $("#dataFileRow").classList.add("hidden");
+    $("#dataSourceTitle").textContent = "开抢";
+    $("#dataSourceHint").textContent = "任务在上面填，这里点「载入并检查」核对开抢时刻";
+
+    $("#meetingTasks").innerHTML = "";
+    $("#meetingHint").textContent = "读取中…";
+
+    callApi("meeting_meta", state.activeForm).then((meta) => {
+      if (!meta || !meta.meeting) return;
+      state.meetingMeta = meta;
+      state.meetingTasks = (meta.tasks || []).map((t) => Object.assign({}, t));
+      $("#meetingWindowHint").textContent =
+        `${meta.rule_text || ""}　→　机器人会掐着开放那天的 ${meta.open_time || "10:00"} 抢`;
+      renderMeetingTasks();
+    });
+
+    $("#btnAddMeetingTask").onclick = addMeetingTask;
+    $("#btnSaveMeeting").onclick = saveMeetingTasks;
+  }
+
+  /** 「运行模式」三选一按 mode 调整。
+   *
+   * ⚠ 抢会议室没有「逐条确认」这一档：窗口开的那一瞬间没有等人点确认的余地
+   *   （执行器里也是直接忽略的）。留着这个按钮只会让人以为会弹窗核对，
+   *   所以这里直接把它藏掉，并且把「空跑」的文案改成这个 mode 下的实际含义。
+   */
+  function syncModeSegmented() {
+    const seg = $("#modeSegmented");
+    const item = (m) => seg.querySelector(`.seg-item[data-mode="${m}"]`);
+    const meeting = isMeeting();
+    item("dry").textContent = meeting ? "空跑（只找不订）" : "空跑（只填不提交）";
+    item("auto").textContent = meeting ? "开抢" : "全自动";
+    item("confirm").classList.toggle("hidden", meeting);
+    if (meeting && state.runMode === "confirm") {
+      item("confirm").classList.remove("active");
+      item("auto").classList.add("active");
+      state.runMode = "auto";
+    }
+  }
+
+  function addMeetingTask() {
+    const base = (state.meetingMeta && state.meetingMeta.default_task) || {};
+    const last = state.meetingTasks[state.meetingTasks.length - 1];
+    // 从上一条拷贝：连着排几场会时，通常只有日期不一样
+    state.meetingTasks.push(Object.assign({}, base, last ? Object.assign({}, last, { date: "" }) : {}));
+    renderMeetingTasks();
+  }
+
+  function renderMeetingTasks() {
+    const box = $("#meetingTasks");
+    box.innerHTML = "";
+    if (!state.meetingTasks.length) {
+      const empty = el("div", null, "还没有任务。点「+ 添加一条」，填上日期、时间段和人数。");
+      empty.style.cssText = "color:var(--mu);font-size:12px;padding:8px 0";
+      box.appendChild(empty);
+    }
+    state.meetingTasks.forEach((task, i) => box.appendChild(meetingTaskRow(task, i)));
+    renderMeetingHint();
+  }
+
+  function meetingTaskRow(task, i) {
+    const wrap = el("div", "mt-task col");
+    wrap.style.cssText =
+      "gap:8px;padding:10px 12px;border:1px solid var(--bd);border-radius:8px" +
+      (task.enabled ? "" : ";opacity:.5");
+
+    const mkInput = (val, ph, width, type) => {
+      const inp = el("input", "field");
+      if (type) inp.type = type;
+      inp.value = val == null ? "" : val;
+      inp.placeholder = ph || "";
+      inp.style.cssText = width ? `width:${width};flex:none` : "";
+      return inp;
+    };
+    const lab = (text) => {
+      const s = el("span", null, text);
+      s.style.cssText = "color:var(--sub);font-size:12px;flex:none";
+      return s;
+    };
+    // 文本类改动只更新数据和提示，不重画 —— 重画会把正在输入的框换成新节点，光标就丢了
+    const bindText = (inp, key, cast) => {
+      inp.addEventListener("input", () => {
+        task[key] = cast ? cast(inp.value) : inp.value;
+        renderMeetingHint();
+      });
+    };
+
+    // ---- 第一行：启用 / 日期方式 / 日期 / 时段 / 删除 ----
+    const r1 = el("div", "row");
+    r1.style.cssText = "gap:10px;flex-wrap:wrap;align-items:center";
+
+    const on = el("input");
+    on.type = "checkbox";
+    on.checked = !!task.enabled;
+    on.style.cssText = "accent-color:var(--pink)";
+    on.addEventListener("change", () => { task.enabled = on.checked; renderMeetingTasks(); });
+    const onWrap = el("label", "row");
+    onWrap.style.cssText = "gap:5px;color:var(--sub);font-size:12px;cursor:pointer;flex:none";
+    onWrap.appendChild(on);
+    onWrap.appendChild(el("span", null, "启用"));
+    r1.appendChild(onWrap);
+
+    const seg = el("div", "segmented");
+    [["指定日期", false], ["每周循环", true]].forEach(([text, v]) => {
+      const it = el("div", "seg-item" + (!!task.repeat_weekly === v ? " active" : ""), text);
+      it.addEventListener("click", () => { task.repeat_weekly = v; renderMeetingTasks(); });
+      seg.appendChild(it);
+    });
+    r1.appendChild(seg);
+
+    if (task.repeat_weekly) {
+      const names = (state.meetingMeta && state.meetingMeta.weekday_names) ||
+        ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+      const sel = el("select", "field");
+      sel.style.cssText = "width:96px;flex:none";
+      names.forEach((n, k) => {
+        const o = el("option", null, "每" + n);
+        o.value = String(k + 1);
+        if (Number(task.weekday) === k + 1) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => { task.weekday = Number(sel.value); renderMeetingHint(); });
+      r1.appendChild(sel);
+    } else {
+      const d = mkInput(task.date, "", "150px", "date");
+      bindText(d, "date");
+      r1.appendChild(d);
+    }
+
+    const st = mkInput(task.start, "14:00", "110px", "time");
+    st.step = 1800;
+    bindText(st, "start");
+    const en = mkInput(task.end, "15:00", "110px", "time");
+    en.step = 1800;
+    bindText(en, "end");
+    r1.appendChild(st);
+    r1.appendChild(lab("~"));
+    r1.appendChild(en);
+
+    const del = el("button", "btn", "删除");
+    del.style.cssText = "margin-left:auto;flex:none";
+    del.addEventListener("click", () => {
+      state.meetingTasks.splice(i, 1);
+      renderMeetingTasks();
+    });
+    r1.appendChild(del);
+    wrap.appendChild(r1);
+
+    // ---- 第二行：人数 / 楼栋 / 指定会议室 / 主题 ----
+    const r2 = el("div", "row");
+    r2.style.cssText = "gap:10px;flex-wrap:wrap;align-items:center";
+
+    r2.appendChild(lab("可容纳"));
+    const cap = mkInput(task.min_capacity, "6", "70px", "number");
+    cap.min = 1;
+    bindText(cap, "min_capacity", (v) => Number(v) || 1);
+    r2.appendChild(cap);
+    r2.appendChild(lab("人及以上"));
+
+    const bsel = el("select", "field");
+    bsel.style.cssText = "width:190px;flex:none";
+    const blank = el("option", null, "不限楼栋");
+    blank.value = "";
+    bsel.appendChild(blank);
+    ((state.meetingMeta && state.meetingMeta.buildings) || []).forEach((b) => {
+      const o = el("option", null, b);
+      o.value = b;
+      if (b === task.building) o.selected = true;
+      bsel.appendChild(o);
+    });
+    bsel.addEventListener("change", () => { task.building = bsel.value; renderMeetingTasks(); });
+    r2.appendChild(bsel);
+
+    // 「刚需」= 只在这栋楼抢；不勾就是这栋楼优先、抢不到退到其它楼
+    const only = el("input");
+    only.type = "checkbox";
+    only.checked = !!task.building_only;
+    only.disabled = !task.building;
+    only.style.cssText = "accent-color:var(--pink)";
+    only.addEventListener("change", () => { task.building_only = only.checked; renderMeetingHint(); });
+    const onlyWrap = el("label", "row");
+    onlyWrap.style.cssText = "gap:5px;color:var(--sub);font-size:12px;cursor:pointer;flex:none" +
+      (task.building ? "" : ";opacity:.45;cursor:default");
+    onlyWrap.appendChild(only);
+    onlyWrap.appendChild(el("span", null, "只要这栋"));
+    onlyWrap.title = task.building
+      ? "勾上=刚需，只在这栋楼抢；不勾=这栋楼优先，抢不到退到其它楼"
+      : "先选一个楼栋";
+    r2.appendChild(onlyWrap);
+
+    const room = mkInput(task.room, "指定会议室（可空）", "180px");
+    bindText(room, "room");
+    room.title = "填了就只盯这一间，人数和楼栋条件不再起作用";
+    r2.appendChild(room);
+    wrap.appendChild(r2);
+
+    // ---- 第三行：主题 / 备注 ----
+    // ⚠ 主题必须带标签。挤在第二行末尾时它只是个没头没脑的输入框，
+    //   而且填了默认值「会议」之后连 placeholder 都看不见，没人认得出那是什么。
+    const r3 = el("div", "row");
+    r3.style.cssText = "gap:10px;flex-wrap:wrap;align-items:center";
+    r3.appendChild(lab("主题 *"));
+    const subj = mkInput(task.subject, "会议主题", "190px");
+    bindText(subj, "subject");
+    subj.title = "后台必填项";
+    r3.appendChild(subj);
+    r3.appendChild(lab("备注"));
+    const rem = mkInput(task.remarks, "可空", "220px");
+    bindText(rem, "remarks");
+    r3.appendChild(rem);
+    wrap.appendChild(r3);
+
+    const issues = meetingIssues(task);
+    if (issues.length) {
+      const bad = el("div", null, issues.join("；"));
+      bad.style.cssText = "color:var(--bad);font-size:11px";
+      wrap.appendChild(bad);
+    }
+    return wrap;
+  }
+
+  /** 前端的即时校验，只为了边填边给红字。真正拦人的是 Python 端 meeting_data.validate。 */
+  function meetingIssues(task) {
+    const out = [];
+    const hhmm = (v) => /^\d{1,2}:(00|30)$/.test(String(v || "").trim());
+    if (!String(task.subject || "").trim()) out.push("会议主题没填");
+    if (!task.repeat_weekly && !String(task.date || "").trim()) out.push("日期没填");
+    if (!hhmm(task.start)) out.push("开始时间要是整点或半点");
+    if (!hhmm(task.end)) out.push("结束时间要是整点或半点");
+    if (hhmm(task.start) && hhmm(task.end) && task.end <= task.start) out.push("结束时间要晚于开始时间");
+    if (task.building_only && !task.building && !String(task.room || "").trim()) {
+      out.push("勾了「只要这栋」但没选楼栋");
+    }
+    return out;
+  }
+
+  function renderMeetingHint() {
+    const active = state.meetingTasks.filter((t) => t.enabled);
+    const bad = active.filter((t) => meetingIssues(t).length).length;
+    $("#meetingHint").textContent = bad
+      ? `${bad} 条还有问题，标红的那几行`
+      : `启用 ${active.length} 条 · 改完记得点保存，「载入并检查」读的是保存后的清单`;
+  }
+
+  function saveMeetingTasks() {
+    if (!isMeeting()) return;
+    callApi("meeting_save", state.activeForm, state.meetingTasks).then((r) => {
+      if (!r) return;
+      if (!r.ok) {
+        appendLog("抢占任务保存失败：" + (r.error || ""), "error");
+        return;
+      }
+      state.meetingTasks = (r.tasks || state.meetingTasks).map((t) => Object.assign({}, t));
+      renderMeetingTasks();
+      const bad = (r.issues || []).filter((x) => (x.items || []).length);
+      appendLog(bad.length
+        ? `抢占任务已保存，但有 ${bad.length} 条有问题：` +
+          bad.map((x) => `第${x.index}条 ${x.items.join("；")}`).join(" / ")
+        : `抢占任务已保存（${state.meetingTasks.length} 条）`,
+        bad.length ? "warn" : "ok");
+    });
+  }
+
+  /** 资源位多选下拉：关着的时候是已选 chip，打开是按场景分组的勾选列表。 */
+  function renderPosChips() {
+    renderPosField();
+    renderPosList();
+  }
+
+  // ⚠ 勾一项只重画 field，不重画 list：list 一重画，勾选框就是新节点，
+  //   列表滚动位置会跳回顶部——18 个资源位滚到下面勾几个时特别难受。
+  function renderPosField() {
+    const meta = state.wizardMeta;
+    const field = $("#posField");
+    field.innerHTML = "";
+    if (!meta) return;
+
+    if (!state.positions.length) {
+      field.appendChild(el("span", null, "点这里选本次要投的资源位…"));
+    } else {
+      state.positions.forEach((name) => {
+        const chip = el("span", "chip on");
+        chip.appendChild(el("b", null, name));
+        const x = el("span", "x", "×");
+        x.addEventListener("click", (e) => {
+          e.stopPropagation();               // 别把下拉一起点开
+          togglePosition(name, false);
+        });
+        chip.appendChild(x);
+        field.appendChild(chip);
+      });
+    }
+
+    const n = state.positions.length;
+    $("#posCount").textContent = `已选 ${n} / ${meta.positions.length}`;
+    $("#posSummary").textContent = n
+      ? `已选 ${n} 个：${state.positions.join("、")}`
+      : "还没选。选了哪些，模板就只出哪些资源位的表";
+    updateNextButtonState();
+  }
+
+  function renderPosList() {
+    const list = $("#posList");
+    const meta = state.wizardMeta;
+    list.innerHTML = "";
+    if (!meta) return;
+    const kw = ($("#posSearch").value || "").trim().toLowerCase();
+
+    const groups = new Map();            // 场景 → 资源位[]，保持 yaml 里的顺序
+    meta.positions.forEach((p) => {
+      const hay = `${p.name} ${p.scene || ""} ${p.real_name || ""}`.toLowerCase();
+      if (kw && !hay.includes(kw)) return;
+      const key = p.scene || "其他";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    });
+
+    if (!groups.size) {
+      list.appendChild(el("div", "ms-group", `没有匹配「${kw}」的资源位`));
+      return;
+    }
+    groups.forEach((items, scene) => {
+      list.appendChild(el("div", "ms-group", scene));
+      items.forEach((p) => {
+        const lb = el("label", "ms-opt");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = state.positions.includes(p.name);
+        cb.addEventListener("change", () => togglePosition(p.name, cb.checked));
+        lb.appendChild(cb);
+        lb.appendChild(el("span", null, p.name));
+        lb.appendChild(el("span", "tag", p.real_name ? `后台名：${p.real_name}` : `创意 ${p.system || ""}`));
+        list.appendChild(lb);
+      });
+    });
+  }
+
+  function togglePosition(name, on) {
+    const has = state.positions.includes(name);
+    if (on && !has) {
+      // 按 yaml 里的顺序排，界面上和模板里的 sheet 顺序对得上
+      const order = state.wizardMeta.positions.map((p) => p.name);
+      state.positions = order.filter((n) => n === name || state.positions.includes(n));
+    } else if (!on && has) {
+      state.positions = state.positions.filter((x) => x !== name);
+    }
+    savePrefs();
+    renderPosField();
+  }
+
+  function setPosPanelOpen(open) {
+    $("#posPanel").classList.toggle("hidden", !open);
+    if (open) {
+      $("#posSearch").value = "";
+      renderPosList();
+      $("#posSearch").focus();
+    }
+  }
+
+  function renderActivityRow() {
+    const seg = $("#activitySegmented");
+    seg.querySelectorAll(".seg-item").forEach((n) => {
+      n.classList.toggle("active", n.dataset.activity === state.activityMode);
+    });
+    const existing = state.activityMode === "existing";
+    $("#activityIdWrap").classList.toggle("hidden", !existing);
+    $("#activityIdInput").value = state.activityId;
+    $("#activityHint").textContent = existing
+      ? "单元直接挂到这个活动下，模板不带「活动」sheet"
+      : "模板会多一张「活动」sheet，填一行，本次所有单元都挂在它下面";
+  }
+
+  function initWizardActions() {
+    $("#activitySegmented").querySelectorAll(".seg-item").forEach((n) => {
+      n.addEventListener("click", () => {
+        state.activityMode = n.dataset.activity;
+        savePrefs();
+        renderActivityRow();
+      });
+    });
+    $("#activityIdInput").addEventListener("input", (e) => {
+      state.activityId = e.target.value.trim(); savePrefs();
+    });
+    $("#btnPosAll").addEventListener("click", () => {
+      if (!state.wizardMeta) return;
+      state.positions = state.wizardMeta.positions.map((p) => p.name);
+      savePrefs(); renderPosChips();
+    });
+    $("#btnPosNone").addEventListener("click", () => {
+      state.positions = []; savePrefs(); renderPosChips();
+    });
+    $("#posField").addEventListener("click", () => {
+      setPosPanelOpen($("#posPanel").classList.contains("hidden"));
+    });
+    $("#posSearch").addEventListener("input", renderPosList);
+    $("#btnPosDone").addEventListener("click", () => setPosPanelOpen(false));
+    document.addEventListener("click", (e) => {
+      if (!$("#posSelect").contains(e.target)) setPosPanelOpen(false);
+    });
+    $("#btnOpenStrategy").addEventListener("click", openStrategy);
+    $("#strategySelect").addEventListener("change", (e) => {
+      if (!state.strategyDoc) return;
+      state.strategyDoc.active = e.target.value;
+      // 执行时后端读的是存盘里的 active，所以切一下就得落盘，不能只记在界面上
+      callApi("strategy_save", state.activeForm, state.strategyDoc).then((res) => {
+        if (res && res.ok) {
+          state.strategyDoc = res.doc;
+          appendLog(`当前策略切到「${res.doc.active}」`, "ok");
+          renderStrategyRow();
+        }
+      });
+    });
+    initStrategyPanel();
+  }
+
+  function refreshStrategy() {
+    callApi("strategy_get", state.activeForm).then((res) => {
+      if (!res || !res.ok) return;
+      state.strategyDoc = res.doc;
+      state.strategyPath = res.path;
+      renderStrategyRow();
+      const item = res.doc.items[res.doc.active] || {};
+      if (!item.updated_at && state.wizardTab === "deliver") {
+        setWizardTab("strategy");
+        appendLog("这个配置类型还没配过策略，先在策略中心把规则定下来", "warn");
+      }
+    });
+  }
+
+  function renderStrategyRow() {
+    const sel = $("#strategySelect");
+    const doc = state.strategyDoc;
+    sel.innerHTML = "";
+    if (!doc) return;
+    Object.keys(doc.items).forEach((name) => {
+      const o = el("option", null, name);
+      o.value = name;
+      if (name === doc.active) o.selected = true;
+      sel.appendChild(o);
+    });
+    const item = doc.items[doc.active] || { rules: {}, groups: {}, exceptions: [] };
+    const rules = item.rules || {};
+    const groups = item.groups || {};
+    const exc = item.exceptions || [];
+    const n = Object.keys(rules).length;
+    $("#strategySummary").textContent = n
+      ? `已配 ${n} 项规则` + (exc.length ? `，${exc.length} 条例外` : "") +
+        (item.updated_at ? `　（${item.updated_at} 更新）` : "")
+      : "还没配。生成模板前先去策略中心配一次，这些字段不会出现在 Excel 里";
+
+    // 「本次按什么跑」的一句话摘要：开跑前扫一眼就能核对，不用切到策略中心
+    const brief = [];
+    const pick = (k) => (rules[k] ? `${k} ${rules[k]}` : null);
+    ["生效平台", "投放流量池", "展示不超过", "创意赛马"].forEach((k) => {
+      const s = pick(k);
+      if (s) brief.push(s);
+    });
+    // 方案组各来一句：「人群 新客」/「内容限制 按单元名称匹配」
+    (state.wizardMeta && state.wizardMeta.scheme_groups ? state.wizardMeta.scheme_groups
+      : [{ key: "audience", name: "人群" }]).forEach((g) => {
+      const gv = groups[g.key] || {};
+      brief.push(gv.mode === "keyword" ? `${g.name} 按单元名称匹配`
+                                       : `${g.name} ${gv.scheme || "未选"}`);
+    });
+    if (exc.length) brief.push(`${exc.length} 条例外`);
+    $("#strategyBrief").textContent = n || exc.length ? brief.join("　·　") : "—";
+  }
+
+  function renderTopbar() {
+    const meta = currentFormMeta();
+    // 标题按侧栏那套「主 Tab · 分 Tab」写，和左边对得上
+    const label = state.activeForm ? formLabel(state.activeForm) : "";
+    const group = state.activeForm ? formGroup(state.activeForm) : "";
+    $("#topTitle").textContent = label ? (group ? `${group} · ${label}` : label) : "—";
+    $("#topSubtitle").textContent = (meta && meta.scopes && meta.scopes.length) ? meta.scopes[0][0] : "";
+    $("#reviewTitle").textContent = `核对 · ${label}`;
+  }
+
+  // ---------------- 准备页：延期范围 ----------------
+  function renderScopeRow() {
+    const meta = currentFormMeta();
+    const row = $("#scopeRow");
+    const seg = $("#scopeSegmented");
+    seg.innerHTML = "";
+    if (!meta || !meta.scopes || !meta.scopes.length) {
+      row.classList.add("hidden");
+      state.scopeValue = null;
+      return;
+    }
+    row.classList.remove("hidden");
+    meta.scopes.forEach(([label, value], i) => {
+      const item = el("div", "seg-item" + (i === 0 ? " active" : ""), label);
+      item.dataset.value = value;
+      item.addEventListener("click", () => {
+        seg.querySelectorAll(".seg-item").forEach((n) => n.classList.remove("active"));
+        item.classList.add("active");
+        state.scopeValue = value;
+        state.loaded = false;   // 换范围了，之前载入的数据不再对得上
+        state.previewRows = [];
+        renderReviewTable();
+        updateNextButtonState();
+        updateScopeHint(value);
+      });
+      seg.appendChild(item);
+    });
+    state.scopeValue = meta.scopes[0][1];
+    updateScopeHint(state.scopeValue);
+  }
+
+  function updateScopeHint(value) {
+    const needsExcel = value === "id_list";
+    $("#scopeHint").textContent = needsExcel
+      ? "这个范围要 Excel 清单：先点「生成 Excel 模板」，填好后用「浏览…」选它"
+      : "这个范围直接读网页，不用选数据文件，点「载入并检查」即可";
+  }
+
+  // ---------------- 资源位投放的二级 Tab ----------------
+  // 策略中心是这个配置类型下和「投放配置」并列的一块，不是弹窗：
+  // 规则在这里统一管，投放配置那边只管选资源位、填 Excel、跑。
+  function setWizardTab(tab) {
+    if (!isWizard()) tab = "deliver";
+    if (tab === "strategy" && (!state.wizardMeta || !state.strategyDoc)) {
+      appendLog("策略还没载入好，稍等一下再点", "warn");
+      return;
+    }
+    state.wizardTab = tab;
+    document.querySelectorAll("[data-wtab]").forEach((n) => {
+      n.classList.toggle("active", n.dataset.wtab === tab);
+    });
+    const onStrategy = tab === "strategy";
+    $(".stepbar").classList.toggle("hidden", onStrategy);
+    $(".footer-bar").classList.toggle("hidden", onStrategy);
+    $("#wizardTabHint").textContent = onStrategy
+      ? "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了"
+      : "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑";
+
+    if (onStrategy) {
+      if (!strategyUI.draft) strategyUI.draft = JSON.parse(JSON.stringify(state.strategyDoc));
+      strategyUI.adding = null;
+      $("#strategyPath").textContent = state.strategyPath || "";
+      document.querySelectorAll(".step-panel").forEach((n) => {
+        n.classList.toggle("active", n.dataset.panel === "strategy");
+      });
+      renderStrategyPanel();
+    } else {
+      if (strategyDirty()) appendLog("策略中心里有改动还没保存", "warn");
+      goToStep(state.step);
+    }
+  }
+
+  function strategyDirty() {
+    if (!strategyUI.draft || !state.strategyDoc) return false;
+    return JSON.stringify(strategyUI.draft) !== JSON.stringify(state.strategyDoc);
+  }
+
+  function initWizardTabs() {
+    document.querySelectorAll("[data-wtab]").forEach((n) => {
+      n.addEventListener("click", () => setWizardTab(n.dataset.wtab));
+    });
+  }
+
+  // ---------------- 步骤条 ----------------
+  function goToStep(step) {
+    state.step = step;
+    document.querySelectorAll(".seg-item[data-step]").forEach((n) => {
+      n.classList.toggle("active", n.dataset.step === step);
+    });
+    document.querySelectorAll(".step-panel").forEach((n) => {
+      n.classList.toggle("active", n.dataset.panel === step);
+    });
+    $("#filterPills").classList.toggle("hidden", step !== "review");
+    if (step === "review") renderFilterPills();
+    updateNextButtonState();
+  }
+
+  function updateNextButtonState() {
+    const idx = STEP_ORDER.indexOf(state.step);
+    const nextBtn = $("#btnNextStep");
+    if (idx === STEP_ORDER.length - 1) {
+      nextBtn.textContent = "开始配置";
+      nextBtn.disabled = state.running;
+    } else {
+      nextBtn.textContent = `下一步 · ${STEP_LABEL[STEP_ORDER[idx + 1]]}`;
+      nextBtn.disabled = false; // 可以点；点了不满足条件会提示原因，而不是先灰掉猜用户想干嘛
+    }
+    $("#btnPrevStep").disabled = idx === 0 || state.running;
+  }
+
+  function blockedReason(targetStep) {
+    if (targetStep === "review" && isWizard() && !state.positions.length) {
+      return "先在「准备」页勾选本次要投的资源位";
+    }
+    if (targetStep === "review" && !state.loaded) return "请先在「准备」页选好数据文件，点「载入并检查」";
+    if (targetStep === "execute" && !state.browserConnected) return "浏览器没连上，请先点右上角「启动浏览器并登录」";
+    return null;
+  }
+
+  function tryGoToStep(target) {
+    const curIdx = STEP_ORDER.indexOf(state.step);
+    const targetIdx = STEP_ORDER.indexOf(target);
+    if (targetIdx > curIdx) {
+      for (let i = curIdx + 1; i <= targetIdx; i++) {
+        const reason = blockedReason(STEP_ORDER[i]);
+        if (reason) { appendLog(reason, "warn"); return; }
+      }
+    }
+    goToStep(target);
+  }
+
+  function initStepNav() {
+    document.querySelectorAll(".seg-item[data-step]").forEach((n) => {
+      n.addEventListener("click", () => tryGoToStep(n.dataset.step));
+    });
+    $("#btnPrevStep").addEventListener("click", () => {
+      const idx = STEP_ORDER.indexOf(state.step);
+      if (idx > 0) goToStep(STEP_ORDER[idx - 1]);
+    });
+    $("#btnNextStep").addEventListener("click", () => {
+      const idx = STEP_ORDER.indexOf(state.step);
+      if (idx === STEP_ORDER.length - 1) { startRun(); return; }
+      tryGoToStep(STEP_ORDER[idx + 1]);
+    });
+  }
+
+  // ---------------- 运行模式分段控件 ----------------
+  function initModeSegmented() {
+    const seg = $("#modeSegmented");
+    seg.querySelectorAll(".seg-item").forEach((n) => {
+      n.addEventListener("click", () => {
+        seg.querySelectorAll(".seg-item").forEach((x) => x.classList.remove("active"));
+        n.classList.add("active");
+        state.runMode = n.dataset.mode;
+      });
+    });
+  }
+
+  // ---------------- 浏览器连接状态 ----------------
+  function setBrowserStatus(ok) {
+    ok = !!ok;
+    const changed = state.browserConnected !== ok;
+    state.browserConnected = ok;
+    $("#browserDot").classList.toggle("ok", ok);
+    const label = $("#browserLabel");
+    label.textContent = ok ? "浏览器已连接" : "浏览器未连接";
+    label.className = ok ? "label-ok" : "label-off";
+    if (changed) updateNextButtonState();
+  }
+
+  function pollBrowserStatus() {
+    callApi("browser_status").then((ok) => setBrowserStatus(!!ok));
+  }
+
+  function initLaunchBrowser() {
+    $("#btnLaunchBrowser").addEventListener("click", () => {
+      appendLog("正在启动浏览器…", "info");
+      callApi("launch_browser", state.activeForm).then((res) => {
+        if (!res) return;
+        appendLog(res.message, res.ok ? "ok" : "error");
+        pollBrowserStatus();
+      }).catch((err) => appendLog(`启动失败：${err}`, "error"));
+    });
+  }
+
+  // ---------------- 准备页：浏览 / 生成模板 / 载入 ----------------
+  function initPrepareActions() {
+    $("#btnBrowseFile").addEventListener("click", () => {
+      callApi("pick_file").then((path) => {
+        if (!path) return;
+        state.dataFile = path;
+        $("#dataFileInput").value = path;
+        doLoadCheck();   // 选完文件顺手载入一次，和旧版一致
+      });
+    });
+
+    // 生成模板不再顺带问「要哪些资源位」——资源位在上面的卡片里已经选好了，
+    // 这里只负责按已选好的东西出一份 Excel
+    $("#btnMakeTemplate").addEventListener("click", () => {
+      if (!state.activeForm) return;
+      if (isWizard()) {
+        if (!state.positions.length) {
+          appendLog("先在上面勾选本次要投的资源位，再生成模板", "warn");
+          return;
+        }
+        callApi("make_template", state.activeForm, null, state.positions,
+                { existing_activity: state.activityMode === "existing" })
+          .then(handleTemplateResult);
+        return;
+      }
+      callApi("make_template", state.activeForm, state.scopeValue).then(handleTemplateResult);
+    });
+
+    $("#btnLoadCheck").addEventListener("click", doLoadCheck);
+  }
+
+  function handleTemplateResult(res) {
+    if (!res || !res.ok) {
+      appendLog(`生成模板失败：${res ? res.error : "无法连接后端"}`, "error");
+      return;
+    }
+    appendLog(`模板已生成：${res.path}`, "ok");
+    showModal({
+      title: "生成成功",
+      desc: `模板已生成：\n${res.path}\n\n现在打开吗？`,
+      buttons: [
+        { label: "打开", primary: true, onClick: () => callApi("open_path", res.path) },
+        { label: "关闭" },
+      ],
+    });
+  }
+
+  function wizardOptions() {
+    if (!isWizard()) return null;
+    return {
+      positions: state.positions,
+      activity: {
+        existing: state.activityMode === "existing",
+        activity_id: state.activityId,
+      },
+    };
+  }
+
+  function doLoadCheck() {
+    if (!state.activeForm) return;
+    if (isWizard() && state.activityMode === "existing" && !state.activityId) {
+      appendLog("选了「挂到已有活动」，先把活动ID填上", "warn");
+      return;
+    }
+    const btn = $("#btnLoadCheck");
+    btn.disabled = true;
+    appendLog("正在载入并检查…", "info");
+    callApi("load_and_check", state.activeForm, state.dataFile, state.scopeValue, wizardOptions())
+      .then((res) => {
+        btn.disabled = false;
+        if (!res || !res.ok) {
+          appendLog(`载入失败：${res ? res.error : "无法连接后端"}`, "error");
+          return;
+        }
+        state.previewRows = res.rows;
+        state.loaded = true;
+        state.reviewFilter = "all";
+        appendLog(
+          `载入 ${res.total} 条配置，${res.total - res.bad} 条通过校验` + (res.bad ? `，${res.bad} 条有问题` : ""),
+          res.bad ? "warn" : "ok");
+        updateSidebarActive();
+        renderReviewTable();
+        updateNextButtonState();
+      })
+      .catch((err) => { btn.disabled = false; appendLog(`载入失败：${err}`, "error"); });
+  }
+
+  // ---------------- 核对页 ----------------
+  function renderFilterPills() {
+    const wrap = $("#filterPills");
+    wrap.innerHTML = "";
+    if (state.step !== "review" || !state.previewRows.length) return;
+    const rows = state.previewRows;
+    const bad = rows.filter((r) => r.issues.length).length;
+    const done = rows.filter((r) => r.done).length;
+    [["all", `全部 ${rows.length}`], ["bad", `有问题 ${bad}`], ["done", `已完成 ${done}`]].forEach(([key, label]) => {
+      const p = el("span", "pill clickable" + (state.reviewFilter === key ? " on" : ""), label);
+      p.addEventListener("click", () => { state.reviewFilter = key; renderReviewTable(); renderFilterPills(); });
+      wrap.appendChild(p);
+    });
+  }
+
+  function renderReviewTable() {
+    const body = $("#reviewBody");
+    if (!state.loaded) {
+      body.innerHTML = '<div class="empty-state"><b>还没有数据</b><span>先在「准备」页选好数据文件，点「载入并检查」</span></div>';
+      return;
+    }
+    if (!state.previewRows.length) {
+      body.innerHTML = '<div class="empty-state"><b>没有数据</b><span>这个范围目前没有匹配的记录</span></div>';
+      return;
+    }
+    const filtered = state.previewRows.filter((r) => {
+      if (state.reviewFilter === "bad") return r.issues.length > 0;
+      if (state.reviewFilter === "done") return r.done;
+      return true;
+    });
+    let html = '<div style="border:1px solid var(--bd);border-radius:9px;flex:1;min-height:0;overflow:auto">' +
+      '<table class="data"><thead><tr>' +
+      '<th class="num" style="width:52px">序号</th><th>名称</th><th style="width:120px">类型</th>' +
+      '<th class="num" style="width:56px">明细</th><th style="width:260px">校验结果</th>' +
+      '</tr></thead><tbody>';
+    filtered.forEach((r) => {
+      let cls = "", verdict;
+      if (r.issues.length) {
+        cls = "bad";
+        verdict = "✗ " + r.issues.slice(0, 2).join("；") + (r.issues.length > 2 ? "…" : "");
+      } else if (r.done) {
+        cls = "skip";
+        verdict = "— 已完成，本次跳过";
+      } else {
+        verdict = "✓ 校验通过";
+      }
+      html += `<tr class="${cls}" data-index="${r.index}"><td class="num">${r.index}</td>` +
+        `<td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.kind)}</td><td class="num">${r.detail_count}</td>` +
+        `<td>${escapeHtml(verdict)}</td></tr>`;
+    });
+    html += "</tbody></table></div>";
+    if (!filtered.length) {
+      html = '<div class="empty-state"><b>这个筛选下没有行</b></div>';
+    }
+    body.innerHTML = html;
+    body.querySelectorAll("tr[data-index]").forEach((tr) => {
+      tr.addEventListener("dblclick", () => showDetail(parseInt(tr.dataset.index, 10)));
+    });
+  }
+
+  function showDetail(index) {
+    callApi("row_detail", index).then((d) => {
+      if (!d) return;
+      $("#detailTitle").textContent = `第 ${d.index} 条 · ${d.name}`;
+      $("#detailIssues").textContent = d.issues.length ? "问题：" + d.issues.join("；") : "校验通过，没有发现问题。";
+      let html = "<div style='margin-bottom:6px;color:var(--sub)'>主表</div>";
+      Object.entries(d.header || {}).forEach(([k, v]) => {
+        if (String(v).trim()) html += `${escapeHtml(k)}：${escapeHtml(v)}<br>`;
+      });
+      if (d.items && d.items.length) {
+        html += "<div style='margin:12px 0 6px;color:var(--sub)'>明细</div>";
+        d.items.forEach((it, i) => {
+          const parts = Object.entries(it).filter(([, v]) => String(v).trim()).map(([k, v]) => `${k}=${v}`).join("，");
+          html += `第${i + 1}项：${escapeHtml(parts)}<br>`;
+        });
+      }
+      $("#detailBody").innerHTML = html;
+      $("#detailModal").classList.remove("hidden");
+    });
+  }
+
+  // ---------------- 执行页 ----------------
+  function setRunButtons(running) {
+    $("#btnStart").disabled = running;
+    $("#btnPause").disabled = !running;
+    $("#btnStop").disabled = !running;
+    if (!running) $("#btnPause").textContent = "暂停";
+    updateNextButtonState();
+  }
+
+  function startRun() {
+    if (!state.loaded) {
+      appendLog("还没有载入数据，请先在「准备」页载入并检查", "warn");
+      goToStep("prepare");
+      return;
+    }
+    if (!state.browserConnected) {
+      appendLog("浏览器没连上，请先点右上角「启动浏览器并登录」", "warn");
+      return;
+    }
+    if (state.runMode === "auto") {
+      showModal({
+        title: "确认全自动",
+        desc: "全自动模式会连续提交，中途不再询问。\n\n建议先用「逐条确认」跑通前几条。确定继续？",
+        buttons: [
+          { label: "确定", primary: true, onClick: doStartRun },
+          { label: "取消" },
+        ],
+      });
+      return;
+    }
+    doStartRun();
+  }
+
+  function doStartRun() {
+    const skip = $("#skipDoneCheck").checked;
+    $("#failedSection").classList.add("hidden");
+    callApi("start_run", state.runMode, skip).then((res) => {
+      if (!res || !res.ok) {
+        appendLog(`没法开始：${res ? res.error : "无法连接后端"}`, "error");
+        return;
+      }
+      state.running = true;
+      setRunButtons(true);
+      $("#runProgressBar").style.width = "0%";
+      $("#runStat").textContent = `0/${res.total}`;
+      appendLog(`开始配置，共 ${res.total} 条`, "ok");
+      goToStep("execute");
+    });
+  }
+
+  // ---------------- 失败清单 / 重跑 ----------------
+  function renderFailedList(failed) {
+    const section = $("#failedSection");
+    const list = $("#failedList");
+    list.innerHTML = "";
+    if (!failed || !failed.length) {
+      section.classList.add("hidden");
+      return;
+    }
+    section.classList.remove("hidden");
+    $("#failedCount").textContent = `失败 ${failed.length} 条`;
+    failed.forEach((f) => {
+      const row = el("div", "row");
+      row.style.cssText = "padding:8px 12px;gap:10px;border-bottom:1px solid var(--bd)";
+      const info = el("div");
+      info.style.cssText = "flex:1;min-width:0";
+      info.innerHTML = `<div>${escapeHtml(f.name)}</div>` +
+        `<div style="color:var(--bad);font-size:11px">${escapeHtml(f.error)}</div>`;
+      const btn = el("button", "btn btn-sm", "重跑");
+      btn.addEventListener("click", () => retryRows([f.index]));
+      row.appendChild(info);
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+    $("#btnRetryAll").onclick = () => retryRows(failed.map((f) => f.index));
+  }
+
+  function retryRows(indices) {
+    if (state.running) {
+      appendLog("正在跑，等这一轮结束再重跑", "warn");
+      return;
+    }
+    callApi("retry_rows", indices, state.runMode).then((res) => {
+      if (!res || !res.ok) {
+        appendLog(`没法重跑：${res ? res.error : "无法连接后端"}`, "error");
+        return;
+      }
+      $("#failedSection").classList.add("hidden");
+      state.running = true;
+      setRunButtons(true);
+      $("#runProgressBar").style.width = "0%";
+      $("#runStat").textContent = `0/${res.total}`;
+      appendLog(`重跑 ${res.total} 条`, "ok");
+    });
+  }
+
+  function initExecuteActions() {
+    $("#btnStart").addEventListener("click", startRun);
+    $("#btnPause").addEventListener("click", () => {
+      callApi("pause_run").then((res) => {
+        if (!res) return;
+        $("#btnPause").textContent = res.paused ? "继续" : "暂停";
+        appendLog(res.paused ? "已暂停（当前这条会填完再停）" : "已继续", res.paused ? "warn" : "info");
+      });
+    });
+    $("#btnStop").addEventListener("click", () => {
+      callApi("stop_run");
+      appendLog("正在停止…", "warn");
+    });
+  }
+
+  // ---------------- 侧栏底部：打开结果目录 / 清除断点 ----------------
+  function initSidebarFooterActions() {
+    $("#btnOpenOutput").addEventListener("click", () => callApi("open_output_dir"));
+    $("#btnCheckUpdate").addEventListener("click", () => checkForUpdate(true));
+    $("#btnInstallUpdate").addEventListener("click", downloadAndInstallUpdate);
+    $("#btnClearState").addEventListener("click", () => {
+      if (!state.activeForm) return;
+      showModal({
+        title: "清除断点",
+        desc: "清除后会从第一条重新开始（已提交的不会撤销）。确定？",
+        buttons: [
+          {
+            label: "确定", primary: true, onClick: () => {
+              callApi("clear_state", state.activeForm).then((res) => {
+                if (res && res.ok) {
+                  appendLog("断点已清除", "ok");
+                  if (state.loaded) doLoadCheck();
+                } else {
+                  appendLog(`清除失败：${res ? res.error : "无法连接后端"}`, "error");
+                }
+              });
+            },
+          },
+          { label: "取消" },
+        ],
+      });
+    });
+  }
+
+  // ---------------- 策略中心 ----------------
+  // 一套策略 = 通用规则（按组分卡）+ 方案组（人群 / 内容限制，各一个方案库）+ 例外清单。
+  // 折叠态是一份可核对的清单，点开才变成表单：这个页面读的次数远多于改的次数。
+  // 取值逻辑全在 Python 端（wizard_strategy.resolve），这里只负责编辑那份 JSON。
+  const strategyUI = {
+    draft: null,
+    open: {},              // 哪几张卡是展开的
+    openScheme: {},        // 每个方案组里展开的是哪一套 {组key: 方案名}
+    scopeToSelection: true,
+    adding: null,          // 正在加的那条例外 {positions, field, value}
+  };
+
+  // 方案组只剩两种用法 —— 2026-08-21 去掉了「Excel 里逐单元填」，
+  // 这些字段列多到看不过来，逐行填纯属重复劳动（Python 端同步去掉了）
+  const MODE_LABEL = { fixed: "全部用同一套", keyword: "按单元名称匹配" };
+
+  function openStrategy() { setWizardTab("strategy"); }
+
+  /** 方案组清单（人群 / 内容限制），来自后端 wizard_meta */
+  function schemeGroups() {
+    return (state.wizardMeta && state.wizardMeta.scheme_groups) || [];
+  }
+
+  function draftItem() {
+    const d = strategyUI.draft;
+    if (!d.items[d.active]) d.items[d.active] = { rules: {}, groups: {}, exceptions: [] };
+    const it = d.items[d.active];
+    it.rules = it.rules || {};
+    it.groups = it.groups || {};
+    schemeGroups().forEach((g) => {
+      const gv = it.groups[g.key] || (it.groups[g.key] = {});
+      gv.schemes = gv.schemes || {};
+      gv.rules = gv.rules || [];
+      gv.fallback = gv.fallback || [];
+      if (!MODE_LABEL[gv.mode]) gv.mode = "fixed";
+    });
+    it.exceptions = it.exceptions || [];
+    return it;
+  }
+
+  /** 某一组的草稿数据 */
+  function draftGroup(key) { return draftItem().groups[key]; }
+
+  function strategyDirty() {
+    if (!strategyUI.draft || !state.strategyDoc) return false;
+    return JSON.stringify(strategyUI.draft) !== JSON.stringify(state.strategyDoc);
+  }
+
+  /** 这个字段这次用不用得上：本次选中的资源位里有没有它 */
+  function fieldInScope(f) {
+    if (!strategyUI.scopeToSelection || !state.positions.length) return true;
+    return (f.positions || []).some((p) => state.positions.includes(p));
+  }
+
+  /** 级联：父字段没选到触发值，这个字段就不该出现 */
+  function fieldRevealed(f, values) {
+    if (!f.when) return true;
+    const cur = String(values[f.when[0]] || "");
+    // 多选父字段（我想投放 =「在期大会员,未登录」）按成员判断
+    const members = cur.split(/[,，]/).map((s) => s.trim());
+    return cur === f.when[1] || members.includes(f.when[1]) || (cur && cur.startsWith(f.when[1]));
+  }
+
+  function visibleFields(list, values, scoped) {
+    return list.filter((f) => (!scoped || fieldInScope(f)) && fieldRevealed(f, values));
+  }
+
+  /** 这个字段在级联里的第几层：人群选组 0 → 人群类型 1 → 人群ID / 人群标签 2 */
+  function fieldDepth(f) {
+    const all = state.wizardMeta.strategy_fields || [];
+    let depth = 0, cur = f;
+    while (cur && cur.when && depth < 6) {
+      cur = all.find((x) => x.name === cur.when[0]);
+      depth++;
+    }
+    return depth;
+  }
+
+  function hasDescendants(name) {
+    return (state.wizardMeta.strategy_fields || []).some((f) => f.when && f.when[0] === name);
+  }
+
+  /** 父字段改了值，子孙字段留着的旧值就没意义了（还会让它们错误地显示出来），清掉 */
+  function clearDescendants(values, name) {
+    (state.wizardMeta.strategy_fields || []).forEach((f) => {
+      if (f.when && f.when[0] === name && values[f.name] !== undefined) {
+        delete values[f.name];
+        clearDescendants(values, f.name);
+      }
+    });
+  }
+
+  function fieldsOfGroup(group) {
+    return (state.wizardMeta.strategy_fields || []).filter((f) => f.group === group);
+  }
+
+  // ---------------- 卡片外壳 ----------------
+  function card(key, title, summary, body, extraHead) {
+    const open = !!strategyUI.open[key];
+    const box = el("div", "scard" + (open ? " open" : ""));
+    const head = el("div", "scard-head");
+    head.appendChild(el("span", "scard-title", title));
+    if (open) {
+      if (extraHead) head.appendChild(extraHead);
+    } else {
+      head.appendChild(el("span", "scard-sum", summary));
+    }
+    head.appendChild(el("span", "scard-act", open ? "收起" : "编辑"));
+    head.addEventListener("click", (e) => {
+      if (e.target.closest(".scard-body") || e.target.closest("input, select, button")) return;
+      strategyUI.open[key] = !open;
+      renderStrategyPanel();
+    });
+    box.appendChild(head);
+    if (open && body) {
+      const wrap = el("div", "scard-body");
+      wrap.appendChild(body);
+      box.appendChild(wrap);
+    }
+    return box;
+  }
+
+  /** 折叠态的值清单：字段 / 值 两列，和例外一样的读法 */
+  function valueList(pairs) {
+    const wrap = el("div", "svals");
+    pairs.forEach(([k, v, muted]) => {
+      const row = el("div", "svals-row");
+      row.appendChild(el("span", "k", k));
+      row.appendChild(el("span", muted ? "v mu" : "v", v));
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
+
+  // ---------------- 通用规则卡 ----------------
+  function ruleCard(group) {
+    const item = draftItem();
+    const all = fieldsOfGroup(group);
+    const shown = visibleFields(all, item.rules, true);
+    const hidden = all.length - shown.length;
+
+    const filled = shown.filter((f) => String(item.rules[f.name] || "").trim());
+    const summary = filled.length
+      ? filled.map((f) => item.rules[f.name]).join(" · ")
+      : "未配置";
+
+    const body = el("div", "col");
+    body.style.gap = "12px";
+    const grid = el("div", "strategy-grid");
+    shown.forEach((f) => grid.appendChild(strategyField(f, item.rules, null, () => renderStrategyPanel())));
+    body.appendChild(grid);
+    if (hidden > 0) {
+      body.appendChild(el("div", "snote", `另有 ${hidden} 项本次用不上或未触发，已隐藏`));
+    }
+    return card(`g:${group}`, group, summary, body);
+  }
+
+  // ---------------- 方案组卡（人群 / 内容限制）----------------
+  // 两组用法完全一样，所以只有这一套渲染代码，按 g（组定义）参数化。
+  function schemeCard(g) {
+    const grp = draftGroup(g.key);
+    const mode = grp.mode || "fixed";
+    const schemes = Object.keys(grp.schemes);
+
+    let summary = MODE_LABEL[mode];
+    if (mode === "fixed") summary += grp.scheme ? ` · ${grp.scheme}` : " · 未选方案";
+    if (mode === "keyword") {
+      const multi = grp.rules.filter((r) => (r.schemes || []).length > 1).length;
+      summary += ` · ${grp.rules.length} 条规则，${schemes.length} 套方案`;
+      if (multi) summary += `，其中 ${multi} 条用多套`;
+    }
+
+    const body = el("div", "col");
+    body.style.gap = "14px";
+
+    // —— 怎么来 ——
+    const modeRow = el("div", "col");
+    modeRow.style.gap = "6px";
+    modeRow.appendChild(el("div", "snote", `这批单元的${g.name}怎么来`));
+    const seg = el("div", "segmented");
+    Object.keys(MODE_LABEL).forEach((m) => {
+      const it = el("div", "seg-item" + (m === mode ? " active" : ""), MODE_LABEL[m]);
+      it.addEventListener("click", () => { grp.mode = m; renderStrategyPanel(); renderStrategyRow(); });
+      seg.appendChild(it);
+    });
+    modeRow.appendChild(seg);
+    body.appendChild(modeRow);
+
+    if (mode === "fixed") {
+      const wrap = el("div", "sfield");
+      wrap.appendChild(el("div", "sname", "用哪一套"));
+      wrap.appendChild(schemePicker(g, grp.scheme ? [grp.scheme] : [],
+                                    (v) => { grp.scheme = v[0] || ""; }, "点一下选中"));
+      body.appendChild(wrap);
+    } else {
+      body.appendChild(keywordTable(g, grp));
+    }
+
+    // —— 方案库 ——
+    const lib = el("div", "col");
+    lib.style.gap = "6px";
+    lib.appendChild(el("div", "snote", `${g.name}方案库`));
+    schemes.forEach((name) => lib.appendChild(schemeRow(g, grp, name)));
+    const add = el("div", "sadd", "＋ 新建方案");
+    add.addEventListener("click", () => askName(`新建${g.name}方案`, "", (n) => {
+      grp.schemes[n] = {};
+      strategyUI.openScheme[g.key] = n;
+      renderStrategyPanel();
+    }));
+    lib.appendChild(add);
+    body.appendChild(lib);
+
+    return card(`sg:${g.key}`, g.name, summary, body);
+  }
+
+  /** 方案选择器。多套 = 页面上「添加人群配置」那种多组，多选字段之间取并集。 */
+  function schemePicker(g, picked, onChange, blankText) {
+    const grp = draftGroup(g.key);
+    const names = Object.keys(grp.schemes);
+    const cur = Array.isArray(picked) ? picked.slice() : (picked ? [picked] : []);
+
+    const box = el("div", "spick");
+    names.forEach((n) => {
+      const on = cur.includes(n);
+      const chip = el("span", "chip" + (on ? " on" : ""), n);
+      chip.addEventListener("click", () => {
+        const next = on ? cur.filter((x) => x !== n) : cur.concat([n]);
+        // 按方案库里的顺序排，和页面上加组的先后一致
+        onChange(names.filter((x) => next.includes(x)));
+        renderStrategyPanel();
+      });
+      box.appendChild(chip);
+    });
+    if (!cur.length && blankText) box.appendChild(el("span", "snote", blankText));
+    return box;
+  }
+
+  function keywordTable(g, grp) {
+    const wrap = el("div", "col");
+    wrap.style.gap = "6px";
+    wrap.appendChild(el("div", "snote", "从上往下，第一条命中的生效"));
+    wrap.appendChild(el("div", "snote",
+      "一行可以选多套 —— 多选字段会合并到一起（并集）；单选字段几套配得不一样就合不到一起，会在核对页点出来"));
+    grp.rules.forEach((r, i) => {
+      const row = el("div", "krow");
+      const kw = document.createElement("input");
+      kw.className = "field";
+      kw.value = (r.keywords || []).join("、");
+      kw.placeholder = "单元名称里出现的词，用、分隔";
+      kw.addEventListener("input", () => {
+        r.keywords = kw.value.split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
+      });
+      row.appendChild(kw);
+      row.appendChild(el("span", "karrow", "→"));
+      row.appendChild(schemePicker(g, r.schemes || (r.scheme ? [r.scheme] : []),
+                                   (v) => { r.schemes = v; delete r.scheme; }, "点一下选方案"));
+      const del = el("span", "kdel", "×");
+      del.title = "删掉这条";
+      del.addEventListener("click", () => { grp.rules.splice(i, 1); renderStrategyPanel(); });
+      row.appendChild(del);
+      wrap.appendChild(row);
+    });
+
+    const foot = el("div", "row");
+    foot.style.gap = "12px";
+    const add = el("span", "slink", "＋ 加一行");
+    add.addEventListener("click", () => {
+      grp.rules.push({ keywords: [], schemes: [Object.keys(grp.schemes)[0]].filter(Boolean) });
+      renderStrategyPanel();
+    });
+    foot.appendChild(add);
+    const fb = el("span", "row");
+    fb.style.cssText = "gap:6px;margin-left:auto";
+    fb.appendChild(el("span", "snote", "都没命中时用"));
+    fb.appendChild(schemePicker(g, grp.fallback || [], (v) => { grp.fallback = v; }, "（不设兜底）"));
+    foot.appendChild(fb);
+    wrap.appendChild(foot);
+    return wrap;
+  }
+
+  function schemeRow(g, grp, name) {
+    const open = strategyUI.openScheme[g.key] === name;
+    const vals = grp.schemes[name];
+    const box = el("div", "srow" + (open ? " open" : ""));
+
+    const head = el("div", "srow-head");
+    head.appendChild(el("b", null, name));
+    head.appendChild(el("span", "srow-sum", open ? "" : describeScheme(g, vals)));
+    const act = el("span", "scard-act", open ? "收起" : "编辑");
+    act.addEventListener("click", () => {
+      strategyUI.openScheme[g.key] = open ? "" : name;
+      renderStrategyPanel();
+    });
+    head.appendChild(act);
+    box.appendChild(head);
+
+    if (open) {
+      const body = el("div", "srow-body");
+      const fields = (state.wizardMeta.strategy_fields || []).filter((f) => f.scheme_group === g.key);
+      visibleFields(fields, vals, false).forEach((f) => {
+        const line = el("div", "scas");
+        line.style.paddingLeft = fieldDepth(f) * 20 + "px";
+        if (f.when) line.appendChild(el("span", "scas-arrow", "└"));
+        const fw = strategyField(f, vals, null, () => renderStrategyPanel());
+        fw.style.flex = "1";
+        line.appendChild(fw);
+        body.appendChild(line);
+      });
+      const bar = el("div", "row");
+      bar.style.cssText = "gap:10px;margin-top:10px";
+      const ren = el("span", "slink", "重命名");
+      ren.addEventListener("click", () => askName(`重命名${g.name}方案`, name, (n) => {
+        grp.schemes[n] = grp.schemes[name];
+        if (n !== name) {
+          delete grp.schemes[name];
+          (grp.rules || []).forEach((r) => {
+            r.schemes = (r.schemes || []).map((x) => (x === name ? n : x));
+          });
+          if (grp.scheme === name) grp.scheme = n;
+          grp.fallback = (grp.fallback || []).map((x) => (x === name ? n : x));
+          (draftItem().exceptions || []).forEach((e) => {
+            if (e.field === g.exception_field && e.value === name) e.value = n;
+          });
+        }
+        strategyUI.openScheme[g.key] = n;
+        renderStrategyPanel();
+      }));
+      bar.appendChild(ren);
+      const del = el("span", "slink bad", "删除这套");
+      del.addEventListener("click", () => {
+        if (Object.keys(grp.schemes).length <= 1) { appendLog(`至少要留一套${g.name}方案`, "warn"); return; }
+        const used = (grp.rules || []).filter((r) => (r.schemes || []).includes(name)).length;
+        delete grp.schemes[name];
+        grp.rules = (grp.rules || [])
+          .map((r) => Object.assign(r, { schemes: (r.schemes || []).filter((x) => x !== name) }))
+          .filter((r) => (r.schemes || []).length);
+        if (grp.scheme === name) grp.scheme = Object.keys(grp.schemes)[0];
+        grp.fallback = (grp.fallback || []).filter((x) => x !== name);
+        strategyUI.openScheme[g.key] = "";
+        renderStrategyPanel();
+        appendLog(`已删除${g.name}方案「${name}」` + (used ? `，连带 ${used} 条匹配规则` : ""), "warn");
+      });
+      bar.appendChild(del);
+      body.appendChild(bar);
+      box.appendChild(body);
+    }
+    return box;
+  }
+
+  /** 折叠态那行摘要：挑几个能一眼认出这套方案的字段 */
+  function describeScheme(g, vals) {
+    const bits = [];
+    ["人群类型", "人群标签", "我想投放", "ep付费状态", "生效内容", "版本限制"].forEach((k) => {
+      if (vals[k] && bits.length < 2) bits.push(vals[k]);
+    });
+    if (vals["人群ID"]) bits.push("人群ID " + vals["人群ID"]);
+    if (!bits.length) {
+      const first = (g.fields || []).find((n) => vals[n]);
+      bits.push(first ? vals[first] : "未配置");
+    }
+    return bits.join(" · ");
+  }
+
+  // ---------------- 例外卡 ----------------
+  function exceptionCard() {
+    const item = draftItem();
+    const list = item.exceptions;
+    const summary = list.length ? `${list.length} 条` : "无，全部按通用规则";
+
+    const body = el("div", "col");
+    body.style.gap = "8px";
+
+    list.forEach((e, i) => {
+      const row = el("div", "erow");
+      const head = e.positions.slice(0, 2).join("、");
+      row.appendChild(el("span", "epos", head));
+      if (e.positions.length > 2) row.appendChild(el("span", "pill muted", `+${e.positions.length - 2}`));
+      row.appendChild(el("span", "esep", "·"));
+      row.appendChild(el("span", "efield", e.field));
+      row.appendChild(el("span", "esep", "="));
+      row.appendChild(el("span", "eval", e.value));
+      const del = el("span", "kdel", "×");
+      del.addEventListener("click", () => { list.splice(i, 1); renderStrategyPanel(); });
+      row.appendChild(del);
+      body.appendChild(row);
+    });
+
+    if (strategyUI.adding) {
+      body.appendChild(exceptionForm());
+    } else {
+      const add = el("div", "sadd", "＋ 加一条例外");
+      add.addEventListener("click", () => {
+        strategyUI.adding = { positions: [], field: "", value: "" };
+        renderStrategyPanel();
+      });
+      body.appendChild(add);
+    }
+    body.appendChild(el("div", "snote",
+      "push / 短信这些资源位本来就没有版本限制、生效内容这类字段，系统自动跳过，不用在这里配。"));
+
+    return card("exc", "例外", summary, body);
+  }
+
+  function exceptionForm() {
+    const draft = strategyUI.adding;
+    const meta = state.wizardMeta;
+    const box = el("div", "eform");
+    box.appendChild(el("div", "snote", "哪些资源位（可多选）"));
+
+    const chips = el("div", "chip-wrap");
+    meta.positions.forEach((p) => {
+      const on = draft.positions.includes(p.name);
+      const c = el("span", "chip" + (on ? " on" : ""), p.name);
+      c.addEventListener("click", () => {
+        draft.positions = on ? draft.positions.filter((x) => x !== p.name)
+                             : draft.positions.concat([p.name]);
+        if (draft.field && !exceptionFieldOptions(draft.positions).some((f) => f.name === draft.field)) {
+          draft.field = ""; draft.value = "";
+        }
+        renderStrategyPanel();
+      });
+      chips.appendChild(c);
+    });
+    box.appendChild(chips);
+
+    if (draft.positions.length) {
+      const opts = exceptionFieldOptions(draft.positions);
+      const row = el("div", "row");
+      row.style.cssText = "gap:10px;margin-top:10px;align-items:flex-start;flex-wrap:wrap";
+
+      const fw = el("div", "sfield");
+      fw.style.width = "190px";
+      fw.appendChild(el("div", "sname", "改哪个字段"));
+      const sel = el("select", "field");
+      const blank = el("option", null, "选一个…");
+      blank.value = "";
+      sel.appendChild(blank);
+      opts.forEach((f) => {
+        const o = el("option", null, f.name);
+        o.value = f.name;
+        if (f.name === draft.field) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => { draft.field = sel.value; draft.value = ""; renderStrategyPanel(); });
+      fw.appendChild(sel);
+      row.appendChild(fw);
+
+      if (draft.field) {
+        const vw = el("div", "sfield");
+        vw.style.cssText = "flex:1;min-width:220px";
+        vw.appendChild(el("div", "sname", "改成什么"));
+        const swap = schemeGroups().find((g) => g.exception_field === draft.field);
+        if (swap) {
+          // 例外里换整组只指一套（push 那种「只吃 DMP 包」的场景），要多套就用关键词规则
+          vw.appendChild(schemePicker(swap, draft.value ? [draft.value] : [],
+                                      (v) => { draft.value = v[0] || ""; }, "点一下选一套"));
+          if (!draft.value) draft.value = Object.keys(draftGroup(swap.key).schemes)[0] || "";
+        } else {
+          const def = opts.find((f) => f.name === draft.field);
+          vw.appendChild(strategyField(Object.assign({}, def, { name: "" }), draft, null,
+                                       null, "value"));
+        }
+        row.appendChild(vw);
+      }
+      box.appendChild(row);
+
+      const bar = el("div", "row");
+      bar.style.cssText = "gap:8px;margin-top:12px";
+      const ok = el("button", "btn btn-sm btn-primary", "加上");
+      ok.addEventListener("click", () => {
+        if (!draft.field || !String(draft.value).trim()) { appendLog("例外要选字段、填值", "warn"); return; }
+        const item = draftItem();
+        item.exceptions = item.exceptions.filter(
+          (e) => !(e.field === draft.field && e.positions.join() === draft.positions.join()));
+        item.exceptions.push({ positions: draft.positions.slice(), field: draft.field, value: String(draft.value) });
+        strategyUI.adding = null;
+        renderStrategyPanel();
+      });
+      bar.appendChild(ok);
+      const cancel = el("button", "btn btn-sm", "取消");
+      cancel.addEventListener("click", () => { strategyUI.adding = null; renderStrategyPanel(); });
+      bar.appendChild(cancel);
+      box.appendChild(bar);
+    }
+    return box;
+  }
+
+  /** 例外能改哪些字段：选中的资源位共同拥有的那些 + 每组「换整套方案」 */
+  function exceptionFieldOptions(positions) {
+    const meta = state.wizardMeta;
+    const mine = meta.positions.filter((p) => positions.includes(p.name));
+    const out = (meta.strategy_fields || []).filter(
+      (f) => !f.scheme_group && mine.every((p) => (p.strategy_fields || []).includes(f.name)));
+    // 方案组的单个字段不进例外 —— 换就整套换，不然一个资源位里半套新半套旧，没人看得懂
+    schemeGroups().forEach((g) => {
+      out.push({ name: g.exception_field, kind: "single", options: [], scheme_group: g.key });
+    });
+    return out;
+  }
+
+  // ---------------- 主渲染 ----------------
+  function renderStrategyPanel() {
+    const d = strategyUI.draft;
+    if (!d || !state.wizardMeta) return;
+
+    const sel = $("#strategyPickSelect");
+    sel.innerHTML = "";
+    Object.keys(d.items).forEach((name) => {
+      const o = el("option", null, name);
+      o.value = name;
+      if (name === d.active) o.selected = true;
+      sel.appendChild(o);
+    });
+
+    const wrap = $("#strategyCards");
+    wrap.innerHTML = "";
+    (state.wizardMeta.groups || []).forEach((g) => wrap.appendChild(ruleCard(g)));
+    schemeGroups().forEach((g) => wrap.appendChild(schemeCard(g)));
+    wrap.appendChild(exceptionCard());
+
+    const item = draftItem();
+    const need = (state.wizardMeta.strategy_fields || [])
+      .filter((f) => !f.scheme_group && f.required && fieldInScope(f) && fieldRevealed(f, item.rules));
+    const miss = need.filter((f) => !String(item.rules[f.name] || "").trim());
+    const hint = $("#strategyFootHint");
+    hint.textContent = miss.length
+      ? `还差 ${miss.length} 项必填：${miss.map((f) => f.name).join("、")}`
+      : `「${d.active}」必填项齐了` + (strategyDirty() ? "，有改动没保存" : "");
+    hint.style.color = miss.length ? "var(--bad)" : "var(--mu)";
+    $("#strategyScopeCheck").checked = strategyUI.scopeToSelection;
+    renderStrategyRow();
+  }
+
+  /** 一个策略字段的编辑控件。values[key] 是它写回的地方。 */
+  function strategyField(f, values, fallback, onChange, key) {
+    key = key || f.name;
+    const box = el("div", "sfield");
+    if (f.name) {
+      const name = el("div", "sname", f.name);
+      if (f.required && !fallback) name.appendChild(el("i", null, "*"));
+      box.appendChild(name);
+    }
+    const cur = String(values[key] || "");
+    const fire = () => { if (onChange) onChange(); };
+
+    if (f.kind === "multi") {
+      const picked = cur.split(",").map((s) => s.trim()).filter(Boolean);
+      const opts = el("div", "sopts");
+      (f.options || []).forEach((o) => {
+        const lb = el("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = o;
+        cb.checked = picked.includes(o);
+        cb.addEventListener("change", () => {
+          values[key] = Array.from(opts.querySelectorAll("input:checked")).map((x) => x.value).join(",");
+          if (key === f.name && hasDescendants(f.name)) {
+            clearDescendants(values, f.name);
+            fire();
+          }
+        });
+        lb.appendChild(cb);
+        lb.appendChild(el("span", null, o));
+        opts.appendChild(lb);
+      });
+      box.appendChild(opts);
+    } else if (f.kind === "range") {
+      // 后台就是「n 天至 m 天(从小到大)」两个数字框，这里对齐，别让人手写「1-365」
+      const parts = cur.split("-");
+      const row = el("div", "srange");
+      const mk = (i, ph) => {
+        const n = document.createElement("input");
+        n.type = "number";
+        n.className = "field";
+        n.value = (parts[i] || "").trim();
+        n.placeholder = ph;
+        n.addEventListener("input", () => {
+          const a = row.querySelectorAll("input")[0].value.trim();
+          const b = row.querySelectorAll("input")[1].value.trim();
+          values[key] = (a || b) ? `${a}-${b}` : "";
+        });
+        return n;
+      };
+      row.appendChild(mk(0, "小"));
+      row.appendChild(el("span", "sunit", "天至"));
+      row.appendChild(mk(1, "大"));
+      row.appendChild(el("span", "sunit", "天（从小到大，填 -1 = 不限）"));
+      box.appendChild(row);
+    } else if (f.kind === "single") {
+      const sel = el("select", "field");
+      const blank = el("option", null, "（不填）");
+      blank.value = "";
+      sel.appendChild(blank);
+      (f.options || []).forEach((o) => {
+        const op = el("option", null, o);
+        op.value = o;
+        if (o === cur) op.selected = true;
+        sel.appendChild(op);
+      });
+      sel.addEventListener("change", () => {
+        values[key] = sel.value;
+        if (key === f.name) clearDescendants(values, f.name);
+        fire();
+      });
+      box.appendChild(sel);
+    } else {
+      const inp = document.createElement("input");
+      inp.className = "field";
+      inp.value = cur;
+      inp.placeholder = f.note && f.note.length < 20 ? f.note : "";
+      inp.addEventListener("input", () => { values[key] = inp.value.trim(); });
+      box.appendChild(inp);
+    }
+    return box;
+  }
+
+  function initStrategyPanel() {
+    $("#btnStrategyReset").addEventListener("click", () => {
+      strategyUI.draft = JSON.parse(JSON.stringify(state.strategyDoc));
+      strategyUI.adding = null;
+      renderStrategyPanel();
+      appendLog("策略改动已撤销，回到上次保存的样子", "warn");
+    });
+    $("#strategyScopeCheck").addEventListener("change", (e) => {
+      strategyUI.scopeToSelection = e.target.checked;
+      renderStrategyPanel();
+    });
+    $("#strategyPickSelect").addEventListener("change", (e) => {
+      strategyUI.draft.active = e.target.value;
+      strategyUI.adding = null;
+      renderStrategyPanel();
+    });
+    $("#btnStrategyNew").addEventListener("click", () => askName("新建一套策略", "", (name) => {
+      strategyUI.draft.items[name] = JSON.parse(JSON.stringify(draftItem()));
+      strategyUI.draft.items[name].updated_at = "";
+      strategyUI.draft.active = name;
+      renderStrategyPanel();
+      appendLog(`新策略「${name}」是从当前这套复制出来的，改完记得保存`, "ok");
+    }));
+    $("#btnStrategyRename").addEventListener("click", () => {
+      const old = strategyUI.draft.active;
+      askName("重命名当前策略", old, (name) => {
+        strategyUI.draft.items[name] = strategyUI.draft.items[old];
+        if (name !== old) delete strategyUI.draft.items[old];
+        strategyUI.draft.active = name;
+        renderStrategyPanel();
+      });
+    });
+    $("#btnStrategyDelete").addEventListener("click", () => {
+      const d = strategyUI.draft;
+      if (Object.keys(d.items).length <= 1) { appendLog("至少要留一套策略", "warn"); return; }
+      const gone = d.active;
+      delete d.items[gone];
+      d.active = Object.keys(d.items)[0];
+      renderStrategyPanel();
+      appendLog(`已删除策略「${gone}」，保存后生效`, "warn");
+    });
+    $("#btnStrategySave").addEventListener("click", () => {
+      callApi("strategy_save", state.activeForm, strategyUI.draft).then((res) => {
+        if (!res || !res.ok) {
+          appendLog("策略保存失败：" + (res ? res.error : "无法连接后端"), "error");
+          return;
+        }
+        state.strategyDoc = res.doc;
+        strategyUI.draft = JSON.parse(JSON.stringify(res.doc));
+        appendLog("策略「" + res.doc.active + "」已保存：" + res.path, "ok");
+        renderStrategyPanel();
+      });
+    });
+  }
+
+  /** 小输入弹窗。pywebview 里 window.prompt() 不一定可用，用自己的弹窗代替。 */
+  function askName(title, initial, onOk) {
+    strategyUI.pendingName = initial;
+    showModal({
+      title: title,
+      desc: "起个一眼能认出来的名字",
+      extraHtml: '<div style="padding:12px"><input id="askNameInput" class="field" style="width:100%" value="' +
+                 escapeHtml(initial) + '" placeholder="名称"></div>',
+      buttons: [
+        {
+          label: "确定", primary: true, onClick: () => {
+            const v = String(strategyUI.pendingName || "").trim();
+            if (!v) { appendLog("名字不能为空", "warn"); return; }
+            onOk(v);
+          },
+        },
+        { label: "取消" },
+      ],
+    });
+    const inp = $("#askNameInput");
+    inp.addEventListener("input", () => { strategyUI.pendingName = inp.value; });
+    inp.focus();
+  }
+
+  function initLogDrawer() {
+    $("#logHead").addEventListener("click", () => setLogOpen(!state.logOpen));
+    $("#btnDetailClose").addEventListener("click", () => $("#detailModal").classList.add("hidden"));
+  }
+
+  // ---------------- 暴露给 Python 端 push 的接口 ----------------
+  window.app = {
+    onLog: appendLog,
+    setBrowserStatus: setBrowserStatus,
+
+    onProgress(done, total, stats) {
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      $("#runProgressBar").style.width = pct + "%";
+      const extra = stats.dry ? ` · 空跑 ${stats.dry}` : "";
+      $("#runStat").textContent = `${done}/${total}　成功 ${stats.ok} · 失败 ${stats.failed} · 跳过 ${stats.skipped}${extra}`;
+    },
+
+    onConfirm(label, summary) {
+      showModal({
+        title: `${label}　${summary}`,
+        desc: "已在浏览器里填好，请切到 Chrome 核对内容后选择",
+        buttons: [
+          { label: "提交这条", primary: true, onClick: () => callApi("answer", "submit") },
+          { label: "跳过", onClick: () => callApi("answer", "skip") },
+          { label: "以后全部自动", onClick: () => callApi("answer", "auto") },
+          { label: "停止", onClick: () => callApi("answer", "stop") },
+        ],
+      });
+    },
+
+    onAskContinue(error) {
+      showModal({
+        title: "这条失败了",
+        desc: `${error}\n\n继续跑下一条吗？`,
+        buttons: [
+          { label: "继续", primary: true, onClick: () => callApi("answer", true) },
+          { label: "停止", onClick: () => callApi("answer", false) },
+        ],
+      });
+    },
+
+    onFinished(title, body, ok) {
+      appendLog(`${title}：${String(body).replace(/\n+/g, " ")}`, ok ? "ok" : "error");
+      showModal({ title, desc: body, buttons: [{ label: "知道了", primary: true }] });
+    },
+
+    onRunDone(summary) {
+      state.usage = null;      // 跑完有新数据了，统计缓存作废
+      state.running = false;
+      setRunButtons(false);
+      if (!summary) return;
+      if (summary.misaligned) {
+        appendLog("这次跑的范围和结果对不上号（常见原因：没勾「跳过已成功的」），失败清单这次没法逐行列出，请看运行日志里的报错", "warn");
+        $("#failedSection").classList.add("hidden");
+      } else {
+        renderFailedList(summary.failed);
+      }
+    },
+  };
+
+  // ---------------- 启动 ----------------
+  function init() {
+    initTheme();
+    renderVersion();
+    initStepNav();
+    initModeSegmented();
+    initPrepareActions();
+    initWizardTabs();
+    initWizardActions();
+    initExecuteActions();
+    initLaunchBrowser();
+    initSidebarFooterActions();
+    initLogDrawer();
+
+    // 等界面和首屏都开始渲染后再检查，网络波动不影响程序启动速度。
+    setTimeout(() => checkForUpdate(false), 800);
+
+    $("#navHome").addEventListener("click", showHome);
+    $("#navStats").addEventListener("click", showStats);
+    $(".sidebar-brand").addEventListener("click", showHome);
+
+    callApi("list_forms").then((forms) => {
+      state.forms = forms || [];
+      renderSidebar();
+      // 先把第一个配置类型的状态铺好（按归类后的次序，不是文件名次序），
+      // 再落到首页 —— 打开程序先看到「干了多少活」，而不是一上来就催你选文件
+      const groups = groupedForms();
+      if (groups.length && groups[0].items.length) selectForm(groups[0].items[0].name, { expand: false });
+      showHome();
+      appendLog(`已加载 ${state.forms.length} 个配置类型`, "ok");
+    });
+
+    pollBrowserStatus();
+    setInterval(pollBrowserStatus, 3000);
+  }
+
+  // ⚠ 必须等 pywebview 把 api 挂上来再 init。
+  //   window.pywebview 是异步注入的，DOMContentLoaded 那一刻它经常还不存在 ——
+  //   这时 callApi 会走「没有后端」那条样子货分支，**首页会显示出假数字**
+  //   （踩过：用户在 exe 里看到 143 条 / 3 个人，全是 STUB 里编的）。
+  //   普通浏览器里没有 pywebviewready 这个事件，等 3 秒就按「没后端」走样式预览。
+  function whenBackendReady(fn) {
+    if (window.pywebview && window.pywebview.api) return fn();
+    let fired = false;
+    const go = () => { if (!fired) { fired = true; fn(); } };
+    window.addEventListener("pywebviewready", go, { once: true });
+    setTimeout(go, 3000);
+  }
+
+  document.addEventListener("DOMContentLoaded", () => whenBackendReady(init));
+})();

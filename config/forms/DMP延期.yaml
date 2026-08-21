@@ -1,0 +1,133 @@
+name: DMP延期
+description: 大会员 DMP 人群管理 - 批量把人群有效期延长
+
+# 侧栏归类：group 是主 Tab，label 是它下面这一项的名字。
+# ⚠ 只有 label 是给人看的；name（也就是文件名）才是身份，断点、模板、
+#   config/prep 下的存盘都认它，改 label 不会动到这些。
+nav:
+  group: DMP人群包
+  group_order: 1
+  label: DMP人群延期
+  order: 1
+mode: dmp_extension
+
+form_url: 'https://bangumi-mng.bilibili.co/marin/s/full-ogv-data/user-assets/crowd-manage/crowd-list'
+# ⚠ 这是个 SPA：DOM 里先有空的 table 骨架，数据行要等接口回来才渲染（实测十几秒）。
+#   所以只等 ready_selector 不够，程序还会轮询等行出现，上限 list_ready_timeout。
+ready_selector: 'table'
+list_ready_timeout: 45000
+empty_selector: '.full_ogv_data_antd-empty'
+after_open_wait: 1500
+
+# ⚠ 这套页面的 antd 是带前缀打包的：class 前缀是 full_ogv_data_antd-，不是 ant-。
+#   所以下面所有选择器都带这个前缀，照抄通用 antd 写法会全部落空。
+#   （2026-08-12 在真实页面上逐个核对过）
+
+# ============================================================
+# 延期范围（界面上的「延期范围」单选，或命令行 --scope 会覆盖这里）
+#   active   所有「生效中」人群   → 系统最晚可选日期   ← 原有行为，默认值
+#   mine     所有「我创建的」人群 → 系统最晚可选日期
+#   id_list  按 Excel 清单里的人群ID → 清单里写的日期（超上限自动取上限）
+# ============================================================
+scope: active
+
+# ⚠ 每完成一个人群延期后的等待，给后台留反应时间。别调太小。
+after_each_wait: 5000
+
+# ---------------- 列表定位 ----------------
+# ⚠ 必须带 [data-row-key]：tbody 第一行是 antd 的测量行（12 个空 td），
+#   不排掉的话会被当成一条人群。
+row_selector: 'tbody tr[data-row-key]'
+row_key_attribute: 'data-row-key'      # 值就是人群ID
+# 列序（0 起）：0 勾选 / 1 人群ID / 2 人群名称 / 3 覆盖人数 / 4 人群类型 /
+#              5 人群状态 / 6 推广状态 / 7 人群包更新时间 / 8 失效时间 /
+#              9 更新人 / 10 人群设置 / 11 操作
+id_column: 1
+name_column: 2
+creator_column: 9
+active_status: '生效中'
+known_status: ['生效中', '已失效', '未生效', '计算中']
+# ⚠ 已失效的人群，操作菜单里没有「人群延期」这一项（实测：生效中 8 项，已失效 6 项）。
+#   清单模式点名到这类人群时，预检就会标红说明，不会跑到一半才失败。
+non_extendable_status: ['已失效']
+
+# ---------------- 操作入口 ----------------
+# ⚠ 「操作」是 antd Dropdown.Button：左边「操 作」是主按钮，右边省略号才是菜单触发器，
+#   而且是 hover 展开不是 click。菜单项：查看/删除/更新/共享人群/导出/重试/推广人群/缩放人群/人群延期
+op_trigger_selector: 'button.full_ogv_data_antd-dropdown-trigger'
+menu_item_selector: 'li.full_ogv_data_antd-dropdown-menu-item'
+extension_menu_text: '人群延期'
+menu_open_wait: 1200
+
+# ---------------- scope=mine 怎么认「我创建的」 ----------------
+# 列表顶部有 antd Radio 组：全部 / 我创建的 / 分享给我的 —— 直接点它
+mine_filter_texts: ['我创建的']
+mine_radio_selector: 'label[class*=radio-wrapper]'
+after_filter_wait: 2500
+# 页面万一改版没有这个筛选了，退回按「更新人」列比对（填你的域账号，如 linzifan01）
+mine_creator: ''
+# scope=mine 时是否还要求「生效中」；留空 = 不按状态过滤
+mine_status: '生效中'
+
+# ---------------- 搜索（清单模式靠它直达） ----------------
+# ⚠ 列表有 21 页，靠翻页去找第 19 页上的某个人群要等一分多钟。
+#   scope=id_list 时改成直接搜人群ID，一步到位，也不受排序变化影响。
+# 后端接口是 /dmp/admin/crowd/list/page?id_or_name=<关键词>，按人群ID搜只会返回 1 条。
+# ⚠ 程序会确认列表「确实换成了搜索结果」才继续 —— 只等「列表不再变化」是不够的：
+#   搜索响应回来之前，搜索前那一屏本来就是静止的，一判就过，会误判成搜不到。
+#   没等到生效就重发搜索，最多 search_attempts 次。
+search_input_selector: "input[placeholder*='人群名称或人群ID']"
+search_button_selector: '.full_ogv_data_antd-input-search-button'
+search_timeout: 15000
+search_attempts: 3
+search_max_rows: 5
+
+# ---------------- 翻页 ----------------
+# ⚠ li 本身点了没反应，真正响应的是它里面的 button（程序会自动往里找）。
+# ⚠ 翻页后不能按固定时间往下走：重渲染要 3 秒以上，早读一步会拿到上一页的数据。
+#   程序会一直等到「第一行的 key 变了」才认为翻页成功。
+next_page_selectors:
+  - 'li.full_ogv_data_antd-pagination-next:not(.full_ogv_data_antd-pagination-disabled)'
+page_change_timeout: 15000
+page_settle_wait: 800
+
+# ---------------- 人群延期弹窗 ----------------
+# 弹窗结构：标题「有效期更改」/ 人群名称 / 人群有效期至[日期选择器] / 取 消 · 保 存
+# ⚠ 没有「确认」这一步，选完日期直接保存。confirm_texts 留空即可。
+# ⚠ 日期输入框是 readOnly，只能点面板选，填不进去。
+date_field_label: '人群有效期至'
+date_input_selectors:
+  - '.full_ogv_data_antd-modal-content input'
+  - "input[placeholder*='请选择日期']"
+
+# 可选日期格子。格子的 title 属性就是 2026-08-13 这种标准日期。
+latest_date_selectors:
+  - 'td.full_ogv_data_antd-picker-cell-in-view:not(.full_ogv_data_antd-picker-cell-disabled)'
+
+# ⚠ 系统最大可选日期不在当前月：实测今天起可选到 +180 天（跨 6 个月面板）。
+#   只看当前月会选到「本月最后一天」，比真正的上限早好几个月 —— 必须翻月。
+# ⚠ 判断面板开没开只认这个浮层容器，不能拿「有没有可选格子」当判据：
+#   可选范围最后一个月再往后翻，整月都是禁用的，那时面板开着却一个格子都没有。
+panel_selectors:
+  - '.full_ogv_data_antd-picker-dropdown:not(.full_ogv_data_antd-picker-dropdown-hidden)'
+panel_header_selectors:
+  - '.full_ogv_data_antd-picker-header-view'
+next_month_selectors:
+  - 'button.full_ogv_data_antd-picker-header-next-btn'
+prev_month_selectors:
+  - 'button.full_ogv_data_antd-picker-header-prev-btn'
+max_forward_months: 24
+month_wait: 300
+panel_open_wait: 800
+after_pick_wait: 400
+
+# ---------------- 确认 / 保存 ----------------
+# ⚠ 按钮文字是「保 存」「取 消」—— antd 在两个汉字之间插了全角空格，
+#   比对时程序会把所有空白剔掉再比，这里按正常写法填就行。
+confirm_texts: []
+save_texts: ['保存']
+cancel_texts: ['取消']
+after_save_wait: 2000
+error_selectors:
+  - '.full_ogv_data_antd-message-error'
+  - '.full_ogv_data_antd-form-item-explain-error'

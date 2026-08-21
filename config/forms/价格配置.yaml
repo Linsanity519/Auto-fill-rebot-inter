@@ -1,0 +1,158 @@
+# ============================================================
+# 策略中心 · 算法价格新建
+# 框架：Ant Design + ProComponents（Form.List 重复行 + 虚拟滚动下拉）
+# 结构抓取：2026-08-07  rich-vip.bilibili.co/.../strategy-center/list/edit/174
+# ============================================================
+# ⚠ 按钮 class 含 css-1a75fj6 这类编译哈希，发版即失效 → 一律用文字匹配
+# ⚠ antd 会在两个汉字按钮文字间插空格，必须写 "确 定" 不是 "确定"
+
+name: 价格配置
+description: 策略中心 - 算法价格人群配置
+
+# 侧栏归类：group 是主 Tab，label 是它下面这一项的名字。
+# ⚠ 只有 label 是给人看的；name（也就是文件名）才是身份，断点、模板、
+#   config/prep 下的存盘都认它，改 label 不会动到这些。
+nav:
+  group: 价格
+  group_order: 3
+  label: 价格策略配置
+  order: 1
+
+# 会员卡种全集（25 项，页面下拉是虚拟滚动，实测抓取）
+# 下面用 *sku_types 引用，改这里即可全局生效
+sku_types: &sku_types [
+  '连续包年', '连续包月', '连续包季',
+  '年度大会员', '月度大会员', '季度大会员',
+  '超大连续包年', '超大连续包月', '超大连续包季',
+  '超大年度会员', '超大月度会员', '超大季度会员',
+  '异形连续包年',
+  '权益连续包年', '权益连续包月', '权益连续包季',
+  '权益年度大会员', '权益月度大会员', '权益季度大会员',
+  '权益超大连续包年', '权益超大连续包月', '权益超大连续包季',
+  '权益年度超大会员', '权益月度超大会员', '权益季度超大会员'
+]
+
+form_url: null
+reset_between_rows: false
+
+# ---- 以下四个选择器已在真实页面上验证过（2026-08-07）----
+# 「新建」按钮的结构是 <button><span>新建</span></button>。
+# ⚠ 不能用 :text-is("新建") —— 它只看元素自己的直接文本、不看子元素，
+#   文字在子 span 里所以恒不命中（实测 count=0，跑一次浪费 15 秒超时）。
+# role 选择器按「无障碍名称」匹配，能穿透嵌套 span，
+# 也不受 antd 给双字按钮插空格的影响，是这类按钮最稳的写法。
+open_dialog: 'role=button[name="新建"]'
+
+# ⚠ 这个弹窗是自定义渲染，.ant-modal-content 恒为 0，不能用它判断！
+#   .ant-modal-wrap 开时为 1、关闭后整个从 DOM 移除 —— 这才是可靠判据
+ready_selector: '.ant-modal-wrap'
+
+# ⚠ 弹窗里按钮文字是「确 定」「取 消」（antd 给双字按钮自动加了空格），
+#   写成「确定」匹配不到。改用 footer 的语义 class，既避开空格问题，
+#   也避开页面底部那个同名的「取消」（那是整页保存的取消，点了会丢失所有配置）
+submit_selector: '.ant-modal-footer .ant-btn-primary'
+cancel_selector: '.ant-modal-footer .ant-btn-default'
+
+success_selector: '.ant-message-success'
+
+# ---------- 主表 ----------
+fields:
+  - name: 价格人群名称
+    selector: '#crowd_name'
+    type: fill
+
+  - name: 人群选组
+    selector: '#user_config_type'
+    type: select_antd
+    required: true
+    options: ['基本人群(实时数据)', 'ogv dmp人群包', '不限']
+    # 选了特定值才出现的字段
+    reveals:
+      '基本人群(实时数据)':
+        - name: 人群选择
+          selector: '#basic_crowd_type'
+          type: select_antd
+          required: true
+      'ogv dmp人群包':
+        - name: 人群选择
+          selector: '#dmp_group_id'
+          type: select_antd
+          required: true
+          search: true              # 人群包极多，输入 ID 过滤
+          match: contains           # ⚠ Excel 里填 ID（如 35697），
+                                    #   下拉显示的是「【暑促短信】8月1日2(35697)」，
+                                    #   两者不相等，必须用包含匹配
+          # 匹配到多个候选会直接报错让你填更精确的值，不会瞎选一个
+
+  - name: 平台
+    selector: '平台'              # 无 id，按 label 定位整个复选组
+    type: checkbox_sync           # 默认全选，必须双向同步
+    required: true
+    options: ['iPhone', 'Android', 'pc']
+
+  - name: 优先级
+    selector: '#weight_value'
+    type: fill
+    required: true
+
+  - name: 限制类型
+    selector: '#intervene_type'
+    type: select_antd
+    required: true
+    options: ['常规均价', '兜底定价']
+
+# ---------- 明细行（Form.List，字段随「限制类型」变化）----------
+list:
+  # ⚠ 这个按钮里有个 aria-label="plus" 的图标，把无障碍名称顶掉了，
+  #   role=button[name="添加一行数据"] 匹配不到（实测 count=0）。
+  #   ant-pro-form-list-creator-button-bottom 是 ProComponents 的稳定 class，不带编译哈希。
+  add_button: '.ant-modal .ant-pro-form-list-creator-button-bottom'
+  id_template: '#list_{i}_{key}'
+  max_rows: 20
+
+  variants_by: 限制类型          # 按主表这个字段的值选用下面哪一套明细字段
+
+  variants:
+    常规均价:
+      - name: 会员卡种
+        key: sku_type
+        type: select_antd
+        required: true
+        virtual_scroll: true     # 25 个选项、虚拟滚动，需滚动查找
+        options: *sku_types
+      - name: 价格均值
+        key: sku_conf_avg_price_limit
+        type: fill
+      - name: 价格区间下限
+        key: sku_conf_lower_limit
+        type: fill
+        required: true
+      - name: 价格区间上限
+        key: sku_conf_upper_limit
+        type: fill
+        required: true
+
+    兜底定价:
+      - name: 会员卡种
+        key: sku_type
+        type: select_antd
+        required: true
+        virtual_scroll: true
+        options: *sku_types
+      - name: 价格
+        key: sku_conf_specify_price
+        type: fill
+        required: true
+
+# ---------- 会员卡种完整选项（供校验和填表参考）----------
+sku_types: [
+  '连续包年', '连续包月', '连续包季',
+  '年度大会员', '月度大会员', '季度大会员',
+  '超大连续包年', '超大连续包月', '超大连续包季',
+  '超大年度会员', '超大月度会员', '超大季度会员',
+  '异形连续包年',
+  '权益连续包年', '权益连续包月', '权益连续包季',
+  '权益年度大会员', '权益月度大会员', '权益季度大会员',
+  '权益超大连续包年', '权益超大连续包月', '权益超大连续包季',
+  '权益年度超大会员', '权益月度超大会员', '权益季度超大会员'
+]

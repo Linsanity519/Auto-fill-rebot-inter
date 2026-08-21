@@ -1,0 +1,358 @@
+<!doctype html>
+<html data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>大会员业务后台 配置助手</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ============ 侧栏 ============ -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo">大</div>
+      <div>
+        <div class="name">配置助手</div>
+        <div class="sub">大会员业务后台</div>
+      </div>
+    </div>
+
+    <!-- 首页不属于任何一个主 Tab，钉在最上面 -->
+    <div class="sidebar-list" style="padding-top:8px;overflow:visible">
+      <div class="sidebar-item nav-home" id="navHome">
+        <span>首页</span>
+        <span class="badge"></span>
+      </div>
+      <div class="sidebar-item nav-home" id="navStats">
+        <span>数据统计</span>
+        <span class="badge"></span>
+      </div>
+    </div>
+
+    <div class="sidebar-label">配置类型</div>
+    <div class="sidebar-list" id="sidebarList">
+      <!-- 由 app.js 按 config/forms/*.yaml 渲染 -->
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="btn btn-ghost" style="justify-content:flex-start" id="btnOpenOutput">打开结果目录</button>
+      <button class="btn btn-ghost" style="justify-content:flex-start" id="btnClearState">清除断点记录</button>
+      <!-- 未配置发布地址时会被 JS 隐藏；有新版时显示下载并重启按钮。 -->
+      <div class="update-box hidden" id="updateBox">
+        <span id="updateLabel"></span>
+        <div class="update-actions">
+          <button class="btn btn-sm" id="btnCheckUpdate">检查更新</button>
+          <button class="btn btn-sm btn-primary hidden" id="btnInstallUpdate">更新并重启</button>
+        </div>
+      </div>
+      <div class="theme-row">
+        <div class="toggle" id="themeToggle"><div class="knob"></div></div>
+        <span>深色模式</span>
+      </div>
+      <!-- 版本号常驻：同事报问题时第一句就能问「你那儿显示的是几」 -->
+      <div class="sidebar-version" id="appVersion"></div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <main class="main">
+
+    <div class="topbar">
+      <div>
+        <div class="title" id="topTitle">—</div>
+        <div class="subtitle" id="topSubtitle"></div>
+      </div>
+      <div class="status">
+        <span class="dot" id="browserDot"></span>
+        <span class="label-off" id="browserLabel">浏览器未连接</span>
+        <button class="btn btn-sm btn-primary" id="btnLaunchBrowser" style="margin-left:8px">启动浏览器并登录</button>
+      </div>
+    </div>
+
+    <!-- 资源位投放是一个大 Tab，下面分「投放配置」和「策略中心」两块；别的配置类型不显示这一行 -->
+    <div class="subtab hidden" id="wizardTabs">
+      <div class="segmented" id="wizardTabSegmented">
+        <div class="seg-item" data-wtab="strategy">策略中心</div>
+        <div class="seg-item active" data-wtab="deliver">资源位投放配置</div>
+      </div>
+      <span style="color:var(--mu);font-size:11px" id="wizardTabHint"></span>
+    </div>
+
+    <div class="stepbar">
+      <div class="segmented" id="stepSegmented">
+        <div class="seg-item" data-step="prepare">准备</div>
+        <div class="seg-item" data-step="review">核对</div>
+        <div class="seg-item" data-step="execute">执行</div>
+      </div>
+      <div class="fill" id="filterPills"><!-- 只在「核对」步骤显示筛选 pill --></div>
+    </div>
+
+    <div class="content">
+
+      <!-- ---- 首页：使用统计 / 功能导航 ----
+           内容全由 app.js 按 usage_summary 渲染：有数据显示战绩，没数据显示能干什么 -->
+      <section class="step-panel" data-panel="home">
+        <div class="home-scroll" id="homeBody"></div>
+      </section>
+
+      <!-- ---- 数据统计：首页放不下的明细都在这儿 ---- -->
+      <section class="step-panel" data-panel="stats">
+        <div class="home-scroll" id="statsBody"></div>
+      </section>
+
+      <!-- ---- 步骤1：准备 ---- -->
+      <section class="step-panel" data-panel="prepare">
+
+        <!-- wizard（资源位投放）专用：选资源位 / 定活动 / 挑策略。
+             这三件事和「生成模板」是分开的 —— 先在这里定好，再去生成模板或直接载入数据。 -->
+        <div class="card col hidden" id="wizardCard" style="padding:16px 18px;gap:14px;margin-bottom:12px">
+          <div class="sect"><span class="bar"></span><b>本次投放</b><span>先定资源位和活动，模板按这里的选择生成</span></div>
+
+          <div class="row" style="gap:10px;align-items:flex-start">
+            <span class="form-label">资源位</span>
+            <div class="col" style="flex:1;gap:6px;min-width:0">
+              <!-- 多选下拉：18 个资源位平铺太占地方，收进下拉里，按场景分组 + 可搜索 -->
+              <div class="ms" id="posSelect">
+                <div class="ms-field" id="posField" tabindex="0"></div>
+                <div class="ms-panel hidden" id="posPanel">
+                  <input class="field ms-search" id="posSearch" placeholder="搜资源位或场景，如「播放页」">
+                  <div class="ms-list" id="posList"></div>
+                  <div class="ms-foot">
+                    <button class="btn btn-sm" id="btnPosAll">全选</button>
+                    <button class="btn btn-sm" id="btnPosNone">清空</button>
+                    <span style="color:var(--mu);margin-left:auto" id="posCount"></span>
+                    <button class="btn btn-sm btn-primary" id="btnPosDone">完成</button>
+                  </div>
+                </div>
+              </div>
+              <div style="color:var(--mu);font-size:11px" id="posSummary">还没选</div>
+            </div>
+          </div>
+
+          <div class="row" style="gap:10px;flex-wrap:wrap">
+            <span class="form-label">活动</span>
+            <div class="segmented" id="activitySegmented">
+              <div class="seg-item active" data-activity="new">本次新建活动</div>
+              <div class="seg-item" data-activity="existing">挂到已有活动</div>
+            </div>
+            <span class="row hidden" id="activityIdWrap" style="gap:6px">
+              <span style="color:var(--sub);font-size:12px">活动ID</span>
+              <input class="field" id="activityIdInput" style="width:120px" placeholder="如 20415">
+            </span>
+            <span style="color:var(--mu);font-size:11px" id="activityHint"></span>
+          </div>
+
+          <div class="row" style="gap:10px;flex-wrap:wrap">
+            <span class="form-label">投放策略</span>
+            <select class="field" id="strategySelect" style="width:200px;flex:none"></select>
+            <button class="btn" id="btnOpenStrategy">打开策略中心</button>
+            <span style="color:var(--mu);font-size:11px;flex:1;min-width:0" id="strategySummary"></span>
+          </div>
+
+          <div class="row" style="gap:10px;align-items:flex-start">
+            <span class="form-label" style="padding-top:0">本次规则</span>
+            <div style="color:var(--sub);font-size:11px;flex:1;min-width:0;line-height:1.9" id="strategyBrief"></div>
+          </div>
+        </div>
+
+        <!-- 原生商广专用：计划名称/转化目标/出价/投放时间/人群。
+             这几项本批所有单元共用，放这里填一次，不进 Excel。字段清单由 yaml 的
+             prep_fields 决定，加字段只改 yaml，这里不用动。 -->
+        <div class="card col hidden" id="adCard" style="padding:16px 18px;gap:14px;margin-bottom:12px">
+          <div class="sect"><span class="bar"></span><b>本次投放</b><span>这几项本批所有单元共用，不进 Excel</span></div>
+          <div class="col" id="adPrepFields" style="gap:12px"></div>
+          <div class="row" style="gap:10px;align-items:center">
+            <span style="color:var(--mu);font-size:11px;flex:1;min-width:0" id="adPrepHint"></span>
+            <button class="btn" id="btnSavePrep">保存</button>
+          </div>
+        </div>
+
+        <!-- 预定会议室专用：抢占任务清单。
+             和别的配置类型不一样，这个不吃 Excel —— 每条任务的日期/时段/人数都不同，
+             而且要支持「每周循环」，在界面上直接加行比来回导 Excel 顺手得多。
+             存盘走 meeting_save → config/prep/预定会议室.json。 -->
+        <div class="card col hidden" id="meetingCard" style="padding:16px 18px;gap:12px;margin-bottom:12px">
+          <div class="sect"><span class="bar"></span><b>抢占任务</b>
+            <span id="meetingWindowHint">会议室提前几天开放预定，到点第一时间抢</span></div>
+
+          <div class="mt-list col" id="meetingTasks" style="gap:10px"></div>
+
+          <div class="row" style="gap:10px;align-items:center">
+            <button class="btn" id="btnAddMeetingTask">+ 添加一条</button>
+            <span style="color:var(--mu);font-size:11px;flex:1;min-width:0" id="meetingHint"></span>
+            <button class="btn" id="btnSaveMeeting">保存</button>
+          </div>
+        </div>
+
+        <div class="card col" id="dataSourceCard" style="padding:16px 18px;gap:14px">
+          <div class="sect"><span class="bar"></span><b id="dataSourceTitle">配置来源</b>
+            <span id="dataSourceHint">选择数据文件，勾选延期范围（如果有）</span></div>
+
+          <!-- 抢会议室没有数据文件这一说，这一行会被整行藏掉（见 app.js renderMeetingCard） -->
+          <div class="row" id="dataFileRow" style="gap:10px">
+            <span style="color:var(--sub);width:64px;flex:none">数据文件</span>
+            <input class="field" id="dataFileInput" placeholder="选择 Excel / CSV 数据文件…" readonly>
+            <button class="btn" id="btnBrowseFile">浏览…</button>
+            <button class="btn" id="btnMakeTemplate">生成 Excel 模板</button>
+          </div>
+
+          <div class="row col hidden" id="scopeRow" style="align-items:flex-start;gap:6px">
+            <div class="row" style="gap:10px;width:100%">
+              <span style="color:var(--sub);width:64px;flex:none">延期范围</span>
+              <div class="segmented" id="scopeSegmented"></div>
+            </div>
+            <div style="color:var(--mu);font-size:11px;padding-left:74px" id="scopeHint"></div>
+          </div>
+
+          <div class="row">
+            <button class="btn btn-blue" style="margin-left:auto" id="btnLoadCheck">载入并检查</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---- 步骤2：核对 ---- -->
+      <section class="step-panel" data-panel="review">
+        <div class="card col" style="padding:16px;flex:1;min-height:0">
+          <div class="row" style="margin-bottom:12px">
+            <div class="sect"><span class="bar"></span><b id="reviewTitle">核对</b><span>双击看详情，标红的不会执行</span></div>
+          </div>
+          <div id="reviewBody" style="flex:1;min-height:0;display:flex;flex-direction:column">
+            <div class="empty-state">
+              <b>还没有数据</b>
+              <span>先在「准备」页选好数据文件，点「载入并检查」</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---- 步骤3：执行 ---- -->
+      <section class="step-panel" data-panel="execute">
+        <div class="card col" style="padding:16px 18px;gap:14px">
+          <div class="sect"><span class="bar"></span><b>运行</b><span>建议先空跑一遍确认无误</span></div>
+
+          <div class="row" style="gap:18px">
+            <div class="segmented" id="modeSegmented">
+              <div class="seg-item" data-mode="dry">空跑（只填不提交）</div>
+              <div class="seg-item active" data-mode="confirm">逐条确认</div>
+              <div class="seg-item" data-mode="auto">全自动</div>
+            </div>
+            <label class="row" style="gap:6px;color:var(--sub);cursor:pointer">
+              <input type="checkbox" id="skipDoneCheck" checked style="accent-color:var(--pink)">
+              跳过已成功的
+            </label>
+            <span class="row" style="margin-left:auto;gap:8px">
+              <button class="btn" id="btnPause" disabled>暂停</button>
+              <button class="btn" id="btnStop" disabled>停止</button>
+              <button class="btn btn-primary" id="btnStart">开始配置</button>
+            </span>
+          </div>
+
+          <div class="row" style="gap:12px">
+            <span class="pbar"><i id="runProgressBar"></i></span>
+            <span style="color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap" id="runStat">未开始</span>
+          </div>
+
+          <div class="col hidden" id="failedSection" style="gap:8px">
+            <div class="row" style="gap:8px">
+              <span style="color:var(--bad);font-weight:700" id="failedCount"></span>
+              <button class="btn btn-sm" style="margin-left:auto" id="btnRetryAll">全部重跑</button>
+            </div>
+            <div id="failedList" style="max-height:200px;overflow-y:auto;border:1px solid var(--bd);border-radius:8px"></div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- ---- 资源位投放的第二块：策略中心 ---- -->
+      <section class="step-panel" data-panel="strategy">
+        <div class="card col" style="flex:1;min-height:0;overflow:hidden">
+          <div class="strategy-head">
+            <div class="col" style="gap:2px">
+              <div class="strategy-title">策略中心</div>
+              <div style="color:var(--mu);font-size:11px" id="strategyPath"></div>
+            </div>
+            <span class="row" style="gap:8px;margin-left:auto">
+              <select class="field" id="strategyPickSelect" style="width:180px;flex:none"></select>
+              <button class="btn btn-sm" id="btnStrategyNew">新建一套</button>
+              <button class="btn btn-sm" id="btnStrategyRename">重命名</button>
+              <button class="btn btn-sm" id="btnStrategyDelete">删除</button>
+            </span>
+          </div>
+
+          <div class="strategy-body">
+            <div class="col" id="strategyCards" style="gap:8px"></div>
+          </div>
+
+          <div class="strategy-foot">
+            <label class="row" style="gap:6px;cursor:pointer;color:var(--sub);font-size:11px">
+              <input type="checkbox" id="strategyScopeCheck" checked style="accent-color:var(--pink)">
+              只看本次要投的资源位用得上的字段
+            </label>
+            <span style="color:var(--mu);font-size:11px" id="strategyFootHint"></span>
+            <span class="row" style="gap:8px;margin-left:auto">
+              <button class="btn" id="btnStrategyReset">撤销改动</button>
+              <button class="btn btn-primary" id="btnStrategySave">保存策略</button>
+            </span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ============ 底部：日志抽屉 + 操作条 ============ -->
+    <div class="log-drawer" id="logDrawer">
+      <div class="log-head" id="logHead">
+        <span style="color:var(--sub)">运行日志</span>
+        <span class="pill" id="logCountPill">0</span>
+        <span class="pill bad hidden" id="logErrorPill">0 报错</span>
+        <span class="toggle-hint" id="logToggleHint">展开 ⌄</span>
+      </div>
+      <div class="log-body">
+        <div class="log-console" id="logConsole"></div>
+      </div>
+    </div>
+
+    <div class="footer-bar">
+      <div class="actions">
+        <button class="btn" id="btnPrevStep">上一步</button>
+        <span class="hint" id="footerHint">配置类型不再藏在下拉框里，左侧常驻切换</span>
+        <button class="btn btn-primary" style="margin-left:auto;padding:0 22px" id="btnNextStep">下一步 · 核对</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ============ 通用弹窗：核对确认 / 失败继续 / 完成通知 / 资源位选择，内容由 app.js 按场景填 ============ -->
+<div class="modal-overlay hidden" id="modalOverlay">
+  <div class="modal-card">
+    <div class="modal-accent"></div>
+    <div class="modal-body">
+      <div class="modal-title" id="modalTitle"></div>
+      <div class="modal-desc" id="modalDesc"></div>
+      <div class="modal-extra hidden" id="modalExtra" style="max-height:320px;overflow-y:auto;border:1px solid var(--bd);border-radius:8px;margin-bottom:14px"></div>
+      <div class="modal-actions" id="modalActions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 详情弹窗：双击核对表格里的一行 ============ -->
+<div class="modal-overlay hidden" id="detailModal">
+  <div class="modal-card" style="width:560px">
+    <div class="modal-accent"></div>
+    <div class="modal-body">
+      <div class="modal-title" id="detailTitle"></div>
+      <div class="modal-desc" id="detailIssues" style="color:var(--bad)"></div>
+      <div style="max-height:360px;overflow-y:auto;font-size:12px;line-height:1.8" id="detailBody"></div>
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="btn" id="btnDetailClose">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

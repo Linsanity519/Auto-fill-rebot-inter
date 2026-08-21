@@ -1,0 +1,261 @@
+# ============================================================
+# 商业广告投放系统 · 原生商广（计划 → 单元 → 创意，「三连」一页建完）
+# 结构抓取：2026-08-18  ad.bilibili.co  账户「大会员中心-营销活动推广」ID 4094
+# ============================================================
+# ⚠ 这套页面和「资源位投放」完全不是一个系统，别拿 wizard 那套往上套：
+#   · UI 框架是 iView（class 前缀 ivu-），不是 antd，也不是 Formily
+#   · 计划/单元/创意在同一页，只有一个「保存」按钮，没有分步跳转
+#   · 大部分选项不是 <input type=radio>，是 <div class="radio-item">，靠 active 类判选中
+#
+# ⚠ 两个入口 URL，作用不一样（都在 promote/auto 这一个页面组件上）：
+#     ?type=1            → 新建计划 + 单元 + 创意（页面顶部有「计划信息」整块）
+#     ?campaign_id=<id>  → 挂到已有计划下新建单元 + 创意（计划信息变成一行只读的「所属计划」）
+#   所以本机器人是「第一趟建计划，后面每个单元走 campaign_id」，
+#   否则 N 个内容就会建出 N 个同名计划（页面没有「选已有计划」的下拉）。
+#
+# ⚠ ?campaign_id= 那个页面的单元字段是空的（定向不限、转化目标未选），
+#   不会继承计划或上一个单元的设置 —— 下面 unit 段里每一项都得老老实实填一遍。
+
+name: 原生商广
+description: 商广投放系统 - 一个内容一个单元，每单元最多 10 条创意
+
+# 侧栏归类：group 是主 Tab，label 是它下面这一项的名字。
+# ⚠ 只有 label 是给人看的；name（也就是文件名）才是身份，断点、模板、
+#   config/prep 下的存盘都认它，改 label 不会动到这些。
+nav:
+  group: 商业化广告
+  group_order: 5
+  label: 原生商广
+  order: 1
+mode: ad_native
+
+form_url: 'https://ad.bilibili.co/#/promote/auto?type=1'
+
+urls:
+  # 建计划（顺带把第一个单元和它的创意一起建了）
+  new_plan: 'https://ad.bilibili.co/#/promote/auto?type=1'
+  # 往已有计划下挂单元
+  under_plan: 'https://ad.bilibili.co/#/promote/auto?campaign_id={campaign_id}'
+  # 建完计划后回这里按计划名把计划ID捞回来（页面保存后跳哪一页不稳定，不从 URL 猜）
+  campaign_list: 'https://ad.bilibili.co/#/promote/campaign'
+  # 单元列表，跑完给用户看结果用
+  unit_list: 'https://ad.bilibili.co/#/promote/campaign/unit'
+
+# 页面加载完成的标志：单元名称输入框出现
+ready_selector: 'input[placeholder="请输入单元名称"]'
+submit_button: '保存'
+# 新建页的 URL 特征。保存成功后页面会跳到单元详情页（URL 里就没有它了），
+# runner 靠「URL 里还有没有这一段」判断保存到底成没成、跳转落没落地。
+create_url_marker: 'promote/auto'
+
+# ============================================================
+# 准备阶段字段（界面上填一次，本批所有单元共用；不进 Excel）
+# ============================================================
+# ⚠ 这几项是「一次投放里从头到尾不变」的，逐行填进 Excel 属于重复劳动；
+#   而且出价/人群这种要临时改的东西放界面上比翻表格快。
+#   顺序 = 界面上的顺序，加字段就往这里加一行，webapp/app.js 会自动渲染。
+prep_fields:
+  - name: 计划名称
+    type: text
+    required: true
+    ph: '如【26年8月】原生内容素材-整合版'
+    note: '本批新建的计划名。已经建好了想复用，填下面的「已有计划ID」'
+
+  - name: 已有计划ID
+    type: text
+    ph: '如 51445292，留空 = 本次新建计划'
+    note: '填了就不建新计划，所有单元直接挂到这个计划下（计划名称那栏就不生效了）'
+
+  - name: 转化目标
+    type: select
+    required: true
+    default: 表单提交
+    # ⚠ 「推广目的=销售线索收集 + 推广内容=OGV推广」这个组合下，
+    #   后台只放出「表单提交」一个选项。换了推广目的这里要重新抓。
+    options: ['表单提交']
+
+  - name: 出价
+    type: number
+    required: true
+    default: '200'
+    unit: 元/转化
+    note: '页面会提示「同类广告出价在 110-151.8 之间」，超了只是提示，不拦提交'
+
+  - name: 投放时间
+    type: segmented
+    required: true
+    default: 设置起止时间
+    options: ['长期投放', '设置起止时间']
+    note: '长期投放 = 只有开始日期、不设结束；选设置起止时间才需要填下面那栏'
+
+  - name: 投放起止时间
+    type: text
+    when: [投放时间, 设置起止时间]
+    default: '{今天} - 2026-12-31'
+    ph: '如 2026-08-18 - 2026-12-31'
+    note: '写成「开始 - 结束」；{今天} 会替换成跑的当天'
+
+  - name: 指定人群
+    type: text
+    ph: '人群包名称，留空 = 不指定'
+    note: '填页面「人群包」列表里的名字，支持只填一段（如「极度敏感」）'
+
+  - name: 排除人群
+    type: text
+    default: '【大会员】极度敏感用户'
+    ph: '人群包名称，留空 = 不排除'
+    note: '默认排除「【大会员】极度敏感用户」，和当前页面上的设置一致'
+
+# ============================================================
+# 单元/创意的成组规则
+# ============================================================
+grouping:
+  # Excel 里按这一列聚类：同一个「内容」= 同一个单元
+  key_column: 内容
+  # 一个单元最多挂几条创意 —— 页面上「已选 n/10」写死 10
+  max_creatives: 10
+  # 单元名称模板。{内容}=聚类键，{日期}=跑的当天 YYYYMMDD，{序号}=同一内容拆出的第几个单元
+  name_template: '【{内容}】_{日期}'
+  # 一个内容超过 10 条创意、要拆成多个单元时改用这个模板，序号从 0 顺延：_0、_1、_2…
+  # ⚠ 只出一个单元时不加后缀，仍然走上面的 name_template
+  overflow_template: '【{内容}】_{日期}_{序号}'
+
+# ============================================================
+# 计划层（只有走 ?type=1 新建计划时才填）
+# ============================================================
+plan_fields:
+  - {name: 推广目的, label: 推广目的, type: card_radio, value: 销售线索收集}
+  - {name: 广告类型, label: 广告类型, type: card_radio, value: 所有广告}
+  - {name: 是否唤起外部应用, label: 是否唤起外部应用, type: card_radio, value: 无需唤起}
+  # 值来自准备阶段的「计划名称」
+  - {name: 计划名称, ph: 请输入计划名称, type: fill_ph, from_prep: 计划名称, required: true}
+  - {name: 计划预算, label: 计划预算, type: card_radio, value: 不限预算}
+
+# ============================================================
+# 单元层
+# ============================================================
+unit_fields:
+  - {name: 单元名称, ph: 请输入单元名称, type: fill_ph, required: true}
+  - {name: 推广内容, label: 推广内容, type: card_radio, value: OGV推广}
+
+  # ---- 定向 ----
+  # ⚠ 只动「人群包」这一项，其余（年龄/性别/地域/设备…）保持页面默认的「不限」。
+  #   定向面板不是弹窗，是页面里一块折叠区，DOM 一直在，点「编辑定向」只是展开它。
+  - name: 定向人群包
+    type: audience
+    open_button: 编辑定向
+    confirm_button: 确认
+    include_option: 指定人群包
+    exclude_option: 排除人群包
+    unlimited_option: 不限
+    from_prep: {include: 指定人群, exclude: 排除人群}
+
+  - {name: 关联产品, label: 关联产品, type: card_radio, value: 不启用}
+
+  # ---- 投放日期 ----
+  # 长期投放 / 设置起止时间 由准备阶段决定；选了后者才有那个日期区间框
+  - {name: 投放日期方式, label: 投放日期, type: card_radio, from_prep: 投放时间, required: true}
+  - name: 投放日期
+    ph: 选择开始结束日期
+    type: date_range
+    when: [投放时间, 设置起止时间]
+    from_prep: 投放起止时间
+    required: true
+
+  # 投放时段：页面默认周一~周日 0-23 点全天，不用动
+
+  - {name: 竞价策略, type: card_by_text, value: 稳定成本投放}
+  - {name: 付费方式, label: 付费方式, type: card_radio, value: oCPM}
+
+  - {name: 转化目标, label: 转化目标及出价, type: select_ivu, from_prep: 转化目标, required: true}
+  - {name: 出价, ph: 请输入出价(元), type: fill_ph, from_prep: 出价, required: true}
+
+  - {name: 单元预算, label: 单元预算, type: radio_ivu, value: 不限预算}
+
+  # ---- 监测链接 ----
+  # ⚠ 三个框的 placeholder 一模一样（都是「请输入https链接开头的URL」），
+  #   只能按出现顺序取：0=展示监控 1=点击和播放3秒监控 2=评论点击监控（不填）
+  - {name: 监测链接方式, label: 监测链接, type: card_radio, value: 自定义}
+  - name: 展示监控
+    ph: 请输入https链接开头的URL
+    ph_index: 0
+    type: fill_ph
+    default: 'https://api.bilibili.com/x/vas_ads_open/ads/callback?type=show&track_id=__TRACKID__&account_id=__ACCOUNTID__&mid=__UID__&campaign_id=__CAMPAIGNID__&unit_id=__UNITID__&creative_id=__CREATIVEID__&os=__OS__&model=__MODEL__&ts=__TS__'
+  - name: 点击监控
+    ph: 请输入https链接开头的URL
+    ph_index: 1
+    type: fill_ph
+    default: 'https://api.bilibili.com/x/vas_ads_open/ads/callback?type=click&track_id=__TRACKID__&account_id=__ACCOUNTID__&mid=__UID__&campaign_id=__CAMPAIGNID__&unit_id=__UNITID__&creative_id=__CREATIVEID__&os=__OS__&model=__MODEL__&ts=__TS__'
+
+  - {name: 广告投放位置, label: 广告投放位置, type: card_radio, value: 全部}
+
+# ============================================================
+# 创意层
+# ============================================================
+creative:
+  # 「添加稿件/视频」抽屉：一次把这个单元的 10 个 avid 全搜出来勾上，再点确定
+  # ⚠ 必须先把「推广内容」选成 OGV推广，抽屉里才搜得到 OGV 稿件 ——
+  #   所以 unit_fields 里推广内容排在第 2 项，创意层永远在单元层之后填。
+  picker:
+    open_button: 添加稿件/视频
+    # ⚠ 点卡片本身不算选中（实测勾不上），要点卡片右下角那个 checkbox
+    check_selector: '.video-checkbox label'
+    search_ph: 请输入稿件bvid或avid搜索
+    item_selector: '.video-drawer .video-select-item'
+    confirm_button: 确定
+    cancel_button: 取消
+    # 已选计数文案，用来核对「勾上的数量对不对」
+    count_text: 已选
+
+  # ⚠ 每条创意一个 .single-creative-wrapper，它的 data-id 形如
+  #     c_0_117102400767101_0.3778689
+  #   中间那段就是 avid。靠它把 Excel 行和页面上的创意块对上，
+  #   比按顺序取第 n 个稳 —— 抽屉返回的顺序不一定等于我们勾选的顺序。
+  # ⚠ 同一个 avid 可以有多个块（一行一个创意），所以还要按「第几次出现」再取一次：
+  #   匹配该 avid 的第 _seq 个块。先加进来的排在前面，这个前提由 ad_data.add_passes 保证。
+  block_selector: '.single-creative-wrapper'
+  block_avid_attr: 'data-id'
+  # ⚠ 页面一次只渲染一条创意的表单，其余的是 display:none。
+  #   左边那一列「创意1 / 创意2 …」卡片是切换器，要先点它才填得了对应那条。
+  switch_selector: '.every-card .material-card'
+
+  fields:
+    # ⚠ 标题和描述的 placeholder 都以「请输入2」开头，只能各取一段独有的文字来认，
+    #   否则一个选择器会同时命中两个框
+    - {name: 素材标题, ph: 移动场景建议18字以内, type: fill_ph_in_block, required: true, max: 40,
+       _note: '2~40 字，移动场景建议 18 字以内。一行一个标题，不和别的行合并'}
+    - {name: 素材描述, ph: 即客户端广告卡片中UP主名称位置, type: fill_ph_in_block, required: true,
+       max: 10, _note: '2~10 字，一般就填剧集名'}
+    # ⚠ 是「替换封面」不是「添加封面」：hover 原始封面卡会冒出一个 ↻ 按钮
+    #   （.action-area，tooltip 写着「替换封面」），点开是「图片素材」抽屉，
+    #   传完点确认，封面就被换掉，卡片数还是 1/6。
+    #   走「添加封面」那个内联上传口会变成 2/6，原始封面还留着，不是要的效果。
+    # ⚠ max_bytes：后台硬限制，抽屉里自己写着「不大于700kb」。超了先压再传，
+    #   压缩只降编码质量、不动尺寸（见 src/ad_image.py）。
+    - name: 封面
+      type: replace_cover
+      max_bytes: 700000
+      card_selector: '.prog-archive-materials > li .material-card'
+      replace_button: '.action-area'
+      picked_text: 已选
+      confirm_button: 确认
+      _note: '选填。留空 = 用稿件原始封面；填本地图片路径或直接把图片贴进单元格。超过 700KB 会自动压缩（尺寸不变）'
+
+  # 高能起播、补充资质：按需求不填，这里不列字段，页面保持默认
+
+# ============================================================
+# Excel 模板列
+# ============================================================
+# 一行 = 一条创意。「内容」相同的连续行会被聚成同一个单元。
+columns:
+  - {name: 内容, required: true, _note: '聚类键：同一个内容 = 同一个单元，也是单元名称里的【XX内容】'}
+  - {name: avid, required: true, _note: '稿件 avid，抽屉里直接搜这个数字。同一个 avid 可以写多行 —— 每行都是一条独立创意，各配各的封面和标题'}
+  - {name: 素材标题, required: true, _note: '2~40 字'}
+  # ⚠ fallback: 留空就自动取「内容」列的值。
+  #   这两列绝大多数时候是同一个剧集名，本来该合成一列；不合的原因是约束不一样 ——
+  #   「内容」要拼进单元名，长度不限；「素材描述」是页面字段，硬上限 10 字。
+  #   合成一列的话，剧集名超 10 字时单元名也得跟着被砍短。
+  #   所以常态只填「内容」，只有剧集名超 10 字才需要在这里补一个短的。
+  - {name: 素材描述, fallback: 内容,
+     _note: '2~10 字。留空 = 自动用「内容」列的值；只有剧集名超过 10 字时才需要在这里填个短的'}
+  - {name: 封面, _note: '选填。本地图片路径，或直接把图片贴进单元格。超过 700KB 会自动压到 700KB 以内再传（只降画质，尺寸不变）；留空 = 保留稿件原始封面'}

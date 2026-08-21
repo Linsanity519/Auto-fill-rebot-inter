@@ -1,0 +1,7 @@
+# ⚠ .bat 必须是 CRLF。cmd.exe 的 ^ 续行在纯 LF 下会失效——
+#   build.bat 里那条多行 pyinstaller 命令会被拆成一堆碎片逐条执行，
+#   报一串「'wed' 不是内部或外部命令」，而且中间的 rd /s /q 也跟着乱掉。
+#   其余文件不在这里声明：仓库依赖 core.autocrlf 的既有行为，
+#   一刀切写 `* -text` 会关掉转换，把整个仓库判定成"全部已修改"。
+*.bat text eol=crlf
+*.cmd text eol=crlf

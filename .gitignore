@@ -1,0 +1,22 @@
+# 登录凭据 —— 绝对不能分发或提交
+.chrome-profile/
+
+# 运行产物
+output/
+build/
+dist/
+build.prepackage-*/
+dist.prepackage-*/
+*.spec
+
+# 数据（可能含业务敏感信息）
+data/
+*.xlsx
+*.xlsm
+*.csv
+
+__pycache__/
+*.pyc
+
+# 企微文档机器人的 apikey —— 全权限，绝不能进仓库或分发包
+tools/.mcp_key

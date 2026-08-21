@@ -1,0 +1,110 @@
+name: AB实验延期
+description: AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期
+
+# 侧栏归类：group 是主 Tab，label 是它下面这一项的名字。
+# ⚠ 只有 label 是给人看的；name（也就是文件名）才是身份，断点、模板、
+#   config/prep 下的存盘都认它，改 label 不会动到这些。
+nav:
+  group: AB实验
+  group_order: 2
+  label: AB实验延期
+  order: 1
+mode: ab_extension
+
+# 默认范围（界面上的「延期范围」会覆盖它）：
+#   mine     「我的实验」里所有「实验中」的 → 平台允许的最晚日期
+#   id_list  Excel 清单里点名的实验ID → 清单里写的日期（留空/超上限则取最晚）
+# ⚠ 没有 active（全部实验中）：全站几千条实验，全扫既慢又会动到别人的实验。
+scope: mine
+
+# 清单模式用顶部搜索框按实验ID精确定位，比翻几十页快得多
+search_input_selectors:
+  - "input[placeholder*='实验ID']"
+  - "input[placeholder*='搜索实验']"
+search_wait: 2500
+
+form_url: 'http://abtest.bilibili.co/#/abtest/list?space=abtest'
+# 表格渲染出来就算可用；即使没有实验中的实验，也要能完成预检并显示 0 条。
+ready_selector: '.el-table'
+after_open_wait: 1500
+
+# 「我的实验」是个筛选按钮（div.my-test），不是页签，点一次把 7800+ 条收敛到几百条。
+# 它不写进 URL，所以每次重新打开列表都要重新点一次；重复点是幂等的，不会取消筛选。
+my_experiment_selectors:
+  - '.my-test'
+my_experiment_text: '我的实验'
+after_filter_wait: 2000
+
+# 列表定位。页面改版时优先在这里调整，不需要修改执行器。
+table_selector: '.el-table'
+row_selector: 'tbody tr'
+name_column: 0          # 「实验名称」，单元格里还带一行 ID:12345
+status_column: 1        # 「状态」，精确匹配，避免实验名里带「实验中」被误选
+end_date_column: 3      # 「开始/结束时间」，两行：开始 / 结束
+active_status: '实验中'
+# 实验 ID 是稳定断点键，比行号和名称都可靠（名称可以改，ID 不会）
+id_pattern: 'ID[:：]\s*(\d+)'
+
+# 翻页：列表有多页时会逐页扫描、逐页处理。
+# 列表按状态分组排序，「实验中」全排在最前面，所以扫到第一个非「实验中」就收工，
+# 不用把 18 页全翻一遍。
+next_page_selectors:
+  - '.el-pagination .btn-next'
+page_wait: 1200
+max_scan_pages: 40      # 兜底上限，防止分页控件异常时空转
+
+# 操作列：「其他」是个 el-dropdown，续期藏在它的菜单里。
+more_menu_selectors:
+  - '.el-dropdown span[role=button]'
+more_menu_text: '其他'
+extension_menu_item: '续期'
+menu_item_selector: '.el-dropdown-menu__item'
+# 下拉菜单有进场动画，点完要轮询等菜单项出来，不能点完立刻找
+menu_wait: 3000
+after_menu_wait: 1200
+
+# 续期弹窗：标题「实验续期」，只有一个「实验到期日期」输入框，底部是 取消 / 续期。
+dialog_selector: '.el-dialog'
+dialog_title: '实验续期'
+dialog_wait: 4000
+dialog_close_wait: 3000
+date_input_selectors:
+  - "input[placeholder*='日期']"
+  - 'input'
+
+# 日期面板：可选日期有上限（平台限制实验最长时长）。
+# 判据是「本月最后一天是否还可选」：最后一天已变灰 = 上限就在本月，直接取本月最晚
+# 的那天，不再往后翻；只有整月都可选时才需要翻到下个月继续找。
+# ⚠ 不能用「本月有没有灰格子」来判断：当月今天之前的日期本来就是灰的。
+date_available_selector: '.el-date-table td.available:not(.disabled):not(.prev-month):not(.next-month)'
+month_cells_selector: '.el-date-table td:not(.prev-month):not(.next-month)'
+next_month_selectors:
+  - '.el-picker-panel__icon-btn.arrow-right'
+prev_month_selectors:
+  - '.el-picker-panel__icon-btn.arrow-left'
+month_label_selector: '.el-date-picker__header-label'
+max_month_lookahead: 12
+# 面板刚挂载/刚翻月有渲染空窗期，这时会读到 0 个可选日期。读到空要重试几轮再
+# 下结论，否则「还没渲染完」会被误判成「这个实验不能续期」。
+panel_ready_selector: '.el-date-table'
+panel_wait: 900
+empty_read_retries: 3
+empty_read_wait: 350
+# 连续 2 个月都没有可选日期才认为到头了，给偶发空读留一层余量
+stop_after_empty_months: 2
+month_wait: 500
+
+# 提交：点弹窗上的「续期」后，平台还会在按钮边上弹一个「确定续期吗?」的小气泡
+# （el-popconfirm），必须再点它的「确定」才真正生效 —— 少这一步等于没提交。
+submit_texts: ['续期']
+popconfirm_ok_selectors:
+  - '.el-popconfirm__action .el-button--primary'
+popconfirm_wait: 3000
+after_confirm_wait: 800
+cancel_texts: ['取消']
+after_submit_wait: 1500
+success_selectors:
+  - '.el-message--success'
+error_selectors:
+  - '.el-message--error'
+  - '.el-form-item__error'

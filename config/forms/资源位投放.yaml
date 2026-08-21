@@ -1,0 +1,1019 @@
+# ============================================================
+# 大会员投放系统 · 资源位投放（活动 → 单元 → 创意 三步向导）
+# 结构抓取：2026-08-07  rich-vip.bilibili.co / manager.bilibili.co
+# ============================================================
+# ⚠ 与「价格配置」不同，这是 mode: wizard —— 三段整页表单 + 真实页面跳转，
+#   不是单个弹窗。成功判据是 URL 变化，不是弹窗消失。
+#
+# ⚠ 创意层有三套系统，DOM 不同：
+#     v1   manager.bilibili.co/.../originality/detail        （Vue，label 点选）
+#     v2   manager.bilibili.co/.../originality/detail-v2     （Vue，模板渲染）
+#     新版  rich-vip.bilibili.co/delivery/creativity          （React，class 前缀 mega-ant-）
+#   保存单元后由后台决定跳到哪套，profile 里按资源位标了 system。
+#
+# ⚠ 单元层是 Formily（.ant-formily-item），不是标准 antd Form（.ant-form-item）。
+#   基本信息区是标准 antd Form。两种都要能定位。
+
+name: 资源位投放
+description: 大会员投放系统 - 活动 / 单元 / 创意 三步配置
+
+# 侧栏归类：group 是主 Tab，label 是它下面这一项的名字。
+# ⚠ 只有 label 是给人看的；name（也就是文件名）才是身份，断点、模板、
+#   config/prep 下的存盘都认它，改 label 不会动到这些。
+nav:
+  group: 大会员资源位
+  group_order: 4
+  label: 常规资源位配置
+  order: 1
+mode: wizard
+
+# 选资源位时的可选清单由 positions 段推导，不用另外维护
+
+# ============================================================
+# 策略中心接管的字段
+# ============================================================
+# 这些字段一次投放里基本不变，逐个单元在 Excel 里填一遍纯属重复劳动，
+# 列还多到看不过来。列在这里的字段：
+#   · 生成模板时不出这一列
+#   · 跑之前由「策略中心」统一配置（config/strategies/<配置类型>.json）
+#   · 执行时由 wizard_strategy.resolve() 补回单元数据里，再交给 filler
+# 想让某个字段回到 Excel 里逐单元填，把它从这个清单里删掉即可，别的都不用动。
+#
+# ⚠ 只列单元层字段。活动层/创意层不参与策略中心。
+# 分组按页面自己的分段来，策略中心一组一张卡（折叠看值、展开改值）。
+# 清单里的顺序 = 界面上的顺序；加字段就往对应组里加一行。
+strategy_groups:
+  定向投放:
+    - 生效平台
+    - 运营商
+    - 省份
+  投放设置:
+    - 投放流量池
+    - 展示不超过          # 频次：每日展示上限
+    - 限频规则            # 频次逻辑（会员中心弹窗 / 我的大会员入口 才有）
+    - 曝光冷却时间        # 只有播放页半屏有，单位小时
+    - 帧数                # 只有会员中心banner有
+    - 优先级
+  算法策略:
+    - 创意赛马
+    - 优化目标            # 仅当「创意赛马」= 需要
+
+# ---- 方案组：人群 / 内容限制 ----
+# 这两组和上面的通用规则不一样：它们不是「一个字段一个值」，而是「一整套配好的组合」，
+# 一次投放里不同单元常常要用不同的组合（新客单元投新客人群、加更礼单元只投加更礼内容）。
+# 所以它们打包成「方案」，策略中心里两种用法二选一：
+#   全部用同一套      —— 整批单元共用一套方案
+#   按单元名称匹配    —— 「关键词 → 方案」表，单元名字里带哪个词就用哪套
+# ⚠ 2026-08-21 起去掉了第三种「Excel 里逐单元填」：这些字段列多到看不过来，
+#   逐行填纯属重复劳动。这两组的字段现在恒定不进模板。
+# key 是存盘用的英文键，改了会丢已配好的策略，别动。
+scheme_groups:
+  人群:
+    key: audience
+    exception_field: 人群方案       # 例外清单里用这个名字整组换一套
+    fields:
+      - 人群选组
+      - 人群类型
+      - 我想投放
+      - 在期大会员天数
+      - 过期大会员天数
+      - 人群ID
+      - 人群分组ID
+      - 人群包key
+      - 人群来源
+      - 排除人群选组
+      - 排除人群类型
+      - 我想排除
+      - 排除在期大会员天数
+      - 排除过期大会员天数
+      - 排除人群ID
+      - 排除人群包key
+    # 「出厂预设」。⚠ 只在用户第一次打开策略中心时灌一次，灌完就是用户自己的
+    #   方案库（可改名/改内容/删/新建），之后改这里不会覆盖已存的策略。
+    #   keywords 同理，只是「按单元名称匹配」那张表的初始几行。
+    presets:
+      - name: 新客
+        note: 从未开通过大会员
+        keywords: ['新客', '拉新']
+        values:
+          人群选组: 指定人群
+          人群类型: 基本人群（实时数据）
+          我想投放: 未登录,三新用户（mid&buvid&手机号）,大会员新用户（从未开通）
+          排除人群选组: 指定人群
+          排除人群类型: OGV DMP 人群包
+          排除人群ID: '27629'
+      - name: 过期
+        note: 已过期；页面上「过期大会员」必须再填天数区间，默认给 1-365，按需要改
+        keywords: ['过期', '流失']
+        values:
+          人群选组: 指定人群
+          人群类型: 基本人群（实时数据）
+          我想投放: 过期大会员
+          过期大会员天数: 1-365
+          排除人群选组: 指定人群
+          排除人群类型: OGV DMP 人群包
+          排除人群ID: '27629'
+      - name: 即期
+        note: 剩余天数 1-30 天（这个标签自带口径，不用再填区间）
+        keywords: ['即期', '到期']
+        values:
+          人群选组: 指定人群
+          人群类型: 基本人群（实时数据）
+          我想投放: 在期&即期1-30天大会员
+          排除人群选组: 指定人群
+          排除人群类型: OGV DMP 人群包
+          排除人群ID: '27629'
+      - name: 在期
+        note: 剩余天数 >30 天（自带口径；要「在期非即期」就用这套，已经排除了即期）
+        keywords: ['在期']
+        values:
+          人群选组: 指定人群
+          人群类型: 基本人群（实时数据）
+          我想投放: 在期&即期大于30天大会员
+          排除人群选组: 指定人群
+          排除人群类型: OGV DMP 人群包
+          排除人群ID: '27629'
+
+  内容限制:
+    key: content
+    exception_field: 内容限制方案
+    fields:
+      - 版本限制
+      - 生效内容
+      - 内容黑名单
+      - 内容类型
+      - ep付费状态
+      - 流量渠道
+    # ⚠ 已经配过策略的人不会用到这些预设：老策略里这几个字段躺在「通用规则」里，
+    #   升级后会被自动搬成一套叫「原有内容限制」的方案（见 wizard_strategy._migrate）。
+    presets:
+      - name: 常规
+        note: 不限版本、全部内容，大多数资源位就用这套
+        keywords: []
+        values:
+          版本限制: 不限
+          生效内容: 全部
+          内容黑名单: 不需要
+          内容类型: 会员专享内容,免费内容,原价付费内容,会员折扣内容
+          ep付费状态: 所有用户免费,会员免费,会员可抢先,付费观看,付费可抢先,会员专享
+          流量渠道: 全部渠道
+      - name: 加更礼
+        note: 只投加更礼内容；单元名字里带「加更礼」就用这套
+        keywords: ['加更礼']
+        values:
+          版本限制: 不限
+          生效内容: 全部
+          内容黑名单: 不需要
+          内容类型: 会员专享内容,免费内容,原价付费内容,会员折扣内容
+          ep付费状态: 加更礼
+          流量渠道: 全部渠道
+      - name: 超前点播
+        note: 只投超前点播/抢先看内容；单元名字里带「抢先」「超前」就用这套
+        keywords: ['抢先', '超前', '点映']
+        values:
+          版本限制: 不限
+          生效内容: 全部
+          内容黑名单: 不需要
+          内容类型: 会员专享内容,免费内容,原价付费内容,会员折扣内容
+          ep付费状态: 会员可抢先,付费可抢先,超大抢先看,结局点映
+          流量渠道: 全部渠道
+
+# ============================================================
+# 步骤定义
+# ============================================================
+steps:
+  # ---------------- 第一步：活动 ----------------
+  - key: activity
+    name: 活动
+    sheet: 活动
+    url: 'https://rich-vip.bilibili.co/manage/v/delivery-manage/delivery-list/delivery/edit-activity?type=edit&id=0'
+    # ⚠ 活动页也是 Formily，不是标准 antd Form —— 页面上 .ant-form-item 恒为 0
+    ready_selector: '.ant-formily-item'
+    next_button: '保存并下一步'
+    # ⚠ 活动保存后会跳到 /vip-delivery/vip/resource-delivery/unit/edit/0，
+    #   那个路由是把老系统嵌在 iframe 里的壳页面，元素全在 iframe 内、不好定位。
+    #   所以只用它确认「活动建成了」并从 URL 里取 activityId，
+    #   随后由 runner 显式跳到下面的直连单元页（无 iframe）。
+    done_when:
+      url_matches: '/unit/edit/|/delivery/unit/'
+    # 从跳转后的 URL 里取这些参数，拼直连单元页
+    carry_params: ['activityId', 'activityType']
+    unit_url_template: 'https://rich-vip.bilibili.co/delivery/unit/0?state=create&activityId={activityId}&activityName={activityName}&activityState=0&activityType={activityType}'
+    fields:
+      # ⚠ 页面上有 2 个 .ant-input（活动名称、关联物料），不能按 class 取，得按 label
+      - name: 活动名称
+        label: 活动名称
+        type: fill_by_label
+        required: true
+
+      - name: 活动类型
+        label: 活动类型
+        type: select_antd_by_label
+        required: true
+        options: ['站内收入活动', '外渠活动', '权益活动', '日常策略', '测试验收']
+        reveals:
+          站内收入活动:
+            - name: 子活动类型
+              label: 子活动类型
+              type: select_antd_by_label
+              required: true
+              options: ['站内-大促', '站内-日常活动', '站内-内容营销', '站内-其他']
+          外渠活动:
+            - name: 子活动类型
+              label: 子活动类型
+              type: select_antd_by_label
+              required: true
+              options: ['外渠-免费领', '外渠-运营商', '外渠-金融', '外渠-其他']
+          权益活动:
+            - name: 子活动类型
+              label: 子活动类型
+              type: select_antd_by_label
+              required: true
+              options: ['合作权益(线上)', '合作权益(线下)', '功能权益', '品牌营销', '生日礼', '其他']
+
+      - name: 活动开始时间
+        label: 活动开始时间
+        type: date_by_label
+        required: true
+
+      - name: 活动结束时间
+        label: 活动结束时间
+        type: date_by_label
+        required: true
+
+      - name: 活动目标GMV(万)
+        label: 活动目标GMV(万)
+        type: fill_by_label
+
+      - name: 活动app_id
+        label: 活动app_id
+        type: fill_by_label
+
+      - name: 活动app_sub_id
+        label: 活动app_sub_id
+        type: fill_by_label
+
+      - name: 关联定价策略
+        label: 关联定价策略
+        type: radio_by_label
+        options: ['不限', '所有策略', '指定策略', '不关联策略']
+
+      - name: 关联物料
+        label: 关联物料
+        type: fill_by_label
+
+  # ---------------- 第二步：单元 ----------------
+  - key: unit
+    name: 单元
+    sheet: 单元
+    ready_selector: '.ant-tabs-tab-btn'
+    next_button: '保存并下一步'
+    # 保存后跳创意页，三套系统 URL 都算成功
+    done_when:
+      url_matches: '(/delivery/creativity|/originality/detail)'
+    # 切换资源位会重置已填字段，必须再填一遍
+    refill_passes: 2
+    # 选资源位：先点「全部」tab，再点资源位所在行
+    position_picker:
+      all_tab: '全部'
+      row_container: '.ant-table-tbody tr'
+    fields: []          # 单元层字段 = unit_common + 各资源位的 unit_extra
+
+  # ---------------- 第三步：创意 ----------------
+  - key: creative
+    name: 创意
+    sheet: 创意
+    next_button: null       # 创意层是「保存创意」/「保 存」，按系统不同，见 creative_submit
+    creative_submit:
+      v1: '保存创意'
+      v2: '保存创意'
+      新版: '保 存'
+    fields: []          # 创意层字段 = 各资源位的 creative
+
+# ============================================================
+# 单元层公共字段（所有资源位都有；各资源位再叠加 unit_extra）
+# ============================================================
+unit_common:
+  - name: 单元名称
+    selector: 'input.ant-input'
+    type: fill
+    required: true
+
+  # ---- 定向投放 ----
+  # ---- 定向投放 · 人群 ----
+  # ⚠ 改这一段之前先看 docs/资源位投放-人群配置抓取.md：
+  #   层级、label 文字、27 个人群选项、哪些标签要填天数区间，都是 2026-08-18
+  #   在页面上实地抓的。之前按运营的「常用人群表」猜过一版，全错。
+  # ⚠ 一级和二级 label 同名，都叫「人群选组」；label_index: -1 = 取最后一个。
+  #   filler 按 yaml 顺序填，填到这里时排除侧还没展开，最后一个就是投放侧的二级。
+  - name: 人群选组
+    label: 人群选组
+    type: radio_by_label
+    required: true
+    options: ['不限', '指定人群']
+    reveals:
+      指定人群:
+        - name: 人群类型
+          label: 人群选组
+          label_index: -1
+          type: select_antd_by_label
+          required: true
+          options: ['基本人群（实时数据）', '指定人群包（离线数据）',
+                    '特殊人群包（当前人群特征无法满足的人群包）', 'OGV DMP 人群包', '外部人群']
+          reveals:
+            '基本人群（实时数据）':
+              - name: 我想投放
+                label: 我想投放
+                # 同名 label 命中「外层容器 + 它自己」，-1 取最后一个 = 最里面那个。
+                # ⚠ 用 -1 不用 1：加了第 2 组人群之后，第 1 组的下标还在前面，
+                #   而我们总是「填完一组再加下一组」，最后一个永远是刚加出来的那组。
+                label_index: -1
+                type: multiselect_antd
+                required: true
+                options: ['未登录', '三新用户（mid&buvid&手机号）', '大会员新用户（从未开通）',
+                  '大会员支付新用户（从未支付）', 'ogv新用户', '在期大会员', '过期大会员',
+                  '年度大会员', '在期&即期1-3天大会员', '在期&即期1-7天大会员',
+                  '在期&即期1-30天大会员', '过期1-3天大会员', '过期1-7天大会员',
+                  '过期1-30天大会员', '敏感人群', '未登录+大会员新用户(从未开通)',
+                  '在期&即期大于30天大会员', '在期超级大会员', '过期超级大会员', '签约大会员',
+                  '签约超级大会员', '年度大会员&最近开通时间>=93天',
+                  'LV1', 'LV2', 'LV3', 'LV4', 'LV5']
+                # 笼统的标签要再填天数区间，页面上那两个数字框是必填的
+                reveal_match: contains
+                reveals:
+                  '在期大会员':
+                    - {name: 在期大会员天数, label: 在期大会员即期, type: number_range_by_label,
+                       required: true, _note: '填「小-大」，例 1-30；页面上是「即期 n 天至 m 天」'}
+                  '过期大会员':
+                    - {name: 过期大会员天数, label: 过期大会员过期, type: number_range_by_label,
+                       required: true, _note: '填「小-大」，例 1-30；页面上是「过期 n 天至 m 天」'}
+            'OGV DMP 人群包':
+              - name: 人群ID
+                label: 人群名称
+                type: select_antd_by_label
+                required: true
+                search: true
+                match: contains     # 填 35697，页面显示「【暑促短信】8月1日2」
+                ph: 请输入人群ID
+            '指定人群包（离线数据）':
+              - {name: 人群分组ID, label: 人群分组ID, type: multiselect_antd, required: true,
+                 _note: '多个用英文逗号分隔；选项是后台动态拉的，填页面上有的那几个'}
+            '特殊人群包（当前人群特征无法满足的人群包）':
+              - {name: 人群包key, label: 人群包key, type: fill_by_label, required: true,
+                 _note: '多个用英文逗号分隔'}
+            '外部人群':
+              - {name: 人群来源, label: 人群来源, type: select_antd_by_label, required: true,
+                 options: ['移动-全球通-SDK', '江苏电信']}
+
+  # ---- 定向投放 · 排除人群（和上面同构，三级 label 不一样，二级少两个选项）----
+  - name: 排除人群选组
+    label: 排除人群选组
+    type: radio_by_label
+    options: ['不限', '指定人群']
+    reveals:
+      指定人群:
+        - name: 排除人群类型
+          label: 人群选组
+          label_index: -1
+          type: select_antd_by_label
+          required: true
+          options: ['基本人群（实时数据）', '特殊人群包（当前人群特征无法满足的人群包）',
+                    'OGV DMP 人群包']
+          reveals:
+            '基本人群（实时数据）':
+              - name: 我想排除
+                label: 在上述投放中我想排除
+                label_index: -1
+                type: multiselect_antd
+                required: true
+                options: ['未登录', '三新用户（mid&buvid&手机号）', '大会员新用户（从未开通）',
+                  '大会员支付新用户（从未支付）', 'ogv新用户', '在期大会员', '过期大会员',
+                  '年度大会员', '在期&即期1-3天大会员', '在期&即期1-7天大会员',
+                  '在期&即期1-30天大会员', '过期1-3天大会员', '过期1-7天大会员',
+                  '过期1-30天大会员', '敏感人群', '未登录+大会员新用户(从未开通)',
+                  '在期&即期大于30天大会员', '在期超级大会员', '过期超级大会员', '签约大会员',
+                  '签约超级大会员', '年度大会员&最近开通时间>=93天',
+                  'LV1', 'LV2', 'LV3', 'LV4', 'LV5']
+                reveal_match: contains
+                reveals:
+                  '在期大会员':
+                    - {name: 排除在期大会员天数, label: 在期大会员即期, label_index: -1,
+                       type: number_range_by_label, required: true, _note: '填「小-大」，例 1-30'}
+                  '过期大会员':
+                    - {name: 排除过期大会员天数, label: 过期大会员过期, label_index: -1,
+                       type: number_range_by_label, required: true, _note: '填「小-大」，例 1-30'}
+            'OGV DMP 人群包':
+              - {name: 排除人群ID, label: 人群名称, label_index: -1, type: select_antd_by_label,
+                 required: true, search: true, match: contains, ph: 请输入人群ID}
+            '特殊人群包（当前人群特征无法满足的人群包）':
+              - {name: 排除人群包key, label: 人群包key, label_index: -1, type: fill_by_label,
+                 required: true, _note: '多个用英文逗号分隔'}
+
+  - name: AB实验
+    label: AB实验
+    type: radio_by_label
+    options: ['无', '有', '否', '是']
+
+  - name: 生效平台
+    label: 生效平台
+    type: checkbox_sync_formily
+    required: true
+    # ⚠ 这是全集。各资源位实际可选的是子集，配了页面上没有的值会在填写时报错，
+    #   遇到就在策略中心给那个资源位单独覆盖一份。
+    options: ['Android', 'iPhone', 'ipad', 'PC', 'iPad HD', 'Android HD',
+              '鸿蒙phone', '鸿蒙pc', '鸿蒙tablet', 'Android繁体包', 'iPhone繁体包',
+              'Android繁体包(会员价格活动禁止勾选)', 'iPhone繁体包(会员价格活动禁止勾选)',
+              'public']
+
+  - name: 运营商
+    label: 运营商
+    type: checkbox_sync_formily
+    options: ['中国移动', '中国电信', '中国联通']
+
+  - name: 省份
+    label: 省份
+    type: radio_by_label
+    options: ['不限', '投放指定省份', '排除指定省份']
+
+  # ---- 投放设置 ----
+  - name: 投放流量池
+    label: 投放流量池
+    type: radio_by_label
+    required: true
+    options: ['日常池', '特殊最优池(慎重使用，该池无法进单元赛马)']
+
+  - name: 投放开始时间
+    label: 投放时间
+    type: date_range_start
+    required: true
+
+  - name: 投放结束时间
+    label: 投放时间
+    type: date_range_end
+    required: true
+
+  - name: 展示不超过
+    label: 展示不超过
+    type: fill_by_label
+
+  - name: 优先级
+    label: 优先级
+    type: fill_by_label
+
+  # ---- 算法策略 ----
+  - name: 创意赛马
+    label: 创意赛马
+    type: radio_by_label
+    required: true
+    options: ['不需要', '需要']
+    reveals:
+      需要:
+        - name: 优化目标
+          label: 优化目标
+          type: radio_by_label
+          required: true
+          options: ['CTR', 'CTCVR', 'GMV']
+
+# ---- 常用增量片段（下面各资源位用 <<: 引用）----
+_frag:
+  版本限制: &f_version
+    name: 版本限制
+    label: 版本限制
+    type: select_antd_by_label
+    required: true
+    ph: 请选择版本限制
+    options: ['不限', '支持纯签约（Android8.34及以上）', '播放页支持加更礼投放（安卓粉8.44)',
+              '播放页支持加更礼投放（ios粉8.44)', '播放页支持超前点播（安卓8.50）',
+              '播放页支持超前点播（ios8.50)', '超级大会员抢先看（ios 8.54）',
+              '超级大会员抢先看（安卓 8.54）', '鸿蒙8.28（鸿蒙iphone）', '鸿蒙8.28（鸿蒙tablet）']
+
+  生效内容: &f_content
+    name: 生效内容
+    label: 生效内容
+    type: radio_by_label
+    required: true
+    options: ['全部', '部分分区', '指定season', '指定ep']
+
+  内容黑名单: &f_blacklist
+    name: 内容黑名单
+    label: 内容黑名单
+    type: radio_by_label
+    required: true
+    options: ['不需要', '需要']
+
+  内容类型: &f_ctype
+    name: 内容类型
+    label: 内容类型
+    type: checkbox_sync_formily
+    required: true
+    options: ['会员专享内容', '免费内容', '原价付费内容', '会员折扣内容']
+
+  ep付费状态: &f_ep
+    name: ep付费状态
+    label: ep付费状态
+    type: checkbox_sync_formily
+    options: ['所有用户免费', '会员免费', '会员可抢先', '付费观看', '付费可抢先',
+              '加更礼', '结局点映', '超大抢先看', '会员专享']
+
+  流量渠道: &f_channel
+    name: 流量渠道
+    label: 流量渠道
+    type: radio_by_label
+    required: true
+    options: ['全部渠道', '部分渠道（APP版本不低于6.89）']
+
+# ---- Push/短信 类资源位的单元层（结构完全不同，整套替换）----
+unit_push:
+  - name: 单元名称
+    selector: 'input.ant-input'
+    type: fill
+    required: true
+
+  - name: 通知类型
+    label: 通知类型
+    type: radio_by_label
+    required: true
+    options: ['定时触达', '事件触发']
+
+  - name: 人群类型
+    label: 人群选组
+    label_index: 1
+    type: select_antd_by_label
+    required: true
+    options: ['OGV DMP 人群包']
+
+  - name: 人群ID
+    label: 人群名称
+    type: select_antd_by_label
+    required: true
+    search: true
+    match: contains
+    ph: 请输入人群ID        # ⚠ 这个 formily-item 里套着两个 select，靠 placeholder 认领
+
+  - name: AB实验
+    label: AB实验
+    type: radio_by_label
+    options: ['否', '是']
+
+  - name: 优先级
+    label: 优先级
+    type: fill_by_label
+    required: true
+
+  - name: 投放流量池
+    label: 投放流量池
+    type: radio_by_label
+    required: true
+    options: ['日常池', '特殊最优池(慎重使用，该池无法进单元赛马)']
+
+  - name: 投放开始时间
+    label: 投放时间
+    type: date_range_start
+    required: true
+
+  - name: 投放结束时间
+    label: 投放时间
+    type: date_range_end
+    required: true
+
+# ============================================================
+# 18 个资源位
+#   unit_extra —— 单元层在公共字段之外多出来的
+#   creative   —— 创意层字段（含分支）
+# ============================================================
+positions:
+
+  播放页催费条:
+    position_id: 8
+    scene: OGV播放页
+    system: v1
+    unit_extra: [*f_version, *f_content, *f_blacklist, *f_ctype, *f_ep, *f_channel]
+    creative:
+      - name: 配置类型
+        type: vue_radio
+        required: true
+        options: ['仅文案', 'icon + 文案', '图片']
+        reveals:
+          '仅文案':
+            - {name: 文案, label: 文案, type: fill_by_ph, ph: '最多20个字', required: true, max: 20}
+          'icon + 文案':
+            - {name: 文案, label: 文案, type: fill_by_ph, ph: '最多20个字', required: true, max: 20}
+            - {name: icon图标, label: 'icon图标(138*138)', type: upload_by_label, required: true, size: '138*138'}
+          '图片':
+            - {name: 图片, label: '图片(1053*120)', type: upload_by_label, required: true, size: '1053*120'}
+            - {name: 大屏专属图片, label: '大屏专属图片(1588*80)', type: upload_by_label, required: true, size: '1588*80'}
+      - name: 跳转类型
+        type: vue_radio
+        required: true
+        options: ['活动页', '收银台', '跳转链接']
+        reveals:
+          '收银台':
+            - {name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}
+          '跳转链接':
+            - {name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label}
+      - name: 拉起方式
+        type: vue_radio
+        required: true
+        options: ['新页面打开', '半屏打开']
+
+  开通提示条:
+    position_id: 19
+    scene: OGV播放页
+    system: v1
+    unit_extra: [*f_version, *f_content, *f_blacklist, *f_ctype,
+                 {name: ep付费状态, label: ep付费状态, type: checkbox_sync_formily, required: true,
+                  options: ['所有用户免费', '会员免费', '会员可抢先', '付费观看', '付费可抢先',
+                            '加更礼', '结局点映', '超大抢先看', '会员专享']},
+                 *f_channel]
+    creative:
+      - name: 配置类型
+        type: vue_radio
+        required: true
+        options: ['仅文案', '开卡赠礼', '倒计时']
+        option_match: contains       # 倒计时那项后面跟着一长串说明文字
+        reveals:
+          '仅文案':
+            - {name: 副标题文案, label: 副标题文案, type: fill_by_ph, ph: '副标题文案', required: true, max: 18}
+            - {name: 固化权益, label: '固化权益（3个）', type: multiselect_vue, max_pick: 3}
+            - {name: 底部图片, label: '底部图片(1125 * 288)', type: upload_by_label, size: '1125*288'}
+          '开卡赠礼':
+            - {name: 开卡赠礼, label: '开卡赠礼(1~3个)', type: multiselect_vue, required: true, max_pick: 3}
+          '倒计时':
+            - {name: 底部图片, label: '底部图片(1125 * 288)', type: upload_by_label, size: '1125*288'}
+      - {name: 标题文案, label: 标题文案, type: fill_by_ph, ph: '标题文案', required: true, max: 15}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '按钮文案，最多6个字', required: true, max: 6}
+      - {name: 角标文案, label: 角标文案, type: fill_by_ph, ph: '按钮文案，最多8个字', max: 8}
+      - name: 跳转类型
+        type: vue_radio
+        required: true
+        options: ['活动页', '收银台', '跳转链接']
+        reveals:
+          '收银台': [{name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}]
+          '跳转链接': [{name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}]
+      # ⚠ 这一条 2026-08-19 才补：页面上「跳转链接」是常驻必填（红星），
+      #   跟「跳转类型」选什么无关。之前抓漏了，模板里没这一列 → 填不了 →
+      #   点保存创意没反应（页面只在那一行标红，我们收不到）。
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+      - name: 拉起方式
+        type: vue_radio
+        required: true
+        options: ['新页面打开', '半屏打开']
+
+  试看付费条:
+    position_id: 14
+    scene: OGV播放页
+    system: v1
+    unit_extra: [*f_version, *f_content, *f_blacklist, *f_ctype, *f_ep, *f_channel]
+    creative:
+      # ⚠ 这张 IP 图全站就固定这一张，2026-08-21 起写死在这里：模板里这一列
+      #   留空就用它，不用每次去翻素材（要换别的图，照常填路径或网址覆盖）。
+      - {name: IP图, label: 'IP图(210*210)', type: upload_by_label, required: true, size: '210*210',
+         default: 'https://i1.hdslb.com/bfs/vip/29d5348b1f2f730c2b44abb115a507c465b05744.png'}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '最多6个字', required: true, max: 6}
+      - {name: 角标文案, label: 角标文案, type: fill_by_ph, ph: '最多8个字', max: 8}
+      - name: 跳转类型
+        type: vue_radio
+        required: true
+        options: ['活动页', '收银台', '跳转链接']
+        reveals:
+          '收银台': [{name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}]
+          '跳转链接': [{name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}]
+      # ⚠ 2026-08-19 补：页面上「跳转链接」是常驻必填（红星），和「跳转类型」
+      #   选什么无关。当初抓漏了，模板没这一列 → 填不了 → 保存创意时页面只在
+      #   那一行标红、脚本收不到报错，表现成「点了保存但没反应」。
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+      - name: 拉起方式
+        type: vue_radio
+        required: true
+        options: ['新页面打开', '半屏打开']
+
+  播放器阻断墙:
+    position_id: 23
+    scene: OGV播放页
+    system: v1
+    unit_extra: [*f_version, *f_content, *f_blacklist, *f_ctype, *f_ep, *f_channel]
+    creative:
+      - name: 配置类型
+        type: vue_radio
+        required: true
+        options: ['按钮', '图片']
+        reveals:
+          '图片':
+            - {name: 半屏图片, label: '半屏图片(981*288)', type: upload_by_label, required: true, size: '981*288'}
+            - {name: 全屏图片, label: '全屏图片(1932*567)', type: upload_by_label, required: true, size: '1932*567'}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '最多6个字', required: true, max: 6}
+      - {name: 角标文案, label: 角标文案, type: fill_by_ph, ph: '最多8个字', max: 8}
+      - name: 跳转类型
+        type: vue_radio
+        required: true
+        options: ['活动页', '收银台', '跳转链接']
+        reveals:
+          '收银台': [{name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}]
+          '跳转链接': [{name: PC端跳转链接, label: PC端跳转链接, type: fill_by_label}]
+      # ⚠ 2026-08-19 补：页面上「跳转链接」是常驻必填（红星），和「跳转类型」
+      #   选什么无关。当初抓漏了，模板没这一列 → 填不了 → 保存创意时页面只在
+      #   那一行标红、脚本收不到报错，表现成「点了保存但没反应」。
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+      - name: 拉起方式
+        type: vue_radio
+        required: true
+        options: ['新页面打开', '半屏打开']
+
+  播放页半屏:
+    position_id: 61
+    real_name: ogv播放页展示半屏浮层
+    scene: OGV播放页
+    system: v2
+    unit_extra:
+      - {name: 曝光冷却时间, label: 曝光冷却时间, type: fill_by_label, required: true, unit: 小时}
+      - *f_content
+      - *f_blacklist
+      - *f_ctype
+      - *f_ep
+      - *f_channel
+    creative:
+      - name: 跳转类型
+        type: vue_radio
+        required: true
+        options: ['活动页', '播放页NA半屏收银台', '跳转链接']
+        reveals:
+          '活动页':
+            - {name: 标题文案, label: 标题文案, type: fill_by_ph, ph: '最多15个字', required: true, max: 15}
+
+  会员中心弹窗:
+    position_id: 11
+    scene: 会员中心
+    system: v1
+    unit_extra:
+      - name: 限频规则
+        label: 限频规则
+        type: radio_by_label
+        required: true
+        options: ['达到频次限制后不再投放', '未达到频次限制时投放被点击，不再投放']
+    creative:
+      - name: 创意类型
+        type: vue_radio
+        required: true
+        options: ['图片', '动画']
+        reveals:
+          '图片':
+            - {name: 图片, label: 图片, type: upload_by_label, required: true, size: '1125*1125'}
+          '动画':
+            - {name: 动画, label: '动画(尺寸1:1, svga文件时长3s内)', type: upload_by_label, required: true, size: '1:1 svga ≤3s'}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+      - name: 弹窗关闭按钮
+        type: vue_radio
+        required: true
+        options: ['显示', '隐藏 (弹窗3s后自动关闭)']
+        option_match: contains
+
+  会员中心banner:
+    position_id: 13
+    scene: 会员中心
+    system: 新版
+    unit_extra:
+      # ⚠ 页面上只有「活动投放 / 权益投放」两个，没有兜底投放（2026-08-18 实测）
+      - {name: 投放类型, label: 投放类型, type: radio_by_label, required: true, options: ['活动投放', '权益投放']}
+      - {name: 帧数, label: 帧数, type: fill_by_label, required: true}
+    creative:
+      - {name: 图片, label: '图片(1200*240)', type: upload_by_label, required: true, size: '1200*240'}
+      - {name: 增大版图片, label: '增大版图片（560*168）', type: upload_by_label, size: '560*168'}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+
+  收银台弹窗:
+    position_id: 32
+    real_name: 大会员收银台弹窗
+    scene: 收银台
+    system: v2
+    unit_extra:
+      - name: 投放展示时机
+        label: 投放展示时机
+        type: select_antd_by_label
+        required: true
+        options: ['进入页面', '退出页面']
+      - *f_channel
+    creative:
+      - {name: icon图片, label: 'icon图片(864*864)', type: upload_by_label, required: true, size: '864*864'}
+      - {name: 上按钮文案, label: 上按钮文案, type: fill_by_ph, ph: '最多6个字', required: true, max: 6}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+      - {name: 下按钮文案, label: 下按钮文案, type: fill_by_ph, ph: '最多6个字', max: 6}
+
+  PC会员中心banner:
+    position_id: 15
+    real_name: PC-会员中心banner
+    scene: 会员中心
+    system: v1
+    unit_extra: []
+    creative:
+      - {name: 图片, label: '图片(1020*300)', type: upload_by_label, required: true, size: '1020*300'}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+
+  PC顶导浮层:
+    position_id: 52
+    real_name: PC-大会员icon与开通浮层
+    scene: 首页顶导
+    system: v2
+    unit_extra: []
+    creative:
+      - name: 配置形式
+        type: vue_radio
+        required: true
+        options: ['文案+icon', '图片形式']
+        reveals:
+          '图片形式':
+            - {name: Banner, label: Banner, type: upload_by_label, required: true}
+            - {name: Banner跳转链接, label: Banner跳转链接, type: fill_by_label, required: true}
+      - {name: icon文案, label: 'icon 文案', type: fill_by_ph, ph: '', required: true, max: 4}
+      - {name: 标题文案, label: 标题文案, type: fill_by_ph, ph: '', required: true, max: 12}
+      - {name: 描述文案, label: 描述文案, type: fill_by_ph, ph: '', required: true, max: 18}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '', required: true, max: 6}
+      - {name: 按钮角标文案, label: 按钮角标文案, type: fill_by_ph, ph: '', max: 6}
+      - {name: icon, label: icon, type: upload_by_label, required: true, size: '450*360'}
+      - name: 跳转类型
+        type: vue_radio
+        required: true
+        options: ['活动页', '收银台']
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label}
+
+  Story主feed导流条:
+    position_id: 42
+    scene: Story
+    system: v2
+    unit_extra: [*f_version, *f_content, *f_blacklist, *f_ctype, *f_ep]
+    creative:
+      - {name: 原始态-标题, label: 原始态-标题, type: fill_by_ph, ph: '最多16个字', required: true, max: 16}
+      - {name: 展开态-主标题, label: 展开态-主标题, type: fill_by_ph, ph: '最多12字', required: true, max: 12}
+      - {name: 展开态-副标题, label: 展开态-副标题, type: fill_by_ph, ph: '最多17字', required: true, max: 17}
+      - {name: 展开态-按钮文案, label: 展开态-按钮文案, type: fill_by_ph, ph: '最多3字', required: true, max: 3}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label}
+      - name: 打开方式
+        type: vue_radio
+        required: true
+        options: ['半屏打开', '新页面打开']
+
+  Story二级feed导流条:
+    position_id: 40
+    real_name: Story二级页导流条
+    scene: Story
+    system: v2
+    unit_extra: [*f_content, *f_blacklist, *f_ctype, *f_ep]
+    creative:
+      - {name: 原始态-标题, label: 原始态-标题, type: fill_by_ph, ph: '最多16个字', required: true, max: 16}
+      - {name: 展开态-主标题, label: 展开态-主标题, type: fill_by_ph, ph: '最多12字', required: true, max: 12}
+      - {name: 展开态-副标题, label: 展开态-副标题, type: fill_by_ph, ph: '最多17字', required: true, max: 17}
+      - {name: 展开态-按钮文案, label: 展开态-按钮文案, type: fill_by_ph, ph: '最多3字', required: true, max: 3}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_ph, ph: '不填默认跳转收银台'}
+      - name: 打开方式
+        type: vue_radio
+        required: true
+        options: ['新页面打开', '半屏打开(仅支持半屏收银台)']
+        option_match: contains
+
+  Story播放页催费条:
+    position_id: 30
+    real_name: Story催费条
+    scene: Story
+    system: v1
+    unit_extra: [*f_content, *f_blacklist, *f_ctype, *f_ep]
+    creative:
+      - name: 配置类型
+        type: vue_radio
+        required: true
+        options: ['仅文案', 'icon + 文案', '图片']
+        reveals:
+          '仅文案':
+            - {name: 文案, label: 文案, type: fill_by_ph, ph: '最多20个字', required: true, max: 20}
+          'icon + 文案':
+            - {name: 文案, label: 文案, type: fill_by_ph, ph: '最多15个字', required: true, max: 15}
+            - {name: icon图标, label: 'icon图标(138*138)', type: upload_by_label, required: true, size: '138*138'}
+          '图片':
+            - {name: 图片, label: '图片(1053*120)', type: upload_by_label, required: true, size: '1053*120'}
+            - {name: 大屏专属图片, label: '大屏专属图片(1588*80)', type: upload_by_label, required: true, size: '1588*80'}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_ph, ph: '不填则默认购买页'}
+      - name: 拉起方式
+        type: vue_radio
+        required: true
+        options: ['新页面打开', '半屏打开']
+
+  天马订阅卡:
+    position_id: 7
+    scene: 天马
+    system: v2
+    unit_extra: []
+    creative:
+      - {name: 标题文案, label: 标题文案, type: fill_by_ph, ph: '最多14个字', required: true, max: 14}
+      - {name: 副标题文案, label: 副标题文案, type: fill_by_ph, ph: '最多17个字', required: true, max: 17}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '最多4个字', required: true, max: 4}
+      - {name: 图片, label: '图片(126*126)', type: upload_by_label, required: true, size: '126*126'}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
+
+  我的大会员入口:
+    position_id: 3
+    real_name: 我的TAB大会员入口
+    scene: 我的页
+    system: v1
+    unit_extra:
+      - *f_version
+      - {name: 投放类型, label: 投放类型, type: radio_by_label, required: true, options: ['活动投放', '权益投放', '兜底投放']}
+      - {name: 限频规则, label: 限频规则, type: radio_by_label, required: true,
+         options: ['达到频次限制后不再投放', '未达到频次限制时投放被点击，不再投放']}
+      - {name: 是否接受天气预报干预, label: 是否接受天气预报干预, type: radio_by_label, required: true, options: ['否', '是']}
+      - {name: 是否开启高优设置, label: 是否开启高优设置, type: radio_by_label, required: true, options: ['否', '是']}
+      - {name: 是否开启权益投放, label: 是否开启权益投放, type: radio_by_label, required: true, options: ['否', '是']}
+    creative:
+      - name: 创意状态
+        type: vue_radio
+        required: true
+        options: ['日常态', '营销态']
+        option_match: contains
+        reveals:
+          '营销态':
+            - {name: 按钮icon, label: '按钮icon', type: upload_by_label, size: 'png 114*114 / svga ≤500k'}
+            - {name: 按钮背景, label: 按钮背景, type: fill_by_ph, ph: 'Hex格式'}
+            - {name: 图片, label: '图片(不小于400x100px)', type: upload_by_label, size: '≥400x100'}
+      - {name: 标题文案, label: 标题文案, type: fill_by_ph, ph: '标题文案，最多13个字', required: true, max: 13}
+      - {name: 副标题文案, label: 副标题文案, type: fill_by_ph, ph: '副标题文案，最多15个字', required: true, max: 15}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '按钮文案，最多5个字', required: true, max: 5}
+      - {name: 按钮跳转链接APP, label: '按钮跳转链接(APP)', type: fill_by_ph, ph: 'APP会员中心页面URL', required: true}
+      - {name: 按钮跳转链接PC, label: '按钮跳转链接(PC)', type: fill_by_ph, ph: 'PC会员中心页面URL', required: true}
+      - {name: 文案跳转链接APP, label: '文案跳转链接(APP)', type: fill_by_ph, ph: '默认跳转APP会员中心'}
+
+  短信:
+    position_id: 73
+    real_name: 短信推送
+    scene: 消息渠道
+    system: 新版
+    unit_template: unit_push
+    unit_extra: []
+    creative:
+      - name: 模版id
+        label: 模版id
+        type: select_antd_by_label
+        required: true
+        prefix: mega-ant
+        options: ['big-member1989', 'big-member1965', 'big-member1870', 'big-member1849',
+                  'big-member1842', 'big-member1806', 'big-member1973', 'big-member1960',
+                  'big-member1910', 'big-member1900']
+      - {name: 内容, label: 内容, type: fill_by_label, required: true}
+      - {name: 推送预览mid, label: 推送预览mid, type: fill_by_label}
+
+  端内push:
+    position_id: 71
+    real_name: push推送-端内
+    scene: 消息渠道
+    system: 新版
+    unit_template: unit_push
+    unit_extra: []
+    creative:
+      - name: 模版id
+        label: 模版id
+        type: select_antd_by_label
+        required: true
+        prefix: mega-ant
+        options: ['大会员_端内_24', '大会员_端内_17', '大会员_端内_1209', '大会员_端内_2',
+                  '大会员_端内_8', '大会员_端内_9', '大会员_端内_10', '大会员_端内_11',
+                  '大会员_端内_12', '大会员_端内_21']
+      - {name: 标题, label: 标题, type: fill_by_label, required: true}
+      - {name: 内容, label: 内容, type: fill_by_label, required: true}
+      - {name: 链接, label: 链接, type: fill_by_ph, ph: '跳转链接，支持NA或h5', required: true}
+      - {name: 推送预览mid, label: 推送预览mid, type: fill_by_label}
+
+  端外PUSH:
+    position_id: 72
+    real_name: push推送-端外
+    scene: 消息渠道
+    system: 新版
+    unit_template: unit_push
+    unit_extra: []
+    creative:
+      - name: 模版id
+        label: 模版id
+        type: select_antd_by_label
+        required: true
+        prefix: mega-ant
+        match: contains
+        options: ['大会员_端外_0113_1', '大会员营销', '大会员到期提醒', '大会员-到期提醒',
+                  '大会员_端外_1209', '大会员_端外_0113_2', '大会员-权益订阅', '大会员_端外_1016_4']
+      - {name: 标题, label: 标题, type: fill_by_label, required: true}
+      - {name: 内容, label: 内容, type: fill_by_label, required: true}
+      - {name: 链接, label: 链接, type: fill_by_ph, ph: '跳转链接，支持NA或h5', required: true}
+      - {name: 推送预览mid, label: 推送预览mid, type: fill_by_label}
+
+# ============================================================
+# 固化权益全集（开通提示条用）
+# ============================================================
+固化权益选项: [
+  '商品ID(1)免费看', '商品ID(2)抢先看', '商品ID(3)超清看', '商品ID(18)粉色昵称',
+  '商品ID(19)B币券/观影券', '商品ID(20)会员购', '商品ID(21)年度游戏礼包', '商品ID(22)评论表情',
+  '商品ID(23)专属挂件', '商品ID(24)空间自主头图', '商品ID(46)动态卡片装扮', '商品ID(47)漫读券',
+  '商品ID(51)专属缓存', '商品ID(52)预约缓存', '商品ID(53)边下边播', '商品ID(54)并行下载',
+  '商品ID(55)半价点播', '商品ID(56)身份升级', '商品ID(57)真彩HDR', '商品ID(59)杜比音效',
+  '商品ID(82)装扮体验', '商品ID(83)装扮折扣', '商品ID(84)课程折扣', '商品ID(85)专属评论图片',
+  '商品ID(86)彩色弹幕', '商品ID(87)专属闪屏图片', '商品ID(88)等级加速', '商品ID(89)点映会',
+  '商品ID(91)生日礼', '商品ID(93)漫展签到礼', '商品ID(94)漫画商城券', '商品ID(95)游戏优惠',
+  '商品ID(96)超大抢先看', '商品ID(97)专属大屏片库', '商品ID(98)专享观影券', '商品ID(100)超大专属装扮',
+  '商品ID(101)品牌伙伴福利', '商品ID(102)点映会专属名额', '商品ID(103)明星主创见面会',
+  '商品ID(105)专属装扮', '商品ID(106)美食外卖福利', '商品ID(108)漫展票务权益',
+  '商品ID(109)观看设备', '商品ID(110)TV全屏通用', '商品ID(111)猫耳特权'
+]

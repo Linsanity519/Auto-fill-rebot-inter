@@ -1,0 +1,73 @@
+name: DMP人群新建
+description: 大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包
+
+# 侧栏归类：group 是主 Tab，label 是它下面这一项的名字。
+# ⚠ 只有 label 是给人看的；name（也就是文件名）才是身份，断点、模板、
+#   config/prep 下的存盘都认它，改 label 不会动到这些。
+nav:
+  group: DMP人群包
+  group_order: 1
+  label: DMP人群新建
+  order: 2
+
+# ⚠ 这套前端把 antd 的 class 前缀打包成了 full_ogv_data_antd-，不是默认的 ant-。
+#   下面所有 selector 以及 Filler 内部的 antd 选择器都靠这个前缀拼出来。
+antd_prefix: full_ogv_data_antd
+
+form_url: 'https://bangumi-mng.bilibili.co/marin/s/full-ogv-data/user-assets/crowd-manage/crowd-list'
+
+# 打开表单要两步：列表页「新建人群」→ 方式弹窗里「临时表创建」那一行的「创 建」。
+# ⚠ 按钮文字是「创 建」（antd 给双字中文按钮插了空格），5 个方式的按钮文字完全一样，
+#   所以只能靠所在 list-item 的标题来区分，不能按文字匹配。
+open_steps:
+  - 'button:has-text("新建人群")'
+  - 'li.full_ogv_data_antd-list-item:has(.full_ogv_data_antd-list-item-meta-title:text-is("临时表创建")) button'
+
+# 「表名」输入框是临时表弹窗独有的，用它当弹窗的开/关判据最稳：
+# 方式弹窗和临时表弹窗会同时存在，只认 .modal 会圈到两个。
+ready_selector: '#table_name'
+submit_selector: '.full_ogv_data_antd-modal:has(#table_name) .full_ogv_data_antd-modal-footer button.full_ogv_data_antd-btn-primary'
+cancel_selector: '.full_ogv_data_antd-modal:has(#table_name) .full_ogv_data_antd-modal-footer button.full_ogv_data_antd-btn-default'
+
+# 每条都回列表页重开弹窗，避免上一条的残留状态带到下一条
+reset_between_rows: true
+
+fields:
+  - name: 人群名称
+    selector: '#crowd_name'
+    type: fill
+    required: true
+
+  - name: 表名
+    selector: '#table_name'
+    type: fill
+    required: true
+
+  # 页面上目前只有 mid 一个选项，且默认就选好了。留空即用默认值。
+  - name: 匹配类型
+    selector: '#match_type'
+    type: select_antd
+
+  - name: 人群时效性
+    selector: '#data_type'
+    type: radio
+    required: true
+    options: ['天级', '小时级']
+
+  - name: key值
+    selector: '#key'
+    type: fill
+    required: true
+
+  - name: 人群有效期
+    selector: '#eff_days'
+    type: radio
+    required: true
+    options: ['7天', '15天', '30天']
+
+  # checkbox_sync 的 selector 填的是 label 文字，不是 CSS。
+  # titan 是禁用且默认勾选的，Filler 会自动跳过，这里不用也不能写。
+  - name: 推广形式
+    selector: '推广形式'
+    type: checkbox_sync
+    options: ['大会员后台', '天马（智能投放平台）']
