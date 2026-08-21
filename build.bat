@@ -17,9 +17,13 @@ if not defined ISCC (
   goto :fail
 )
 
-REM 打一次包 = 版本号末位 +1。安装目录里的 EXE 名固定，只有安装包名带版本：
-REM 更新器才能在同一个位置覆盖程序，而不会每升级一次就留下一套旧文件夹。
-for /f %%v in ('python tools\bump_version.py') do set VER=%%v
+REM 本机直接运行时版本号末位 +1；GitHub Actions 发版时由 RELEASE_VERSION 指定版本。
+REM 安装目录里的 EXE 名固定，只有安装包名带版本：更新器才能在同一个位置覆盖程序。
+if defined RELEASE_VERSION (
+  set VER=%RELEASE_VERSION%
+) else (
+  for /f %%v in ('python tools\bump_version.py') do set VER=%%v
+)
 if "%VER%"=="" (echo 版本号自增失败 & goto :fail)
 echo     本次版本：%VER%
 
@@ -100,11 +104,11 @@ echo.
 echo 完成：dist\配置助手-Setup-%VER%.exe
 echo 首次发给同事的是这个安装包；后续版本再同时发布安装包和 latest.json。
 echo latest.json 可用 tools\make_update_manifest.py 生成（需传入发布地址）。
-pause
+if not defined CI pause
 exit /b 0
 
 :fail
 echo.
 echo 打包失败，请把上面的报错发给我。
-pause
+if not defined CI pause
 exit /b 1

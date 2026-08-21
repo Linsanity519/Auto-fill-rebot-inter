@@ -28,8 +28,17 @@ build.bat
 python tools\make_update_manifest.py --version X.Y.Z --installer dist\配置助手-Setup-X.Y.Z.exe --base-url https://你的发布目录 --notes "本次更新说明"
 ```
 
-将安装包和生成的 `dist\latest.json` 发布到同一个目录。程序启动后会后台检查，发现新版时由
-用户点击「更新并重启」完成下载、校验、安装与重启。
+将安装包和生成的 `dist\latest.json` 发布到同一个目录。当前默认发布到 GitHub Releases：
+
+```bash
+python tools\make_update_manifest.py --version X.Y.Z --installer dist\配置助手-Setup-X.Y.Z.exe --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z --notes "本次更新说明"
+python tools\publish_github_release.py --version X.Y.Z --notes "本次更新说明"
+```
+
+也可以直接推送 `vX.Y.Z` 标签，仓库内的 GitHub Actions 会在 Windows 构建机自动打包、生成
+`latest.json` 并创建 Release，不需要本机安装 Inno Setup 或 GitHub CLI。GitHub 的
+`releases/latest/download/latest.json` 是程序读取的稳定更新地址。程序启动后会后台检查，
+发现新版时由用户点击「更新并重启」完成下载、校验、安装与重启。
 
 升级只替换程序、表单映射和团队统计快照；`data/`、`output/`、`.chrome-profile/`、本地策略和
 准备参数都会保留。`config/settings.yaml` 也不会被覆盖，新增配置项应由版本迁移或手动补充。

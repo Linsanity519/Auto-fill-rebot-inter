@@ -1,0 +1,63 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "发布版本号，例如 1.0.7"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      CI: true
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+          choco install innosetup --no-progress --yes
+
+      - name: Build installer
+        id: build
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            "${{ inputs.version }}"
+          } else {
+            $env:GITHUB_REF_NAME -replace '^v', ''
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "版本号必须是 X.Y.Z：$version" }
+          python tools/set_version.py $version
+          $env:RELEASE_VERSION = $version
+          cmd /c build.bat
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Generate update manifest
+        shell: pwsh
+        run: |
+          $version = "${{ steps.build.outputs.version }}"
+          python tools/make_update_manifest.py --version $version --installer "dist/配置助手-Setup-$version.exe" --base-url "https://github.com/${{ github.repository }}/releases/download/v$version" --notes "配置助手 v$version"
+
+      - name: Create GitHub Release
+        shell: pwsh
+        run: |
+          $version = "${{ steps.build.outputs.version }}"
+          gh release create "v$version" "dist/配置助手-Setup-$version.exe" "dist/latest.json" --title "配置助手 v$version" --generate-notes --repo "${{ github.repository }}"

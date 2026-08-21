@@ -31,8 +31,10 @@ log_file: "output/run.log"
 # 例：https://download.example.com/config-assistant/latest.json
 # 程序只在发现更新、且用户点击「更新并重启」后才下载和安装，不会自动替换正在使用的版本。
 update:
-  enabled: false
-  manifest_url: ""
+  enabled: true
+  # GitHub 会始终把「最新 Release」中同名资产映射到这个稳定地址。
+  # 每次发布时把最新生成的 latest.json 也作为 Release 资产上传即可。
+  manifest_url: "https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/latest/download/latest.json"
   check_interval_hours: 12
   timeout_seconds: 10
 
