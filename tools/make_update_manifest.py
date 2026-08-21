@@ -2,7 +2,7 @@
 
 示例：
   python tools/make_update_manifest.py --version 1.0.7 ^
-    --installer dist/配置助手-Setup-1.0.7.exe ^
+    --installer dist/ConfigAssistant-Setup-1.0.7.exe ^
     --base-url https://download.example.com/config-assistant
 """
 from __future__ import annotations

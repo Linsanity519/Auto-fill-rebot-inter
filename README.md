@@ -25,13 +25,13 @@ build.bat
 每次发新版后，执行：
 
 ```bash
-python tools\make_update_manifest.py --version X.Y.Z --installer dist\配置助手-Setup-X.Y.Z.exe --base-url https://你的发布目录 --notes "本次更新说明"
+python tools\make_update_manifest.py --version X.Y.Z --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --base-url https://你的发布目录 --notes "本次更新说明"
 ```
 
 将安装包和生成的 `dist\latest.json` 发布到同一个目录。当前默认发布到 GitHub Releases：
 
 ```bash
-python tools\make_update_manifest.py --version X.Y.Z --installer dist\配置助手-Setup-X.Y.Z.exe --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z --notes "本次更新说明"
+python tools\make_update_manifest.py --version X.Y.Z --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z --notes "本次更新说明"
 python tools\publish_github_release.py --version X.Y.Z --notes "本次更新说明"
 ```
 

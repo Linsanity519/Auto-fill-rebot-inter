@@ -35,7 +35,7 @@ REM   实测干掉过一次别人配了一下午的策略。
 if exist build rd /s /q build
 if exist "dist\配置助手.exe" del /q "dist\配置助手.exe"
 if exist "dist\配置助手更新器.exe" del /q "dist\配置助手更新器.exe"
-if exist "dist\配置助手-Setup-%VER%.exe" del /q "dist\配置助手-Setup-%VER%.exe"
+if exist "dist\ConfigAssistant-Setup-%VER%.exe" del /q "dist\ConfigAssistant-Setup-%VER%.exe"
 
 echo === 3/4 打包 exe ===
 REM --collect-all playwright: 把 playwright 的 node 驱动一起塞进去
@@ -101,7 +101,7 @@ echo === 4/4 生成可自动更新的安装包 ===
 if errorlevel 1 goto :fail
 
 echo.
-echo 完成：dist\配置助手-Setup-%VER%.exe
+echo 完成：dist\ConfigAssistant-Setup-%VER%.exe
 echo 首次发给同事的是这个安装包；后续版本再同时发布安装包和 latest.json。
 echo latest.json 可用 tools\make_update_manifest.py 生成（需传入发布地址）。
 if not defined CI pause

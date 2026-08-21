@@ -15,7 +15,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=dist
-OutputBaseFilename=配置助手-Setup-{#MyAppVersion}
+; Release 附件名保持 ASCII，避免不同代码页下中文文件名被截断。
+OutputBaseFilename=ConfigAssistant-Setup-{#MyAppVersion}
 SetupIconFile=assets\icon.ico
 Compression=lzma2/max
 SolidCompression=yes

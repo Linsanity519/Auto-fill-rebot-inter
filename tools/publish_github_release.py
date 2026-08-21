@@ -32,7 +32,7 @@ def main() -> int:
     gh = shutil.which("gh")
     if not gh:
         raise SystemExit("未找到 GitHub CLI（gh）。请先安装并执行 gh auth login。")
-    installer = ROOT / "dist" / f"配置助手-Setup-{args.version}.exe"
+    installer = ROOT / "dist" / f"ConfigAssistant-Setup-{args.version}.exe"
     manifest = ROOT / "dist" / "latest.json"
     missing = [str(path) for path in (installer, manifest) if not path.is_file()]
     if missing:

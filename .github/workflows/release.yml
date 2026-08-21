@@ -54,10 +54,10 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.build.outputs.version }}"
-          python tools/make_update_manifest.py --version $version --installer "dist/配置助手-Setup-$version.exe" --base-url "https://github.com/${{ github.repository }}/releases/download/v$version" --notes "配置助手 v$version"
+          python tools/make_update_manifest.py --version $version --installer "dist/ConfigAssistant-Setup-$version.exe" --base-url "https://github.com/${{ github.repository }}/releases/download/v$version" --notes "配置助手 v$version"
 
       - name: Create GitHub Release
         shell: pwsh
         run: |
           $version = "${{ steps.build.outputs.version }}"
-          gh release create "v$version" "dist/配置助手-Setup-$version.exe" "dist/latest.json" --title "配置助手 v$version" --generate-notes --repo "${{ github.repository }}"
+          gh release create "v$version" "dist/ConfigAssistant-Setup-$version.exe" "dist/latest.json" --title "配置助手 v$version" --generate-notes --repo "${{ github.repository }}"

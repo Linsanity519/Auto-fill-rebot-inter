@@ -165,7 +165,9 @@ class UpdateService:
         manifest = self._latest
         assert manifest is not None
         self.download_dir.mkdir(parents=True, exist_ok=True)
-        target = self.download_dir / f"配置助手-Setup-{manifest['version']}.exe"
+        # 发布文件名固定用 ASCII：GitHub Release / Inno Setup 在不同 Windows 代码页下
+        # 对中文附件名的处理并不一致，曾导致 manifest URL 与实际附件名不一致。
+        target = self.download_dir / f"ConfigAssistant-Setup-{manifest['version']}.exe"
         part = target.with_suffix(".exe.part")
 
         # 已完成的文件仍重新验一遍，避免拿到上次中断或被误替换的文件。
