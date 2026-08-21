@@ -26,8 +26,12 @@ from pathlib import Path
 
 APP_EXE = "配置助手.exe"
 BACKUP_DIR = ".backup"
-# payload.json 是代码包自带的说明（版本 + 要求的运行时代号），一起换掉。
-PAYLOAD_MEMBERS = ("main.py", "src", "assets", "payload.json")
+# 代码包负责整体替换的这几样。payload.json 是包自带的说明（版本 + 运行时代号）。
+# ⚠ 只列到 config/forms 和 config/team.json，**不能**写成整个 config/ ——
+#   settings.yaml、strategies、prep 是用户自己的东西，整目录替换会把人家
+#   配了一下午的策略清掉。
+PAYLOAD_MEMBERS = ("main.py", "payload.json", "src", "assets",
+                   "config/forms", "config/team.json")
 # 解压完必须存在的东西。少了任何一个说明包是坏的，立刻回滚。
 SENTINELS = ("main.py", "src/__init__.py", "assets/webui/index.html")
 
@@ -74,8 +78,7 @@ def _safe_members(zf: zipfile.ZipFile) -> list[str]:
             continue
         if ".." in Path(norm).parts or Path(norm).is_absolute():
             raise ValueError(f"更新包里有非法路径：{name}")
-        top = Path(norm).parts[0]
-        if top not in PAYLOAD_MEMBERS:
+        if not any(norm == m or norm.startswith(m + "/") for m in PAYLOAD_MEMBERS):
             raise ValueError(f"更新包里有预期之外的内容：{name}")
         names.append(name)
     if not names:
@@ -90,7 +93,9 @@ def _stash(target: Path, backup: Path, log: Path) -> None:
     for member in PAYLOAD_MEMBERS:
         src = target / member
         if src.exists():
-            shutil.move(str(src), str(backup / member))
+            dst = backup / member
+            dst.parent.mkdir(parents=True, exist_ok=True)   # config/forms 是两层
+            shutil.move(str(src), str(dst))
             _log(log, f"已备份 {member}")
 
 
@@ -102,6 +107,7 @@ def _restore(target: Path, backup: Path, log: Path) -> None:
         live = target / member
         if live.exists():
             shutil.rmtree(live, ignore_errors=True) if live.is_dir() else live.unlink()
+        live.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(saved), str(live))
         _log(log, f"已还原 {member}")
 

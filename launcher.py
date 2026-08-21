@@ -42,9 +42,12 @@ def selftest(root: str) -> int:
     try:
         if root:
             sys.path.insert(0, root)
+        import importlib
         import webview                     # noqa: F401
-        from webview import guilib
-        guilib.initialize()                # 真正去挑并 import GUI 后端
+        # ⚠ 不能写 `from webview import guilib`：webview/__init__.py 里有个同名
+        #   变量 guilib = None，要等 start() 才被赋值，直接取到的是 None。
+        #   必须按子模块导入，才能真正去挑并 import GUI 后端（那一步才会 import clr）。
+        importlib.import_module("webview.guilib").initialize()
         import src.webapp                  # noqa: F401
         import src.datasource              # noqa: F401
         import src.update                  # noqa: F401

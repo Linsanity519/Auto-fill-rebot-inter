@@ -3,9 +3,10 @@
 这是日常发版真正要发出去的东西 —— 300KB 上下，而不是 45MB 的完整安装包。
 同事那边由 tools/updater.py --payload 解开覆盖。
 
-⚠ 不要把 config/ 打进来：那是用户自己的配置（策略中心、准备参数、settings.yaml），
-  代码包覆盖它等于把人家配了一下午的东西清掉。config 只由完整安装包按
-  onlyifdoesntexist 铺一次默认值。
+⚠ config/ 下只带 forms 和 team.json 这两样「发布内容」。
+  settings.yaml、strategies、prep 是用户自己的配置（策略中心配了一下午的东西），
+  代码包绝不能碰 —— 它们只由完整安装包按 onlyifdoesntexist 铺一次默认值。
+  webhook.txt 也不带：它由安装包负责刷新，少放一处就少一处泄漏面。
 ⚠ 也不要打 __pycache__：里面是上一版的字节码，跟着发出去只会添乱。
 """
 from __future__ import annotations
@@ -17,7 +18,11 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MEMBERS = ("main.py", "src", "assets")
+# ⚠ config/forms 和 config/team.json 是**随版本发布的内容**，不是用户数据，
+#   必须跟着代码包走：几乎每次发版都会动表单定义，漏了就会出现
+#   「新代码 + 旧表单定义」的错配，而且跨的版本越多越严重。
+#   安装包那边对它们用的也是 ignoreversion，口径一致。
+MEMBERS = ("main.py", "src", "assets", "config/forms", "config/team.json")
 SKIP_DIRS = {"__pycache__", ".git"}
 SKIP_SUFFIX = {".pyc", ".pyo"}
 
