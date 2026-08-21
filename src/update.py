@@ -207,33 +207,50 @@ class UpdateService:
         return "installer", installer
 
     # ---------------- 检查 ----------------
+    def _evaluate(self, manifest: dict, checked_at: float) -> dict:
+        """由 manifest 算出给界面看的结果。
+
+        ⚠ 这一步必须**每次重新算**，不能把上次算好的 state 存起来直接用：
+          state 是「manifest 版本 vs 本机版本」的比较结果，而本机版本会因为
+          更新而改变。缓存 state 的后果实测过 —— 用户更新到 1.0.10 之后，
+          缓存里还留着「有 1.0.10 可用」，12 小时内不再检查，于是每次打开都
+          提示更新到自己已经在用的版本。而 output/ 是故意不被更新覆盖的
+          （用户数据），这份缓存正好活了下来，更新越成功误报越准时。
+        """
+        newer = _version_key(manifest["version"]) > _version_key(self.current_version)
+        result = {"state": "available" if newer else "current", "checked_at": checked_at,
+                  "manifest": manifest, "version": manifest["version"],
+                  "notes": manifest["notes"], "published_at": manifest["published_at"],
+                  "mandatory": manifest["mandatory"]}
+        if newer:
+            kind, spec = self.choose(manifest)
+            result["kind"] = kind
+            result["size"] = spec["size"]
+        self._latest = manifest if newer else None
+        return result
+
     def check(self, force: bool = False) -> dict:
         if not self.enabled:
             return {"state": "disabled", "message": "未配置更新地址"}
 
         cached = self._read_cache()
         now = time.time()
-        if not force and cached:
+        if not force and cached and isinstance(cached.get("manifest"), dict):
             try:
                 fresh = now - float(cached.get("checked_at", 0)) < self._interval_seconds()
             except (TypeError, ValueError):
                 fresh = False
             if fresh:
-                self._latest = cached.get("manifest") if cached.get("state") == "available" else None
-                return self._public(cached)
+                try:
+                    # 只复用「省下一次网络请求」，结论重新算
+                    return self._public(self._evaluate(cached["manifest"],
+                                                       float(cached["checked_at"])))
+                except (KeyError, TypeError, ValueError):
+                    pass        # 缓存坏了就当没有，往下走真检查
 
         try:
             manifest = self._validate_manifest(self._fetch_manifest())
-            newer = _version_key(manifest["version"]) > _version_key(self.current_version)
-            result = {"state": "available" if newer else "current", "checked_at": now,
-                      "manifest": manifest, "version": manifest["version"],
-                      "notes": manifest["notes"], "published_at": manifest["published_at"],
-                      "mandatory": manifest["mandatory"]}
-            if newer:
-                kind, spec = self.choose(manifest)
-                result["kind"] = kind
-                result["size"] = spec["size"]
-            self._latest = manifest if newer else None
+            result = self._evaluate(manifest, now)
             self._write_cache(result)
             return self._public(result)
         except (OSError, ValueError, urllib.error.URLError) as exc:

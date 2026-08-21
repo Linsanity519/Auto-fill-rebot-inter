@@ -138,6 +138,17 @@ def main() -> int:
             check("本机更新时不降级", newer.check(force=True)["state"] == "current")
             check("未配置地址时关闭", UpdateService({}, "1.0.8").check()["state"] == "disabled")
 
+            # ---------- 5. 更新完之后不能再提示同一个版本（实测踩过）----------
+            # 缓存里存的是「上次检查时」算出的 state，更新后本机版本变了，
+            # 若直接复用缓存就会一直提示「更新到你已经在用的版本」。
+            after = make_service(base, root, "1.0.8", "afterupd")
+            first = after.check(force=True)
+            check("更新前：提示有新版", first["state"] == "available")
+            after.current_version = "1.0.9"          # 模拟「刚更新完，缓存还在」
+            again = after.check()                    # 不 force，会命中缓存
+            check("★ 更新后再开：不再提示（缓存里的结论被重算）",
+                  again["state"] == "current")
+
             bad = make_service(base, root, "1.0.8", "bad")
             bad.conf = dict(bad.conf, manifest_url=f"{base}/nope.json")
             check("发布站不可达只报错、不抛异常",

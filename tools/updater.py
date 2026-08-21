@@ -148,6 +148,12 @@ def apply_payload(payload: Path, target: Path, log: Path) -> int:
 
     _log(log, f"代码包已应用：{payload.name}")
     shutil.rmtree(backup, ignore_errors=True)
+    # 版本已经变了，旧的检查结论必然过期。留着它会让新版本一启动就提示
+    # 「更新到你已经在用的版本」（src/update.py 里那段注释记了这个事故）。
+    try:
+        (target / "output" / "update-status.json").unlink(missing_ok=True)
+    except OSError:
+        pass
     _launch_app(target, log)
     return 0
 
