@@ -68,10 +68,10 @@ usage:
   #   泄露的最坏情况只是有人往那个群里发消息。
   #   （企微文档机器人那把 apikey 能读能写、更方便，但它没法限权、一把覆盖持有人
   #     名下所有文档，绝不能进分发包 —— 它只留在收集端 tools/.mcp_key。）
-  # ⚠ 这里留空是**故意**的，不是忘了填：仓库是公开的，key 不能进 git。
-  #   实际地址放在 config/webhook.txt（不进仓库，打包时由
-  #   tools/inject_release_config.py 从 USAGE_WEBHOOK_URL 注入），
-  #   安装包用 ignoreversion 每次升级都刷新它。
+  # ⚠ 这里留空是**故意**的，不是忘了填：实际地址在 config/webhook.txt。
+  #   为什么拆出去：安装包升级时不覆盖 settings.yaml（怕冲掉用户改的配置），
+  #   地址若只存在这里，老用户升上来就永远是空的、统计静默失效。
+  #   webhook.txt 则是 ignoreversion，每次升级都刷新。
   #   这里填了就以这里为准（本机想换个群时用）。解析顺序见 src/report.py。
   webhook_url: ""
 

@@ -1,10 +1,10 @@
 """打包前注入「不能进仓库、但必须进分发包」的配置。
 
 现在只有一项：统计回传的企微群机器人地址。
-  · 本机打包：设了环境变量 USAGE_WEBHOOK_URL 就用它；没设就保留已有的
-    config/webhook.txt（你本机那份），两个都没有就跳过 —— 打出来的包不上报，
-    但一切照常能用。
-  · CI 打包：GitHub Actions 从 Secret 把 USAGE_WEBHOOK_URL 传进来。
+  · 默认：用仓库自带的 config/webhook.txt，任何环境开箱即用，不必先配 Secret。
+    （它是故意提交进仓库的，取舍见 .gitignore 里那段注释。）
+  · 换群 / 临时改地址：设环境变量 USAGE_WEBHOOK_URL，会覆盖写回那个文件。
+  · 两个都没有：跳过，打出来的包不上报 —— 但 CI 会直接拦下来，不让这种包发出去。
 
 顺带把 config/settings.yaml 原样拷成 assets/settings.default.yaml，
 给 src/settings.py 做「老版本配置缺字段」的兜底。两个文件由此永远同源。

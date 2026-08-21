@@ -24,9 +24,12 @@ __pycache__/
 # 企微文档机器人的 apikey —— 全权限，绝不能进仓库或分发包
 tools/.mcp_key
 
-# 统计回传地址 —— 随分发包发出去，但绝不能进公开仓库。
-# 打包时由 build.bat / CI 从 USAGE_WEBHOOK_URL 生成，见 src/report.py。
-config/webhook.txt
+# 统计回传地址：**故意提交进仓库**（2026-08-21 决定）。
+# 取舍是明确做过的：这个 key 泄露的最坏情况只是有人往那个统计群里发消息，
+# 而「统计静默失效」是查不出来的 —— 没人会发现自己那份数据没回传。
+# 所以宁可让 key 可见，也要保证任何人、任何环境打出来的包统计都是通的：
+# 本机打包、CI 打包、别人 clone 下来打包，都不需要先配一次 Secret。
+# 真被滥用就换一把群机器人 key（config/webhook.txt 改一行、重新发版即可）。
 
 # 打包时从 config/settings.yaml 拷过去的默认值副本，见 src/settings.py
 assets/settings.default.yaml

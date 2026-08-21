@@ -1,0 +1,2 @@
+# 统计回传地址。打包时由 tools/inject_release_config.py 生成，别手改。
+https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=53d90b8b-f8f8-4c02-83bc-52ec1369ac29

@@ -34,14 +34,16 @@ MAX_BYTES = 1800     # 企微 text 消息上限 2048 字节，留点余量
 def _webhook_from_file() -> str:
     """从 config/webhook.txt 读回传地址。
 
-    ⚠ 为什么不直接写在 settings.yaml 里：仓库已经公开，那个 key 不能进 git。
-      但它又必须跟着分发包发出去（不然同事那边统计就是死的）。所以拆成一个
-      **不进仓库、打包时注入**的单独文件：
-        · 本机打包 → build.bat 从环境变量 USAGE_WEBHOOK_URL 或已有文件生成
-        · CI 打包   → GitHub Actions 从 Secret 注入
-      安装包用 ignoreversion 发它，所以老用户升级时也会被刷新 —— 这点很关键：
-      升级不覆盖 settings.yaml（怕冲掉用户改的配置），如果地址只存在
-      settings.yaml 里，从 1.0.6 升上来的人就永远是空的。
+    ⚠ 为什么单独一个文件、而不是写在 settings.yaml 里：
+      安装包升级时**不覆盖 settings.yaml**（怕冲掉用户自己改的配置），
+      而 webhook.txt 是 ignoreversion、每次升级都刷新。地址若只存在
+      settings.yaml 里，从老版本升上来的人就永远是空的、统计静默失效 ——
+      这正是 1.0.6 → 1.0.9 踩过的坑。
+    ⚠ 这个文件是**故意提交进仓库**的：统计一旦失效是静默的，没人会发现自己
+      那份没回传，所以任何环境打包都必须开箱可用，不能依赖「先配一次 Secret」。
+      代价是 key 可见，最坏情况只是有人往统计群发消息；真出事就换一把。
+      换群 / 临时改地址：设环境变量 USAGE_WEBHOOK_URL（优先，会写回这个文件，
+      见 tools/inject_release_config.py）。
     ⚠ 文件缺失是正常情况（比如别人自己 clone 打的包），此时静默不上报。
     """
     p = user_path("config", "webhook.txt")

@@ -10,6 +10,10 @@ name: Build and publish release
 #   ② 仓库变量 MIRROR_BASE_URL 若配了国内镜像，会被写在下载地址列表的**最前面**，
 #     GitHub 只作兜底。客户端按顺序试到通为止（见 src/update.py 的 _fetch_to）。
 
+# 推一个 vX.Y.Z 标签就会自动打包发布。
+# CI 打出来的包不是「没人测过的二进制」：build.bat 最后一步会跑自检，
+# 把打好的 exe 真启动一遍 import 全部依赖，不通过直接让这次发版失败。
+# 想用本地打好的那份发，则跑 tools/publish_github_release.py（需要 gh）。
 on:
   push:
     tags:
@@ -30,8 +34,8 @@ jobs:
     env:
       CI: true
       GH_TOKEN: ${{ github.token }}
-      # 统计回传地址。不进仓库（公开），由 Secret 注入到 config/webhook.txt。
-      # ⚠ 没配这个 Secret 的话，打出来的包统计是静默失效的 —— 见 src/report.py。
+      # 统计回传地址默认取仓库里的 config/webhook.txt，不配 Secret 也能正常打包。
+      # 配了这个 Secret 就以它为准（想换统计群时用），见 tools/inject_release_config.py。
       USAGE_WEBHOOK_URL: ${{ secrets.USAGE_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
@@ -47,11 +51,12 @@ jobs:
           pip install -r requirements.txt pyinstaller
           choco install innosetup --no-progress --yes
 
-      - name: Warn if stats webhook is missing
+      - name: Check stats webhook is present
         shell: pwsh
         run: |
-          if (-not $env:USAGE_WEBHOOK_URL) {
-            Write-Warning "未配置 USAGE_WEBHOOK_URL Secret：这一版发出去后，同事那边的使用统计不会回传。"
+          # 统计回传一旦缺失是**静默**失效的，所以在这儿显式拦一道。
+          if (-not $env:USAGE_WEBHOOK_URL -and -not (Test-Path config/webhook.txt)) {
+            throw "既没有 config/webhook.txt，也没配 USAGE_WEBHOOK_URL —— 这一版发出去同事的使用统计会静默失效。"
           }
 
       - name: Build installer and payload
