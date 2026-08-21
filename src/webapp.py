@@ -260,6 +260,19 @@ class Api:
             log.exception("启动更新器失败")
             return {"ok": False, "error": f"启动更新器失败：{e}"}
 
+    def refresh_team(self) -> dict:
+        """前端首屏渲染完之后调：去 GitHub 拉最新团队快照。
+
+        放在首屏之后而不是之前 —— 先用本地那份把界面点亮，拉到新的再重绘，
+        网络慢的时候不至于让人对着空白页等。
+        """
+        try:
+            changed = usage.fetch_team(self.settings)
+        except Exception:
+            log.warning("团队快照刷新失败（不影响使用）", exc_info=True)
+            changed = False
+        return {"changed": bool(changed)}
+
     def usage_summary(self) -> dict:
         """首页那些数。口径见 src/usage.py 的 summarize()。
 

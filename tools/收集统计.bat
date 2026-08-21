@@ -2,7 +2,8 @@
 chcp 65001 >nul
 cd /d "%~dp0.."
 REM 用法：在「机器人统计」群里 Ctrl+A、Ctrl+C，然后双击这个文件。
-REM 它会把群里的上报消息整理成 config\team.json，下次打包自动带给同事。
+REM 它会把群里的上报消息整理成 config\team.json，并自动推上 GitHub ——
+REM 同事下次打开程序就能看到新数字，不用等下一次发版。
 python tools\collect_usage.py --sheet
 echo.
 pause

@@ -75,6 +75,13 @@ usage:
   #   这里填了就以这里为准（本机想换个群时用）。解析顺序见 src/report.py。
   webhook_url: ""
 
+  # 团队快照的地址。首页那个「N 人在用 / 团队共省了多少时间」从这里拉。
+  # ⚠ 这条是为了把「统计新鲜度」和「发版」解耦：team.json 本来打进安装包，
+  #   同事看到的最新只到上次发版。改成运行时拉之后，收集端 git push 一次，
+  #   大家下次打开就看到（raw 有几分钟 CDN 缓存）。
+  # 留空 = 只用安装包里带的那份（老行为）。拉不到也只是继续用本地那份，不影响使用。
+  team_url: "https://raw.githubusercontent.com/Linsanity519/Auto-fill-rebot-inter/main/config/team.json"
+
   # 上报里显示的名字。留空就只有匿名指纹（8 位哈希），反推不回是谁。
   # 想让自己那行在统计里认得出来才填。
   nickname: ""

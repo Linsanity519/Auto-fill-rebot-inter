@@ -808,6 +808,56 @@ def save_team(data: dict):
         log.warning("团队快照写入失败（不影响运行）", exc_info=True)
 
 
+def _team_url(settings: dict) -> str:
+    return (((settings or {}).get("usage") or {}).get("team_url") or "").strip()
+
+
+def fetch_team(settings: dict) -> bool:
+    """从 GitHub 拉一份最新的团队快照盖在本地，返回「有没有真的更新」。
+
+    ⚠ 为什么需要它：team.json 原本是**打进安装包**的，所以首页那个「N 人在用 /
+      团队共省了多少时间」最新只到上次发版 —— 中间收集了新数据也送不到同事眼前。
+      改成运行时拉之后，收集端 git push 一次，大家下次打开就看到（raw 有几分钟
+      CDN 缓存）。发版和统计新鲜度就此解耦。
+
+    ⚠ 三条铁律照旧：失败只写日志、绝不抛、绝不挡业务。拉不到就继续用本地那份。
+    """
+    url = _team_url(settings)
+    if not url:
+        return False
+    try:
+        import urllib.request      # 和本文件里取 Chrome 版本那处一样，用到才 import
+
+        req = urllib.request.Request(url, headers={"User-Agent": "ConfigAssistant/1"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            raw = r.read(512 * 1024 + 1)
+        if len(raw) > 512 * 1024:
+            raise ValueError("团队快照过大")
+        remote = json.loads(raw.decode("utf-8"))
+        if not isinstance(remote, dict) or "totals" not in remote:
+            raise ValueError("团队快照格式不对")
+    except Exception:
+        log.info("团队快照拉取失败（用本地那份）", exc_info=True)
+        return False
+
+    # 远端不比本地新就不动 —— 收集端自己那台机器上，本地往往才是最新的
+    local = load_team()
+    if local and str(remote.get("synced_at", "")) <= str(local.get("synced_at", "")):
+        return False
+
+    try:
+        p = team_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(remote, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, p)
+        log.info("团队快照已更新到 %s", remote.get("synced_at", "?"))
+        return True
+    except OSError:
+        log.warning("团队快照写入失败（不影响运行）", exc_info=True)
+        return False
+
+
 def load_team() -> dict:
     try:
         p = team_path()

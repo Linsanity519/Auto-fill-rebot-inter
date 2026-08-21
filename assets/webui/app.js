@@ -302,11 +302,40 @@
       // 内网只有几十 KB/s —— 不写清楚的话，点下去要等 40 分钟的人会以为卡死了。
       label.textContent = `发现新版本 ${info.version}${fmtSize(info)}${info.notes ? `：${info.notes}` : ""}`;
       install.classList.remove("hidden");
+      maybeAnnounceUpdate(info);
     } else if (info.state === "current") {
       label.textContent = "当前已是最新版本";
     } else {
       label.textContent = info.message || "检查更新失败，可稍后重试";
     }
+  }
+
+  // ⚠ 光靠侧栏那行小字没人会看见 —— 实测就是这样，同事一直用着老版本也不知道。
+  //   所以发现新版时弹一次模态框。但**同一个版本只弹一次**：每次开程序都糊人一脸
+  //   会让人条件反射去点「稍后」，反而更不会更新。记在 localStorage 里。
+  const UPDATE_SEEN_KEY = "formbot.update.seen";
+  function maybeAnnounceUpdate(info) {
+    if (!info || !info.version) return;
+    let seen = "";
+    try { seen = localStorage.getItem(UPDATE_SEEN_KEY) || ""; } catch (e) {}
+    if (seen === info.version) return;
+    try { localStorage.setItem(UPDATE_SEEN_KEY, info.version); } catch (e) {}
+
+    const size = fmtSize(info).replace(/^（|）$/g, "");
+    const lines = [
+      info.notes ? info.notes : "",
+      size ? `这次需要下载 ${size}。` : "",
+      "更新时程序会自动关闭并重新打开，配置和数据都不会动。",
+    ].filter(Boolean);
+
+    showModal({
+      title: `有新版本 ${info.version}`,
+      desc: lines.join("\n"),
+      buttons: [
+        { label: "立即更新", primary: true, onClick: () => downloadAndInstallUpdate() },
+        { label: "以后再说" },
+      ],
+    });
   }
 
   function checkForUpdate(force) {
@@ -316,6 +345,10 @@
       box.classList.remove("hidden");
       label.textContent = "正在检查更新…";
       $("#btnCheckUpdate").disabled = true;
+    }
+    if (force) {
+      // 手动点检查 = 明确想看结果，把「这版已提醒过」的记录清掉
+      try { localStorage.removeItem(UPDATE_SEEN_KEY); } catch (e) {}
     }
     return callApi("check_update", !!force).then(renderUpdate);
   }
@@ -570,6 +603,25 @@
       ? "这工具能帮你干什么，以及替大家干了多少" : "全部明细";
     updateSidebarActive();
     loadUsage().then((sum) => (view === "home" ? paintHome(sum) : paintStats(sum)));
+    refreshTeamThenRepaint(view);
+  }
+
+  // 团队快照（首页那个「N 人在用 / 共省了多少」）是从 GitHub 拉的，不再等发版。
+  // ⚠ 顺序是「先用本地那份把界面点亮，拉到新的再重绘」——反过来的话，网络慢时
+  //   人要对着空白页干等。拉失败什么都不做，继续用本地那份。
+  let teamRefreshed = false;
+  function refreshTeamThenRepaint(view) {
+    if (teamRefreshed) return;          // 一次启动只拉一次，别每次切页都请求
+    teamRefreshed = true;
+    callApi("refresh_team")
+      .then((r) => {
+        if (!r || !r.changed) return;
+        return loadUsage(true).then((sum) => {
+          if (state.view !== view) return;
+          view === "home" ? paintHome(sum) : paintStats(sum);
+        });
+      })
+      .catch(() => {});
   }
 
   // 统计读一次就够，不用每次点都去捞：数据源（本机 jsonl / 以后的企微表格）都不是

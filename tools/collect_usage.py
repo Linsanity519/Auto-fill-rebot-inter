@@ -146,6 +146,48 @@ def push_to_sheet(header: list, rows: list) -> str:
         return f"写表格失败（不影响 team.json）：{str(e)[:200]}"
 
 
+def push_team(root) -> str:
+    """把 config/team.json 提交并推上去，让同事下次打开就能看到新数字。
+
+    ⚠ 这一步以前是「等下次发版打进安装包」，同事看到的团队数据最新只到上次发版。
+      客户端改成运行时从 raw.githubusercontent 拉之后（见 src/usage.py fetch_team），
+      推一次就够了，几分钟内全员可见。
+
+    ⚠ 只 add team.json 这一个文件 —— 绝不 `git add -A`：这台机器上可能正改着别的
+      东西，甚至有不该进仓库的 data/、.chrome-profile/。收集统计不该顺手替人提交。
+    ⚠ 全程失败只提示、不抛：拿不到网、没配 remote 都不影响 team.json 已经写好了，
+      大不了下次发版时带出去（老行为）。
+    """
+    import subprocess
+
+    def run(*args):
+        return subprocess.run(("git",) + args, cwd=str(root),
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace")
+
+    if run("rev-parse", "--git-dir").returncode != 0:
+        return "不是 git 仓库，跳过推送（team.json 已写好，下次发版会带出去）"
+    if not (run("remote").stdout or "").strip():
+        return "没有配 git remote，跳过推送"
+
+    if run("diff", "--quiet", "--", "config/team.json").returncode == 0:
+        return "team.json 没有变化，不用推"
+
+    if run("add", "--", "config/team.json").returncode != 0:
+        return "git add 失败，跳过推送"
+    r = run("commit", "-m", "chore: 更新团队使用统计快照", "--", "config/team.json")
+    if r.returncode != 0:
+        return f"git commit 失败：{(r.stderr or r.stdout).strip()[:120]}"
+
+    # 推到远端默认分支；失败就把提交留在本地，下次再推
+    head = (run("rev-parse", "HEAD").stdout or "").strip()
+    r = run("push", "origin", f"{head}:main")
+    if r.returncode != 0:
+        return ("已提交到本地，但推送失败（下次再推或手动 git push）："
+                + (r.stderr or r.stdout).strip()[:160])
+    return "已推送，同事下次打开就能看到（raw 有几分钟 CDN 缓存）"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="把统计群里的上报消息整理成 config/team.json")
     ap.add_argument("--file", help="从文件读，不读剪贴板（调试用）")
@@ -182,6 +224,7 @@ def main() -> int:
         return 0
 
     usage.save_team(team)
+    print("  同步：" + push_team(ROOT))
     print(f"\n已写入 {usage.team_path()}")
     print("  下次打包会自动带进分发包，同事的 EXE 首页就能看到这个数。")
 
