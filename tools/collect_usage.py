@@ -151,17 +151,35 @@ def _key(d: dict) -> str:
     return f"{d.get('指纹', '')}|{usage.norm_week(d.get('周'))}"
 
 
-def _rank(d: dict):
-    """同一个 (人, 周) 出现多条时，谁更新。
+def _num(x) -> int:
+    try:
+        return int(x or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    上报发的是「本机到目前为止的累计」，所以越晚发的数字越大、越完整。
+
+def _fold(old: dict, new: dict) -> dict:
+    """同一个 (指纹, 周) 的两条上报，逐字段取最大。
+
+    ⚠ 为什么是「取最大」而不是「取最后发的那条」：上报的是本机对该周的**累计值**，
+      正常只增不减。但同事重装程序、或程序换了目录之后，本机 output/usage.jsonl
+      会从头开始，于是后发的那条反而更小 —— 实测遇到过：同一周的累计条数从 38
+      变成 0。按「取最后一条」就会把真实的历史冲掉，按「取最大」才对。
+    ⚠ 花名/版本这类非累计字段取后来的（人可能改了花名、升级了版本）。
     """
-    def num(x):
-        try:
-            return int(x or 0)
-        except (TypeError, ValueError):
-            return 0
-    return (str(d.get("最后活跃") or ""), num(d.get("次数")), num(d.get("成功")))
+    out = dict(old)
+    for k in ("次数", "成功", "失败", "机器秒"):
+        out[k] = max(_num(old.get(k)), _num(new.get(k)))
+    for k in ("花名", "版本"):
+        if str(new.get(k) or "").strip():
+            out[k] = new[k]
+    out["最后活跃"] = max(str(old.get("最后活跃") or ""), str(new.get("最后活跃") or ""))
+
+    forms = dict(old.get("分类型") or {})
+    for name, cnt in (new.get("分类型") or {}).items():
+        forms[name] = max(_num(forms.get(name)), _num(cnt))
+    out["分类型"] = forms
+    return out
 
 
 def merge_archive(root, msgs: list[dict]) -> tuple[list[dict], int, int]:
@@ -188,9 +206,11 @@ def merge_archive(root, msgs: list[dict]) -> tuple[list[dict], int, int]:
         if k not in merged:
             merged[k] = d
             added += 1
-        elif _rank(d) > _rank(merged[k]):
-            merged[k] = d
-            updated += 1
+        else:
+            folded = _fold(merged[k], d)
+            if folded != merged[k]:
+                merged[k] = folded
+                updated += 1
 
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -320,15 +340,23 @@ def main() -> int:
     ap.add_argument("--file", help="从文件读，不读剪贴板（调试用）")
     ap.add_argument("--sheet", action="store_true", help="顺便写一份进企微智能表格")
     ap.add_argument("--dry", action="store_true", help="只看解析结果，不写 team.json")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="不读剪贴板，只用归档里已有的数据重算 team.json 并推送")
     args = ap.parse_args()
 
-    text = io.open(args.file, encoding="utf-8").read() if args.file else read_clipboard()
-    if not text.strip():
+    if args.rebuild:
+        # 只用归档重算：改过归档、或上次推送失败想重推时用
+        msgs = []
+        text = "(rebuild)"
+    else:
+        text = io.open(args.file, encoding="utf-8").read() if args.file else read_clipboard()
+    if not args.rebuild and not text.strip():
         print("剪贴板是空的。先去统计群里全选复制（Ctrl+A、Ctrl+C），再跑这个。")
         return 1
 
-    msgs = extract(text)
-    if not msgs:
+    if not args.rebuild:
+        msgs = extract(text)
+    if not args.rebuild and not msgs:
         # 把实际拿到的东西回显出来。只说「没找到」的话，人判断不了到底是
         # 「复制错群了」还是「群里本来就没有上报」—— 这两种处理完全不同。
         head = text.strip().replace("\r", "")[:300].replace("\n", " / ")
