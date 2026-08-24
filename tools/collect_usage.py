@@ -23,6 +23,7 @@ import io
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,7 +44,15 @@ NEEDLE = '"指纹"'
 
 
 def read_clipboard() -> str:
-    """读剪贴板。用 ctypes 直接调 Win32，不引第三方库。"""
+    """读剪贴板。用 ctypes 直接调 Win32，不引第三方库。
+
+    ⚠ 每个函数的 argtypes/restype 都必须显式声明，一个都不能省。
+      ctypes 默认把参数按 32 位 c_int 转换，而 64 位 Windows 上的句柄是
+      64 位指针 —— 地址一旦超过 2GB 就是
+        ctypes.ArgumentError: argument 1: OverflowError: int too long to convert
+      而地址落在哪儿是随机的，所以这个 bug 会「时好时坏」，实测就这么炸过一次
+      （只声明了 restype 忘了 argtypes）。
+    """
     if sys.platform != "win32":
         return ""
     import ctypes
@@ -51,15 +60,34 @@ def read_clipboard() -> str:
 
     CF_UNICODETEXT = 13
     u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+
+    u32.OpenClipboard.argtypes = [wintypes.HWND]
+    u32.OpenClipboard.restype = wintypes.BOOL
+    u32.CloseClipboard.argtypes = []
+    u32.CloseClipboard.restype = wintypes.BOOL
+    u32.GetClipboardData.argtypes = [wintypes.UINT]
     u32.GetClipboardData.restype = wintypes.HANDLE
-    k32.GlobalLock.restype = ctypes.c_void_p
-    if not u32.OpenClipboard(None):
+    k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    k32.GlobalLock.restype = wintypes.LPVOID
+    k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    k32.GlobalUnlock.restype = wintypes.BOOL
+
+    # 剪贴板同一时刻只能被一个进程打开。企微/浏览器可能正好占着，等一下再试。
+    for attempt in range(10):
+        if u32.OpenClipboard(None):
+            break
+        time.sleep(0.1)
+    else:
+        print("剪贴板被别的程序占着，打不开。关掉正在读写剪贴板的程序再试一次。")
         return ""
+
     try:
         h = u32.GetClipboardData(CF_UNICODETEXT)
         if not h:
-            return ""
+            return ""            # 剪贴板里不是文本（比如复制的是图片）
         p = k32.GlobalLock(h)
+        if not p:
+            return ""
         try:
             return ctypes.c_wchar_p(p).value or ""
         finally:
@@ -202,9 +230,21 @@ def main() -> int:
 
     msgs = extract(text)
     if not msgs:
-        print(f"这段文字里没找到上报消息（{len(text)} 字）。\n"
-              f"确认复制的是「机器人统计」群的聊天记录，"
-              f"里面应该有形如 {{\"周\": ..., \"指纹\": ...}} 的行。")
+        # 把实际拿到的东西回显出来。只说「没找到」的话，人判断不了到底是
+        # 「复制错群了」还是「群里本来就没有上报」—— 这两种处理完全不同。
+        head = text.strip().replace("\r", "")[:300].replace("\n", " / ")
+        print(f"这段文字里没找到上报消息（剪贴板里有 {len(text)} 字）。")
+        print()
+        print("剪贴板开头是这样的：")
+        print(f"  {head}")
+        print()
+        print("要找的是形如下面这样的整行 JSON：")
+        print('  {"周": "2026-W34", "指纹": "16d69684", "次数": 3, ...}')
+        print()
+        print("对照检查：")
+        print("  · 复制的是不是「机器人统计」那个群？别的群里没有上报")
+        print("  · 企微里 Ctrl+A 有时只选中了输入框 —— 先在聊天记录区点一下再全选")
+        print("  · 群里确实有人跑过任务吗？没人跑就没有上报可收")
         return 1
 
     names = form_names()
