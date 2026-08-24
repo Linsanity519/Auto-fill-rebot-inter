@@ -8,6 +8,12 @@
    界面上选「逐条确认」也不会问，只有「空跑」有意义（只找不订，见 dry_run）。
 3. run() 可能长期不返回。每周循环的任务抢完一周就排下一周，一直挂着，
    直到用户点停止 —— 这就是它的正常形态，不是卡住了。
+4. 「抢不到」也要有个头。掐 10:00 那种要一直守（别人随时可能取消），但目标日
+   **本来就在可预定范围内**时守下去毫无意义 —— 该试的一轮就试完了。所以这种
+   情况连着 give_up_rounds 轮没有能打的候选就收摊，报「没有符合条件的会议室」
+   并说清楚是「一间空的都没有」还是「有空房但服务端拒了」，见 _nothing_left()。
+   2026-08-24 之前没有这一条：一次抢不到就是雷打不动空转满 600 秒，而且每轮取到
+   的还是同样那几间房（_rank 是确定性的），46 秒能对它们发三百多次预定请求。
 
 抢占窗口（后端 2026-08-20 自己吐出来的原文）：
     「10点之前只能预定5个工作日之内的会议室，10点之后才可预定第6个工作日的会议室」
@@ -80,9 +86,14 @@ class MeetingRunner:
         self.blind_tries = int(o.get("blind_tries", 6))          # 盲抢最多打几枪
         self.poll_ms = int(o.get("poll_ms", 700))                 # 查询驱动阶段的轮询间隔
         self.tries_per_round = int(o.get("tries_per_round", 5))   # 每轮最多试几个候选
+        self.idle_poll_ms = int(o.get("idle_poll_ms", 3000))      # 一个能打的候选都没有时，降到这个间隔
+        self.retry_room_s = float(o.get("retry_room_seconds", 20))  # 同一间房两次重试之间至少隔多久
+        self.give_up_rounds = int(o.get("give_up_rounds", 3))     # 目标日已在窗口内时，连着几轮没得打就收摊
+        self.heartbeat_s = float(o.get("heartbeat_seconds", 30))  # 长时间盯着时，多久报一次「还活着」
         self.grab_timeout = float(o.get("grab_timeout_seconds", 600))
         self.reminder = int(o.get("reminder_time", 2))            # 2 = 提前15分钟，和页面默认一致
         self.skew = 0.0                                            # 服务器时间 - 本机时间
+        self._bad_slots: set = set()                               # 已经抱怨过「时间格数不对」的房，别重复刷屏
 
     # ---------- 状态 ----------
     @staticmethod
@@ -214,10 +225,23 @@ class MeetingRunner:
             out.append(r)
         return sorted(out, key=lambda r: self._rank(r, task))
 
-    @staticmethod
-    def _free(room: dict, i0: int, i1: int) -> bool:
+    def _free(self, room: dict, i0: int, i1: int) -> bool:
+        """这间房在 [i0, i1) 这段格子里是不是全空。
+
+        ⚠ 格子数不是 48 的房只能跳过（没法判断哪一格对应哪半小时），但**必须吭一声**：
+          静默剔除的话，用户看到的是「没有符合条件的会议室」，而真实原因是接口
+          返回的形状不对 —— 这两者的处理办法完全不同，混在一起就没法查。
+          每间房只抱怨一次，别把 600 秒的轮询变成刷屏。
+        """
         slots = room.get("meetingCalendarResponseList") or []
         if len(slots) != SLOTS_PER_DAY:
+            rid = room.get("roomId")
+            if rid not in self._bad_slots:
+                self._bad_slots.add(rid)
+                msg = (f"{room.get('roomName')}（roomId={rid}）返回了 {len(slots)} 个时间格，"
+                       f"应该是 {SLOTS_PER_DAY} 个，判断不了空闲，跳过这间")
+                log.warning(msg)
+                self.ui.log(f"  {msg}", "warn")
             return False
         return all(bool((slots[i] or {}).get("available")) for i in range(i0, min(i1, SLOTS_PER_DAY)))
 
@@ -304,8 +328,26 @@ class MeetingRunner:
                     self.ui.log(f"  {room.get('roomName')}：{err}", "warn")
 
         # ---- 查询驱动 ----
+        # ⚠ 这一段的全部状态都是为了一件事：**别对同一批房反复打枪**。
+        #   `_rank` 的排序键是确定性的，所以「每轮重查一次再取前 N 名」取到的
+        #   永远是同样那几间 —— 2026-08-24 的实测日志里，46 秒对同样 5 间房发了
+        #   三百多次预定请求，界面上就是同样几个名字滚个不停。所以：
+        #     · cooling  回话是「被占」的房。它可能因为别人取消而放出来，不能摘掉，
+        #                但要压一段时间再问；顺带让候选自然轮转到后面几名。
+        #     · dead     不是「被占」的失败（自己同时段已有会、没权限、时段不合法…）。
+        #                这类再问一百遍还是同一句话，两次之后就摘掉。
         rounds = 0
+        idle_rounds = 0                # 连着几轮一个能打的候选都没有
         last_err = "超时没抢到"
+        seen_cands = 0                 # 见过的最大候选数，用来区分「没房」和「房都被占」
+        cooling: dict = {}             # roomId -> 可以再试的 monotonic 时刻
+        dead: dict = {}                # roomId -> 摘掉它的原因（连着两次同类失败才摘）
+        rejected: dict = {}            # roomId -> 最近一次「非被占」的失败原文
+        strikes: dict = {}             # roomId -> 非「被占」的失败次数
+        logged: set = set()            # 已经落过盘的失败原文，避免刷屏 run.log
+        started = _time.monotonic()
+        next_beat = started + self.heartbeat_s
+
         while _time.monotonic() < deadline:
             self.ui.checkpoint()
             rounds += 1
@@ -318,28 +360,120 @@ class MeetingRunner:
                 continue
 
             cands = self._candidates(rooms, task, need_free=(i0, i1))
+            seen_cands = max(seen_cands, len(cands))
 
-            for room in cands[:self.tries_per_round]:
+            now_m = _time.monotonic()
+            fresh = [r for r in cands
+                     if r["roomId"] not in dead and cooling.get(r["roomId"], 0.0) <= now_m]
+
+            for room in fresh[:self.tries_per_round]:
                 self.ui.checkpoint()
-                tried.add(room["roomId"])
+                rid = room["roomId"]
+                tried.add(rid)
                 res = self._try_reserve(api, room, task, day, me)
                 if res.get("ok"):
                     return {"ok": True, "room": room}
                 last_err = res.get("error", "")
+
                 if self._is_not_open(last_err):
                     self.ui.log(f"  服务端说还没开放，继续等：{last_err}", "warn")
                     self._wait_for_window(api, day, probe_room, label)
+                    # 回到「掐点抢」的形态：窗口刚开的那一刻满盘皆空，之前攒的
+                    # cooling/dead 全部作废，也不能再按「已在窗口内」提前收摊。
+                    was_waiting = True
+                    cooling.clear()
+                    dead.clear()
+                    rejected.clear()
+                    strikes.clear()
+                    idle_rounds = 0
                     break
-                if not self._is_taken(last_err):
-                    # 不是「被抢走了」这类正常回话，多半是参数/登录态的问题，记出来
+
+                # ⚠ 失败原文以前只在界面上一闪而过，run.log 里一个字都没有 ——
+                #   事后没法回答「到底是被抢走了还是参数不对」。而 TAKEN_HINTS 是
+                #   照着后台的口气猜的（接口文档只抓到了成功和窗口外两种原文），
+                #   猜漏了就会一直走下面的「非正常失败」分支。所以每种原文落一次盘。
+                if last_err not in logged:
+                    logged.add(last_err)
+                    log.info("预定被拒：%s(roomId=%s) %s → %s",
+                             room.get("roomName"), rid, label, last_err)
+
+                if self._is_taken(last_err):
+                    cooling[rid] = now_m + self.retry_room_s
+                    continue
+
+                # ⚠ 第一次就记，不能等它攒够两次被摘掉才记 —— 摘房要两次 strike，
+                #   而「已在窗口内」的任务三轮就收摊了，等 dead 攒起来根本来不及。
+                #   结论文案要是只看 dead，后台明明说的是「您在该时间段已有会议」，
+                #   报出来却成了「全被占用」，等于把人往错的方向指。
+                rejected[rid] = last_err
+                strikes[rid] = strikes.get(rid, 0) + 1
+                if strikes[rid] >= 2:
+                    dead[rid] = last_err
+                    self.ui.log(f"  {room.get('roomName')} 连着 {strikes[rid]} 次"
+                                f"「{last_err}」，不再试它", "warn")
+                else:
+                    cooling[rid] = now_m + self.retry_room_s
                     self.ui.log(f"  {room.get('roomName')}：{last_err}", "warn")
 
+            # ---- 收摊判定 ----
+            idle_rounds = 0 if fresh else idle_rounds + 1
+
+            # 候选被服务端全盘拒绝，而且不是「被占」——这不是「等等就有」，是这条
+            # 任务本身有问题（同时段自己已经有会、没有该楼栋权限之类）。等下去
+            # 只会把 600 秒耗光，两种模式都直接收，把原因原样报出去。
+            if cands and len(dead) >= len(cands):
+                reasons = list(dead.values())
+                why = max(set(reasons), key=reasons.count)
+                return {"ok": False,
+                        "error": f"符合条件的 {len(cands)} 间全被服务端拒绝：{why}"}
+
+            # 目标日已经在可预定范围内（不是掐点抢），连着几轮没有能打的候选 ——
+            # 说明该试的都试过了，继续空转到 10 分钟超时没有任何意义。
+            if not was_waiting and idle_rounds >= self.give_up_rounds:
+                return {"ok": False,
+                        "error": self._nothing_left(task, seen_cands, tried, rejected)}
+
+            if _time.monotonic() >= next_beat:
+                next_beat = _time.monotonic() + self.heartbeat_s
+                self.ui.log(f"  「{label}」还盯着：符合条件 {seen_cands} 间"
+                            f"（{len(cooling)} 间刚被占、{len(dead)} 间已排除），"
+                            f"已试 {len(tried)} 间，"
+                            f"已等 {self._human(_time.monotonic() - started)}，"
+                            f"还剩 {self._human(deadline - _time.monotonic())}")
+
             if rounds == 1 and not cands:
-                self.ui.log(f"  当前没有满足条件的空房，继续盯着（每 {self.poll_ms}ms 一轮）")
-            self._sleep(self.poll_ms / 1000.0)
+                self.ui.log("  当前没有满足条件的空房，继续盯着（别人取消就立刻补上）")
+
+            # ⚠ 有能打的候选才快轮。空转时还按 700ms 一轮，等于 10 分钟里把 spaces
+            #   的分页翻上千遍 —— 对内网后台是纯添堵，对抢占一点帮助都没有。
+            self._sleep((self.poll_ms if fresh else self.idle_poll_ms) / 1000.0)
 
         return {"ok": False, "error": f"{last_err}（试过 {len(tried)} 间，等了"
                                       f" {self._human(self.grab_timeout)}）"}
+
+    def _nothing_left(self, task: dict, seen: int, tried: set, rejected: dict) -> str:
+        """目标日已经在可预定范围内、却一间也拿不下时的结论文案。
+
+        ⚠ 这句话是用户唯一能看到的结论，不能是「超时没抢到」这种等于没说的话 ——
+          「一间空的都没有」和「有空房但都被拒」要让人一眼分得开：前者该放宽条件，
+          后者该去看是不是自己同时段已经有会了。
+        """
+        where = task.get("room") or (
+            f"{task['building']}{'（只要这栋）' if task.get('building_only') else '（优先）'}"
+            if task.get("building") else "不限楼栋")
+        cond = f"{where} · ≥{task.get('min_capacity')}人 · {task['start']}~{task['end']}"
+        if not seen:
+            return (f"没有符合条件的会议室：{cond}，这个时段一间空的都没有"
+                    f"（放宽人数或楼栋条件再试）")
+        if rejected:
+            reasons = list(rejected.values())
+            why = max(set(reasons), key=reasons.count)
+            rest = seen - len(rejected)
+            return (f"没有符合条件的会议室：{cond} 符合的 {seen} 间里，"
+                    f"{len(rejected)} 间被服务端拒绝（{why}）"
+                    + (f"，其余 {rest} 间被占" if rest > 0 else ""))
+        return (f"没有符合条件的会议室：{cond} 符合的 {seen} 间全被占用，"
+                f"试过 {len(tried)} 间都没拿下（目标日已在可预定范围内，不再空等）")
 
     def _dry_probe(self, api: MeetingApi, task: dict, day: date, rng: tuple,
                    label: str, openat: datetime) -> dict:
@@ -401,6 +535,7 @@ class MeetingRunner:
         stats = {"ok": 0, "failed": 0, "skipped": 0, "dry": 0}
         outcome = [None] * len(tasks)       # 每条任务一个最终结果，和 records 一一对应
         occurrences = []                     # 每一次抢占的流水，写 CSV
+        fatal = ""                           # 整轮挂掉的原因（不是「用户点了停止」）
 
         self.ui.log(f"共 {len(tasks)} 条抢占任务" + ("（空跑：只找不订）" if dry else ""))
         if not dry:
@@ -482,6 +617,10 @@ class MeetingRunner:
                         if nxt:
                             self.ui.log(f"[{idx + 1}] 每周循环：下一轮目标 {nxt}，"
                                         f"{open_moment(nxt, self.open_time):%m-%d %H:%M:%S} 开抢")
+                            # ⚠ 别忘了这一下：pending 没变，但 stats 变了（刚抢到/刚放弃）。
+                            #   不刷的话，挂着跑几天的任务界面上永远停在 0，
+                            #   看不出它到底干成了几件事。
+                            self.ui.progress(len(tasks) - len(pending), len(tasks), stats)
                             continue          # 留在 pending 里，下一轮重新排队
                     pending.remove(idx)
                     self.ui.progress(len(tasks) - len(pending), len(tasks), stats)
@@ -491,15 +630,29 @@ class MeetingRunner:
         except ApiError as e:
             self.ui.log(f"接口出错，本轮中断：{e}", "error")
             log.exception("接口出错")
+            fatal = f"接口出错，整轮中断：{e}"
         except Exception as e:
             # ⚠ 别只兜 ApiError：浏览器那头的异常（页面被关掉、上下文被跳转打断）
             #   是 playwright 自己的异常类型，漏出去会跳过下面的 finally 里那份
             #   收尾报告，用户只看到一个红色堆栈，不知道跑到哪一条了。
             self.ui.log(f"运行中断：{e}", "error")
             log.exception("运行中断")
+            fatal = f"运行中断：{e}"
         finally:
-            results = [o or self._result(i, tasks[i], "skipped", "还没轮到就停了")
-                       for i, o in enumerate(outcome)]
+            # ⚠ 「没轮到」和「整轮挂了」必须分开报。2026-08-24 11:31 那次
+            #   me() 读登录信息返回了一个 404 网页，整轮一条都没跑，收尾却把它
+            #   记成 skipped「还没轮到就停了」—— 埋点和界面上都看不出真实原因，
+            #   用户只知道「没轮到 1 条」，完全查不下去。
+            results = []
+            for i, o in enumerate(outcome):
+                if o:
+                    results.append(o)
+                elif fatal:
+                    stats["failed"] += 1
+                    results.append(self._result(i, tasks[i], "failed", fatal))
+                else:
+                    stats["skipped"] += 1
+                    results.append(self._result(i, tasks[i], "skipped", "还没轮到就停了"))
             self._write_results(occurrences)
             self._report(results, stats, dry)
 

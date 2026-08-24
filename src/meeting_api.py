@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from email.utils import parsedate_to_datetime
 
 log = logging.getLogger(__name__)
@@ -39,10 +40,21 @@ ORIGINS = ("https://administration.biliapi.net", "https://administration.bilibil
 ORIGIN = ORIGINS[0]
 PAGE_URL = f"{ORIGIN}{BASE}/web/index.html#/home/meeting/reserve"
 
+# ⚠ 认标签页时**不能带 scheme**。2026-08-24 实测：登录态过期后走一遍 SSO，
+#   页面会落在 http://administration.bilibili.co/f1-space/...（明文，不是 https）。
+#   只认 https 的话 _pick_page 认不出这个已经开着的标签页，于是每跑一次新开一个；
+#   而新开的那个 goto(PAGE_URL) 之后同样落在 http，于是**永远不会被复用** ——
+#   这东西要挂着跑几天，标签页会一次次堆积。
+#   （明文 origin 上 fetch 照样带得上 cookie，实测 me() 正常返回；万一哪天不行，
+#     me() 里那层「落定后重试」会兜住。）
+HOSTS = tuple(o.split("//", 1)[1] for o in ORIGINS)
+
 
 def is_admin_url(url: str) -> bool:
-    """这个地址是不是行政管理平台（两个域名都算）。"""
-    return any(str(url or "").startswith(o) for o in ORIGINS)
+    """这个地址是不是行政管理平台（两个域名都算，http/https 都算）。"""
+    u = str(url or "")
+    host = u.split("//", 1)[1].split("/", 1)[0].split("?", 1)[0] if "//" in u else ""
+    return host in HOSTS
 
 SLOTS_PER_DAY = 48          # 一天 48 个半小时格，index 0 = 00:00~00:30
 
@@ -67,6 +79,27 @@ async ({method, path, body}) => {
   }
 }
 """
+
+
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+
+
+def html_error(text: str, status) -> str | None:
+    """返回的是网页而不是 JSON 时，折成一句人话；不是网页就返回 None。
+
+    ⚠ 不折的话，_FETCH_JS 兜的那 500 个字符会**原样进 run.log** ——
+      2026-08-24 11:31 那条 ERROR 就是一整段 `<!DOCTYPE html>` 加 CSS，
+      日志翻半天看不出「其实是登录态/落地页不对」。
+    """
+    head = str(text or "")[:400].lstrip().lower()
+    if not (head.startswith("<!doctype html") or head.startswith("<html") or "<html" in head):
+        return None
+    m = _TITLE.search(str(text))
+    title = re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+    return (f"接口返回的是网页不是数据（HTTP {status}"
+            + (f"：{title}" if title else "") + "）"
+            + " —— 多半是登录态掉了，或者这个标签页没落在行政平台上，"
+              "去浏览器里打开行政平台确认已登录后再跑")
 
 
 class ApiError(RuntimeError):
@@ -121,6 +154,10 @@ class MeetingApi:
           真正有用的（比如「For input string: GZ2」）埋在 data.message 里。
         """
         rb = res.get("body") or {}
+        # 网页优先折成一句人话，否则 500 个字符的 HTML 会灌进日志和界面
+        pretty = html_error(rb.get("raw") or "", res.get("status"))
+        if pretty:
+            return pretty
         msg = rb.get("message") or rb.get("raw") or f"HTTP {res.get('status')}"
         inner = rb.get("data")
         if isinstance(inner, dict) and inner.get("message"):
@@ -164,9 +201,31 @@ class MeetingApi:
         return float(statistics.median(got)) if got else 0.0
 
     # ---------------- 业务 ----------------
-    def me(self) -> dict:
-        """当前登录人。userId 是提交预定和算签名都要用的。"""
-        data = self._data(self._call("GET", "/settings/emps/baseInfo"), "读取登录信息")
+    def me(self, timeout: int = 30000) -> dict:
+        """当前登录人。userId 是提交预定和算签名都要用的。
+
+        ⚠ 失败一次要自己救一次。2026-08-24 11:31 实测：这个接口返回了一个
+          「请求的网页不存在」的 404 网页，整轮抢占当场中断；紧接着 11:32 手动
+          重跑就成功了。也就是说它是**可恢复的瞬时状态**（新开的标签页还没落地、
+          或者 SPA 的 hash 路由还在跳，fetch 的相对路径打到了没有 /f1-space 的
+          落地页上）。为这个让整轮白跑不值得，所以等页面落定后再试一次。
+        """
+        try:
+            data = self._data(self._call("GET", "/settings/emps/baseInfo"), "读取登录信息")
+        except ApiError as first:
+            log.info("读取登录信息失败，等页面落定后再试一次：%s", first)
+            try:
+                # ⚠ 这里**只能**用 ensure_page，不能无条件 goto(PAGE_URL)。
+                #   ensure_page 已经在页面不在行政平台上时才导航，在的话只等它安静下来。
+                #   2026-08-24 实测：页面本来好好地停在行政平台上，硬 goto 一次会触发
+                #   一轮 SSO 弹跳（落到 http 的 oauth/callback），有几率直接把标签页
+                #   打成 chrome-error://，比原来那个瞬时失败严重得多 —— 救人反倒推下水。
+                self.ensure_page(timeout)
+                self.page.wait_for_timeout(800)
+            except Exception:
+                raise first
+            # 第二次还不行就是真不行了（多半是登录态掉了），原样抛出去
+            data = self._data(self._call("GET", "/settings/emps/baseInfo"), "读取登录信息")
         if not data or not data.get("userId"):
             raise ApiError("读取登录信息失败：没拿到 userId，登录态可能已经掉了")
         return {"user_id": data["userId"], "user_name": data.get("userName", "")}
