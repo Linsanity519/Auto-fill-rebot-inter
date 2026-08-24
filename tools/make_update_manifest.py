@@ -62,16 +62,34 @@ def main() -> int:
     ap.add_argument("--base-url", action="append", required=True, dest="bases",
                     help="发布目录 URL，可给多次；靠前的优先")
     ap.add_argument("--notes", default="")
+    # ⚠ notes 现在是多行的更新日志（tools/changelog.py 从 CHANGELOG.md 抠出来的）。
+    #   多行文本走命令行参数，在 PowerShell / cmd 里的引号和换行处理各不相同，
+    #   迟早会被截断或者拼歪 —— 走文件最稳，CI 就是这么传的。
+    ap.add_argument("--notes-file", default="", dest="notes_file",
+                    help="从文件读 notes（UTF-8）。给了就以它为准，覆盖 --notes")
     ap.add_argument("--output", default="dist/latest.json")
     args = ap.parse_args()
 
     if not args.payload and not args.installer:
         raise SystemExit("--payload 和 --installer 至少要给一个")
 
+    notes = args.notes
+    if args.notes_file:
+        f = Path(args.notes_file)
+        if not f.is_file():
+            raise SystemExit(f"--notes-file 指的文件不存在：{f}")
+        # ⚠ utf-8-sig 不是随手写的：CI 那边是 PowerShell 的 Out-File 生成这个文件，
+        #   带不带 BOM 跟 PowerShell 版本有关（5.1 带、7 不带）。按 utf-8 读的话，
+        #   BOM 会变成正文开头一个看不见的 ﻿，跟着进 latest.json、再进弹窗，
+        #   .strip() 还清不掉它。utf-8-sig 两种情况都对。
+        notes = f.read_text(encoding="utf-8-sig").strip()
+        if not notes:
+            raise SystemExit(f"--notes-file 是空的：{f}")
+
     doc: dict = {
         "version": args.version,
         "published_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "notes": args.notes,
+        "notes": notes,
         "mandatory": False,
     }
 

@@ -10,6 +10,11 @@ name: Build and publish release
 #   ② 仓库变量 MIRROR_BASE_URL 若配了国内镜像，会被写在下载地址列表的**最前面**，
 #     GitHub 只作兜底。客户端按顺序试到通为止（见 src/update.py 的 _fetch_to）。
 
+# ⚠ 发版前必须先在 CHANGELOG.md 里写好这一版那一节（## X.Y.Z）。
+#   那一节的正文会进 latest.json 的 notes —— 也就是同事在程序里看到的
+#   「这次更新了什么」——同时当 Release 正文。没写就直接让这次发版失败，
+#   因为 notes 缺失是静默的，发出去才发现就晚了。
+#
 # 推一个 vX.Y.Z 标签就会自动打包发布。
 # CI 打出来的包不是「没人测过的二进制」：build.bat 最后一步会跑自检，
 # 把打好的 exe 真启动一遍 import 全部依赖，不通过直接让这次发版失败。
@@ -78,6 +83,13 @@ jobs:
           if ($sourceVersion -ne $version) {
             throw "源码版本是 $sourceVersion；请先把 src/__init__.py 更新为 $version 并提交，再创建标签。"
           }
+          # 更新说明缺失是**静默**的：发出去了才发现同事在更新提示里只看到一个
+          # 版本号，而那时候包已经在 Release 上了。所以在这儿拦一道，而且要拦在
+          # build 之前 —— build 要好几分钟，没必要为一句忘了写的说明白等。
+          python tools/changelog.py $version --plain | Out-File -Encoding utf8 "$env:RUNNER_TEMP/notes.txt"
+          if ($LASTEXITCODE -ne 0) { throw "CHANGELOG.md 里没有 $version 这一节，先补上再发版。" }
+          python tools/changelog.py $version | Out-File -Encoding utf8 "$env:RUNNER_TEMP/notes.md"
+          if ($LASTEXITCODE -ne 0) { throw "抠 $version 的 markdown 更新说明失败。" }
           $runtime = (Get-Content RUNTIME_ID -Raw).Trim()
           $env:RELEASE_VERSION = $version
           cmd /c build.bat
@@ -104,15 +116,19 @@ jobs:
             --runtime $runtime `
             --payload "dist/ConfigAssistant-$version.zip" `
             --installer "dist/ConfigAssistant-Setup-$version.exe" `
-            --notes "配置助手 v$version" `
+            --notes-file "$env:RUNNER_TEMP/notes.txt" `
             @bases
 
       - name: Create GitHub Release
         shell: pwsh
         run: |
           $version = "${{ steps.build.outputs.version }}"
+          # 正文用 CHANGELOG 里那一节（人话），--generate-notes 生成的提交列表
+          # 会接在它后面，想看细节的人还能往下翻。
           gh release create "v$version" `
             "dist/ConfigAssistant-$version.zip" `
             "dist/ConfigAssistant-Setup-$version.exe" `
             "dist/latest.json" `
-            --title "配置助手 v$version" --generate-notes --repo "${{ github.repository }}"
+            --title "配置助手 v$version" `
+            --notes-file "$env:RUNNER_TEMP/notes.md" `
+            --generate-notes --repo "${{ github.repository }}"

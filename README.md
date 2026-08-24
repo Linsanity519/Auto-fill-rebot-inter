@@ -38,13 +38,19 @@ exe 旁边而不冻进包里），日常更新只换代码。运行时代号记�
 
 ### 发布
 
-推一个 `vX.Y.Z` 标签，GitHub Actions 会自动打包并把三个文件（代码包、安装包、
+**发版前先写 `CHANGELOG.md`**：加一节 `## X.Y.Z`，写"用户会感觉到什么变化"。
+这一节的正文会进 `latest.json` 的 `notes` —— 也就是同事在程序里看到的
+「这次更新了什么」——同时当 GitHub Release 的正文。**没写会直接让发版失败**：
+notes 缺了是静默的，等发现时包已经在 Release 上了。写法约定见 `CHANGELOG.md` 开头。
+
+然后推一个 `vX.Y.Z` 标签，GitHub Actions 会自动打包并把三个文件（代码包、安装包、
 `latest.json`）发布成 Release，不需要本机装 Inno Setup 或 GitHub CLI。
 
 手动发版：
 
 ```bash
-python tools\make_update_manifest.py --version X.Y.Z --runtime 1 --payload dist\ConfigAssistant-X.Y.Z.zip --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z
+python tools\changelog.py X.Y.Z --plain > notes.txt
+python tools\make_update_manifest.py --version X.Y.Z --runtime 1 --payload dist\ConfigAssistant-X.Y.Z.zip --installer dist\ConfigAssistant-Setup-X.Y.Z.exe --notes-file notes.txt --base-url https://github.com/Linsanity519/Auto-fill-rebot-inter/releases/download/vX.Y.Z
 python tools\publish_github_release.py --version X.Y.Z --notes "本次更新说明"
 ```
 

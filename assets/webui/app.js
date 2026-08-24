@@ -300,7 +300,10 @@
     if (info.state === "available") {
       // 下载量差着两个数量级（代码包 ~300KB vs 完整安装包 ~45MB），而 GitHub 在
       // 内网只有几十 KB/s —— 不写清楚的话，点下去要等 40 分钟的人会以为卡死了。
-      label.textContent = `发现新版本 ${info.version}${fmtSize(info)}${info.notes ? `：${info.notes}` : ""}`;
+      // ⚠ 侧栏是**一行**，而 notes 现在是多行的更新日志（见 CHANGELOG.md）。
+      //   整段塞进来的话换行会被压成空格，糊成一长条。所以这里只取第一行 ——
+      //   CHANGELOG 的写法约定了第一行要能独立成句，剩下的留给下面那个弹窗。
+      label.textContent = `发现新版本 ${info.version}${fmtSize(info)}${firstLine(info.notes) ? `：${firstLine(info.notes)}` : ""}`;
       install.classList.remove("hidden");
       maybeAnnounceUpdate(info);
     } else if (info.state === "current") {
@@ -314,6 +317,10 @@
   //   所以发现新版时弹一次模态框。但**同一个版本只弹一次**：每次开程序都糊人一脸
   //   会让人条件反射去点「稍后」，反而更不会更新。记在 localStorage 里。
   const UPDATE_SEEN_KEY = "formbot.update.seen";
+  function firstLine(text) {
+    return String(text || "").split("\n").map((x) => x.trim()).filter(Boolean)[0] || "";
+  }
+
   function maybeAnnounceUpdate(info) {
     if (!info || !info.version) return;
     let seen = "";
@@ -322,8 +329,10 @@
     try { localStorage.setItem(UPDATE_SEEN_KEY, info.version); } catch (e) {}
 
     const size = fmtSize(info).replace(/^（|）$/g, "");
+    // notes 是多行的更新日志。弹窗的 CSS 是 white-space: pre-line，换行有效，
+    // 所以这里原样给；和下面那两句事务性说明之间空一行，别粘成一坨。
     const lines = [
-      info.notes ? info.notes : "",
+      info.notes ? String(info.notes).trim() + "\n" : "",
       size ? `这次需要下载 ${size}。` : "",
       "更新时程序会自动关闭并重新打开，配置和数据都不会动。",
     ].filter(Boolean);
