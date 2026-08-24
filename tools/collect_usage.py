@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -175,44 +176,66 @@ def push_to_sheet(header: list, rows: list) -> str:
 
 
 def push_team(root) -> str:
-    """把 config/team.json 提交并推上去，让同事下次打开就能看到新数字。
+    """把 config/team.json 推上 GitHub，让同事下次打开就能看到新数字。
 
-    ⚠ 这一步以前是「等下次发版打进安装包」，同事看到的团队数据最新只到上次发版。
-      客户端改成运行时从 raw.githubusercontent 拉之后（见 src/usage.py fetch_team），
-      推一次就够了，几分钟内全员可见。
+    ⚠ 做法是「在 origin/main 之上直接造一个提交」，而不是「本地 commit 再 push」。
+      这个仓库有两条互不相干的历史：本地是完整开发史（早期提交里有 webhook key），
+      公开仓库是 squash 过的干净快照。按常规做法：
+        · 推送会被判非快进直接拒绝 —— 数据永远上不去（实测踩过）
+        · 万一推成功了更糟，会把本地历史连同那把 key 带上公开仓库
+      用 hash-object / read-tree / commit-tree 这套底层命令，既不碰你的工作区和
+      本地分支，也保证每次都是快进。
 
-    ⚠ 只 add team.json 这一个文件 —— 绝不 `git add -A`：这台机器上可能正改着别的
-      东西，甚至有不该进仓库的 data/、.chrome-profile/。收集统计不该顺手替人提交。
-    ⚠ 全程失败只提示、不抛：拿不到网、没配 remote 都不影响 team.json 已经写好了，
-      大不了下次发版时带出去（老行为）。
+    ⚠ 只替换 config/team.json 这一个文件，origin/main 上的其它内容原样保留。
+    ⚠ 全程失败只提示、不抛：team.json 已经写好了，大不了下次再推。
     """
     import subprocess
+    import tempfile
 
-    def run(*args):
-        return subprocess.run(("git",) + args, cwd=str(root),
-                              capture_output=True, text=True, encoding="utf-8",
-                              errors="replace")
+    root = Path(root)
 
-    if run("rev-parse", "--git-dir").returncode != 0:
-        return "不是 git 仓库，跳过推送（team.json 已写好，下次发版会带出去）"
-    if not (run("remote").stdout or "").strip():
+    def git(*args, **kw):
+        env = kw.pop("env", None)
+        return subprocess.run(("git",) + args, cwd=str(root), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", env=env)
+
+    if git("rev-parse", "--git-dir").returncode != 0:
+        return "不是 git 仓库，跳过推送（team.json 已写好）"
+    if not (git("remote").stdout or "").strip():
         return "没有配 git remote，跳过推送"
 
-    if run("diff", "--quiet", "--", "config/team.json").returncode == 0:
-        return "team.json 没有变化，不用推"
+    if git("fetch", "origin", "main").returncode != 0:
+        return "拉不到 origin/main（网络？），本次不推，下次再说"
 
-    if run("add", "--", "config/team.json").returncode != 0:
-        return "git add 失败，跳过推送"
-    r = run("commit", "-m", "chore: 更新团队使用统计快照", "--", "config/team.json")
-    if r.returncode != 0:
-        return f"git commit 失败：{(r.stderr or r.stdout).strip()[:120]}"
+    # 远端那份和本地一样就不用推
+    remote_blob = (git("rev-parse", "origin/main:config/team.json").stdout or "").strip()
+    local_blob = (git("hash-object", "-w", "--", "config/team.json").stdout or "").strip()
+    if not local_blob:
+        return "算不出 team.json 的对象哈希，跳过推送"
+    if remote_blob == local_blob:
+        return "远端已经是这份数据，不用推"
 
-    # 推到远端默认分支；失败就把提交留在本地，下次再推
-    head = (run("rev-parse", "HEAD").stdout or "").strip()
-    r = run("push", "origin", f"{head}:main")
+    # 用一个临时索引拼出「origin/main 的树 + 换掉 team.json」，不碰真正的索引
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
+        if git("read-tree", "origin/main", env=env).returncode != 0:
+            return "读不出 origin/main 的目录树，跳过推送"
+        if git("update-index", "--add", "--cacheinfo",
+               f"100644,{local_blob},config/team.json", env=env).returncode != 0:
+            return "写不进临时索引，跳过推送"
+        tree = (git("write-tree", env=env).stdout or "").strip()
+    if not tree:
+        return "生成目录树失败，跳过推送"
+
+    r = git("commit-tree", tree, "-p", "origin/main",
+            "-m", "chore: 更新团队使用统计快照")
+    commit = (r.stdout or "").strip()
+    if r.returncode != 0 or not commit:
+        return f"造提交失败：{(r.stderr or '').strip()[:120]}"
+
+    r = git("push", "origin", f"{commit}:main")
     if r.returncode != 0:
-        return ("已提交到本地，但推送失败（下次再推或手动 git push）："
-                + (r.stderr or r.stdout).strip()[:160])
+        return "推送失败（下次再跑会自动重试）：" + (r.stderr or r.stdout).strip()[:160]
     return "已推送，同事下次打开就能看到（raw 有几分钟 CDN 缓存）"
 
 
