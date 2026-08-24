@@ -129,6 +129,82 @@ def extract(text: str) -> list[dict]:
         i = end
 
 
+ARCHIVE = "usage-archive.json"
+
+
+def archive_path(root) -> Path:
+    """原始上报行的归档。
+
+    ⚠ 为什么必须有它：team.json 里只有**聚合结果**（总条数、各周汇总），
+      没有原始行，所以聚合完就再也回不去了。而每次收集都是「拿剪贴板里有的行
+      重算一遍、整个覆盖 team.json」—— 只要这次复制少捞了几周，那几周的数据
+      就永久消失。实测踩过：一次只复制了最近的聊天，累计条数从 38 掉到 1。
+
+    ⚠ 不进仓库（output/ 已在 .gitignore）：行里带花名，那是真人名字，
+      而发布仓库是公开的。丢了也不要紧 —— 企微群里的消息是永久的，
+      重新捞一遍就回来了。
+    """
+    return Path(root) / "output" / ARCHIVE
+
+
+def _key(d: dict) -> str:
+    return f"{d.get('指纹', '')}|{usage.norm_week(d.get('周'))}"
+
+
+def _rank(d: dict):
+    """同一个 (人, 周) 出现多条时，谁更新。
+
+    上报发的是「本机到目前为止的累计」，所以越晚发的数字越大、越完整。
+    """
+    def num(x):
+        try:
+            return int(x or 0)
+        except (TypeError, ValueError):
+            return 0
+    return (str(d.get("最后活跃") or ""), num(d.get("次数")), num(d.get("成功")))
+
+
+def merge_archive(root, msgs: list[dict]) -> tuple[list[dict], int, int]:
+    """把这次捞到的合并进归档，返回 (合并后的全部行, 新增数, 更新数)。
+
+    合并单位是 (指纹, 周)，和上报的单位一致，所以重复收集完全无害 ——
+    这也意味着**你不必每次都复制整个群的历史**，只复制最近一段就行，
+    老数据从归档来。群消息越攒越多之后，这是唯一还跑得动的做法。
+    """
+    p = archive_path(root)
+    old: dict[str, dict] = {}
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        for k, v in (doc.get("rows") or {}).items():
+            if isinstance(v, dict):
+                old[k] = v
+    except (OSError, ValueError):
+        pass            # 第一次跑，或者文件坏了：当空的重来
+
+    added = updated = 0
+    merged = dict(old)
+    for d in msgs:
+        k = _key(d)
+        if k not in merged:
+            merged[k] = d
+            added += 1
+        elif _rank(d) > _rank(merged[k]):
+            merged[k] = d
+            updated += 1
+
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"rows": merged}, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        print("  ⚠ 归档写入失败，这次只按剪贴板里的数据算（老数据不会进 team.json）")
+        return list(msgs), added, updated
+
+    return list(merged.values()), added, updated
+
+
 def to_rows(msgs: list[dict], form_names: list[str]) -> list[list]:
     """每人每周留最后一条 → parse_report 认识的行。
 
@@ -270,13 +346,18 @@ def main() -> int:
         print("  · 群里确实有人跑过任务吗？没人跑就没有上报可收")
         return 1
 
+    # 先并进归档再算：只复制了最近一段聊天时，老数据不会被冲掉
+    all_msgs, added, updated = merge_archive(ROOT, msgs)
+    print(f"本次捞到 {len(msgs)} 条上报"
+          f"（新增 {added}、更新 {updated}）；归档里累计 {len(all_msgs)} 条")
+
     names = form_names()
     header = usage.report_header(names)
-    rows = to_rows(msgs, names)
+    rows = to_rows(all_msgs, names)
     team = usage.parse_report([header] + rows, names, usage.saving_conf(_settings()))
 
     weeks = sorted({r[0] for r in rows})
-    print(f"捞到 {len(msgs)} 条上报，去重后 {len(rows)} 行"
+    print(f"去重后 {len(rows)} 行"
           f"（{len({r[1] for r in rows})} 个人，{len(weeks)} 周：{weeks[0]} ~ {weeks[-1]}）")
     t = team.get("totals", {})
     print(f"  全团队：{team.get('people')} 人 · 累计 {t.get('items')} 条 · "
