@@ -2,8 +2,10 @@
 
 发版时用两次（见 .github/workflows/release.yml）：
   · --plain  给 latest.json 的 notes 用 —— 程序里那个更新弹窗直接显示这段文本，
-             所以要把 markdown 记号去掉，只留人话。
-  · 默认     给 GitHub Release 的正文用 —— 那边认 markdown，原样给。
+             所以要把 markdown 记号去掉，只留人话；而且**只留条目**，
+             开头那句总结不要（理由见 strip_lead）。
+  · 默认     给 GitHub Release 的正文用 —— 那边认 markdown，也不缺版面，
+             总结加条目一起原样给。
 
 ⚠ 抠不到就以非 0 退出，让发版当场失败。notes 缺失是**静默**的：发出去了才发现
   同事在更新提示里只看到一个版本号，而那时候包已经在 Release 上了。
@@ -36,15 +38,38 @@ def sections(text: str) -> list[tuple[str, str]]:
     return out
 
 
+BULLET = re.compile(r"^\s*[-*]\s+")
+
+
+def strip_lead(body: str) -> str:
+    """把开头那句总结去掉，只留条目。
+
+    ⚠ 弹窗里那段版面很小，而总结和条目说的是同一件事 —— 两个都放，真正有信息量的
+      条目会被挤下去。总结留给 CHANGELOG.md 和 Release 页面，那两处不缺版面。
+
+    ⚠ 但**只有这一节确实有条目时**才去掉。有些版本就一句话（比如 1.0.11「修了更新完
+      之后还一直提示…」），照删的话 notes 会变成空的 —— 弹窗上什么都没有，
+      比重复一遍糟糕得多。
+    """
+    if not any(BULLET.match(ln) for ln in body.splitlines()):
+        return body
+    out, started = [], False
+    for ln in body.splitlines():
+        if BULLET.match(ln):
+            started = True
+        if started:
+            out.append(ln)
+    return "\n".join(out).strip()
+
+
 def to_plain(body: str) -> str:
     """去掉 markdown 记号，留给程序里那个更新弹窗。
 
-    ⚠ 弹窗的 CSS 是 white-space: pre-line，换行有效但不认 markdown；
-      侧栏那行小字则只取第一行（见 assets/webui/app.js）。所以这里保留换行、
-      把「- 」换成「· 」，其余记号一律抹掉。
+    ⚠ 弹窗的 CSS 是 white-space: pre-line，换行有效但不认 markdown。
+      所以这里保留换行、把「- 」换成「· 」，其余记号一律抹掉。
     """
     lines = []
-    for raw in body.splitlines():
+    for raw in strip_lead(body).splitlines():
         s = raw.rstrip()
         if not s.strip():
             # 段落之间留一个空行，但不要连着好几个
