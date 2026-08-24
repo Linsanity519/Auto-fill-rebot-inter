@@ -1,19 +1,19 @@
 {
  "people": 1,
  "totals": {
-  "runs": 1,
-  "items": 38,
-  "failed": 1,
-  "seconds": 624,
-  "human": 1872.0,
-  "saved": 1248.0,
-  "ok_rate": 0.9743589743589743
+  "runs": 8,
+  "items": 1,
+  "failed": 0,
+  "seconds": 357,
+  "human": 1071.0,
+  "saved": 714.0,
+  "ok_rate": 1.0
  },
  "forms": [
   {
-   "name": "DMP延期",
-   "ok": 38,
-   "saved": 1248.0
+   "name": "预定会议室",
+   "ok": 1,
+   "saved": 182.0
   },
   {
    "name": "AB实验延期",
@@ -22,6 +22,11 @@
   },
   {
    "name": "DMP人群新建",
+   "ok": 0,
+   "saved": 0.0
+  },
+  {
+   "name": "DMP延期",
    "ok": 0,
    "saved": 0.0
   },
@@ -39,26 +44,26 @@
    "name": "资源位投放",
    "ok": 0,
    "saved": 0.0
-  },
-  {
-   "name": "预定会议室",
-   "ok": 0,
-   "saved": 0.0
   }
  ],
  "weeks": {
   "2026-08-17": {
-   "items": 38,
-   "seconds": 624,
-   "saved": 1248.0
+   "items": 0,
+   "seconds": 266,
+   "saved": 532.0
+  },
+  "2026-08-24": {
+   "items": 1,
+   "seconds": 91,
+   "saved": 182.0
   }
  },
  "actives": [
   {
    "uid": "16d69684",
    "name": "",
-   "last": "2026-08-20 21:43"
+   "last": "2026-08-24 11:35"
   }
  ],
- "synced_at": "2026-08-21T14:17:19+08:00"
+ "synced_at": "2026-08-24T11:53:44+08:00"
 }
