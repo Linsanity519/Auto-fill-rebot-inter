@@ -87,3 +87,41 @@ def fetch_image(url: str) -> Path:
     dst.write_bytes(data)
     log.info("图片已下载：%s → %s（%d KB）", url, dst.name, len(data) // 1024)
     return dst
+
+
+def prefetch(urls, workers: int = 8) -> tuple[int, list[str]]:
+    """把这些网址并发下到缓存里，返回（成功几张，下不下来的网址）。
+
+    ⚠ 为什么要单独预取：内网下 CDN 只有十几 KB/s，一张 240KB 的底图要 16 秒
+      （实测）。而下载是插在填表中间做的 —— 用户看到的就是「填到图片那一行卡住」。
+      图片本来就有磁盘缓存，问题只是「串行 + 挡在关键路径上」：23 张不同的图
+      串下来 6 分钟，并发 8 路压到 1 分钟，而且是在第一个单元开填之前一次做完。
+
+    ⚠ 这里不抛错：某张图下不下来，等真填到它时 _upload_by_label 会报
+      带字段名的准确错误。预取阶段报错只会把「哪一行哪一列」这个信息丢掉。
+      但**要把下不来的网址报出来** —— 素材列填错网址（改过文件名、贴了过期链接）
+      是常事，早说一句就不用等跑到第 40 行才发现。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    todo, seen = [], set()
+    for u in urls:
+        u = str(u or "").strip()
+        if is_url(u) and u not in seen:
+            seen.add(u)
+            todo.append(u)
+    if not todo:
+        return 0, []
+
+    def one(u):
+        try:
+            fetch_image(u)
+            return True
+        except Exception as e:
+            log.info("预取图片失败（先跳过，填到再报）：%s %s", u, e)
+            return False
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(todo))) as pool:
+        got = list(pool.map(one, todo))
+    bad = [u for u, r in zip(todo, got) if not r]
+    return len(todo) - len(bad), bad

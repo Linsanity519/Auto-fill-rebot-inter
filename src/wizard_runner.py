@@ -20,6 +20,7 @@ from . import wizard_data as D
 from . import wizard_schema as W
 from .browser import Browser
 from .filler import FillError
+from .images import is_url, prefetch
 from .preview import PreviewRow
 from .ui import BaseUI, ConsoleUI, Stopped
 from .wizard_filler import WizardFiller
@@ -101,11 +102,16 @@ class WizardRunner:
 
         self.ui.log(f"「{self.f['name']}」共 {total} 个单元" + ("（试跑：创意层只填不保存）" if dry else ""))
         self.ui.progress(0, total, stats)
+        self.ui.log("跑的时候尽量别把 Chrome 切到别的标签页 —— 后台标签会被浏览器降频，"
+                    "实测一条创意从 0.7 秒变成 10 秒。脚本每条会自己把页面拨回前台。")
 
         try:
             with Browser(self.s["cdp_url"], self.s["timeout"]) as b:
                 wf = WizardFiller(b.page, self.s["timeout"],
                                   on_note=lambda m: self.ui.log(f"    {m}", "warn"))
+                # ⚠ 放在连上浏览器之后：连不上就该立刻报错，
+                #   别让人先等几分钟图下完才看见「连不上 Chrome」
+                self._prefetch_images(units)
 
                 # ---- 活动：新建，或挂到已有活动 ----
                 self.ui.checkpoint()
@@ -151,6 +157,7 @@ class WizardRunner:
                         self.ui.log(f"    {u['strategy_note']}")
 
                     try:
+                        b.front()
                         if i > 0:
                             b.page.goto(unit_url, wait_until="domcontentloaded")
                             self._wait(b.page, lambda: self._unit_form_ready(b.page))
@@ -179,6 +186,7 @@ class WizardRunner:
 
                         # ---- 创意 ----
                         for j, c in enumerate(u["creatives"], 1):
+                            b.front()          # 被切到后台的话每条要慢十倍，见 Browser.front
                             if j > 1:
                                 self._add_creative(b.page, pos)
                             self._pick_creative_tab(b.page, j)
@@ -229,6 +237,38 @@ class WizardRunner:
             self._report(results, total, stats, dry)
 
         return results
+
+    def _prefetch_images(self, units: list[dict]):
+        """开跑前把所有图片网址并发下好。
+
+        ⚠ 下载本身在内网只有十几 KB/s，一张底图 16 秒（实测）。放在填表中间做，
+          表现就是「填到图片那一列卡住」；而且同一批创意里图片是一张张串着下的。
+          挪到开跑前并发下完，填的时候全部命中缓存（fetch_image 只认磁盘缓存，
+          不用改填写逻辑）。下不下得来不影响开跑 —— 真填到再报准确的错。
+        """
+        urls = []
+        for u in units:
+            fields = W.flatten(W.creative_fields(self.f, u["position"]))
+            names = [f["name"] for f in fields if str(f.get("type", "")).startswith("upload")]
+            for c in u["creatives"]:
+                urls += [c.get(n) for n in names if c.get(n)]
+        urls = [x for x in urls if is_url(str(x))]
+        if not urls:
+            return
+        n = len(dict.fromkeys(urls))
+        self.ui.log(f"先把 {n} 张图下到本地（内网下载慢，放在这里一次下完，"
+                    f"省得填到一半卡住）")
+        t0 = time.monotonic()
+        ok, bad = prefetch(urls)
+        self.ui.log(f"图片准备好 {ok}/{n} 张，用了 {time.monotonic() - t0:.0f}s",
+                    "ok" if not bad else "warn")
+        if bad:
+            self.ui.log(f"有 {len(bad)} 张下不下来（网址失效？填到那一条会报错，"
+                        f"想避免就先把模板里的网址改对）：", "warn")
+            for u in bad[:5]:
+                self.ui.log(f"    {u}", "warn")
+            if len(bad) > 5:
+                self.ui.log(f"    …… 还有 {len(bad) - 5} 张", "warn")
 
     # ---------------- 各步 ----------------
     def _do_activity(self, page, wf, activity: dict, name: str):
@@ -431,8 +471,10 @@ class WizardRunner:
         save_text = (step.get("creative_submit") or {}).get(sysname, "保存创意")
         pat = re.compile(rf"^\s*{re.escape(save_text)}\s*$")
 
-        for _ in range(50):
-            page.wait_for_timeout(500)
+        for k in range(50):
+            # ⚠ 先看一眼再睡：以前是进来就睡 500ms，页面早就好了也要白等半秒。
+            if k:
+                page.wait_for_timeout(500)
             try:
                 if "创意模板获取失败" in page.inner_text("body"):
                     raise FillError("页面报「创意模板获取失败」，这个资源位的创意模板没加载出来")
@@ -454,6 +496,47 @@ class WizardRunner:
                 continue
         raise FillError(f"等了 25 秒都没等到创意页的「{save_text}」按钮，看截图确认页面状态")
 
+    # 页签文字：「创意3」「创意3 ✕」
+    TAB_RE = r"^\s*创意(\d+)\s*[✕×xX]?\s*$"
+
+    def _tab_state(self, page) -> dict[int, str]:
+        """一次 JS 取回每条创意页签的 class 签名：{3: 'tw-1fi194s tw-qwyd0k|...'}。
+
+        选中的那条 class 上会多挂一个类（v1 是 emotion 生成的哈希、新版是
+        `-tab-active`），所以「谁的类最多」= 谁被选中，「签名变了」= 切过去了。
+        整页只发一次 evaluate，比逐个 get_attribute 快一个量级。
+        """
+        try:
+            raw = page.evaluate("""(re) => {
+                const pat = new RegExp(re);
+                const out = {};
+                document.querySelectorAll('li, a, span, div').forEach(e => {
+                    if (e.children.length > 1) return;
+                    const m = pat.exec((e.innerText || '').trim());
+                    if (!m) return;
+                    out[m[1]] = (out[m[1]] || '') + '|' + (e.className || '');
+                });
+                return out;
+            }""", self.TAB_RE)
+            return {int(k): v for k, v in raw.items()}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _tab_is_active(state: dict[int, str], index: int) -> bool:
+        """这条页签是不是已经选中了。
+
+        判据是「类比别人多」而不是类名里有没有 active —— v1 创意页的选中态是
+        emotion 哈希（`tw-1fi194s tw-qwyd0k`），类名里没有任何可读的词。
+        只有一条创意时本来就在它上面，直接算选中。
+        """
+        if index not in state:
+            return False
+        if len(state) == 1:
+            return True
+        mine = len(state[index].split())
+        return all(mine > len(v.split()) for k, v in state.items() if k != index)
+
     def _pick_creative_tab(self, page, index: int):
         """切到第 index 条创意的 tab。
 
@@ -461,8 +544,15 @@ class WizardRunner:
           不切的话三条创意会全填进「创意1」（后面覆盖前面），
           创意2、创意3 是空的，最后报「保存创意没反应」，
           看日志完全看不出是这个原因（实测踩过）。
+
+        ⚠ 别再等「class 里出现 active/selected」：v1 创意页的选中态是 emotion
+          哈希类名，那个条件永远不成立，每条创意白烧满 3 秒超时（实测 8 条
+          创意每条 6 秒，其中 3.5 秒耗在这里）。改成盯签名变化，通常 50ms 返回。
         """
-        tab = page.locator("span, div, li, a").filter(
+        before = self._tab_state(page)
+        if self._tab_is_active(before, index):
+            return                        # 已经在这条上，再点一次只会白等
+        tab = page.locator("li, a, span, div").filter(
             has_text=re.compile(rf"^\s*创意{index}\s*[✕×xX]?\s*$")).first
         if not tab.count():
             if index == 1:
@@ -472,9 +562,9 @@ class WizardRunner:
             tab.click(timeout=8000)
         except Exception:
             tab.evaluate("el => el.click()")
-        # 等这个页签变成选中态，再往里填
-        self._wait(page, lambda: "active" in (tab.get_attribute("class") or "")
-                   or "selected" in (tab.get_attribute("class") or ""), timeout=3000)
+        # 等页签真的切过去：签名变了，或这条成了「类最多」的那个
+        self._wait(page, lambda: (lambda st: st != before or self._tab_is_active(st, index))(
+            self._tab_state(page)), timeout=3000)
 
     def _add_creative(self, page, pos: str):
         for text in ("+添加创意", "新增创意"):
