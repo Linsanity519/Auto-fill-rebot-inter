@@ -633,17 +633,6 @@ class PriceFiller:
         if set(got) != set(want):
             raise FillError(f"「{label}」最后是 {got}，想要的是 {want}")
 
-    def _poke_search(self, blk):
-        """空搜一下，逼 vue-multiselect 按当前选中的卡片重新取候选。"""
-        inp = blk.query_selector("input")
-        if inp is None or inp.evaluate("el => !!el.readOnly"):
-            return
-        before = self._vue_options(blk)
-        inp.fill("0")
-        self.wait_until(lambda: self._vue_options(blk) != before, timeout=1500)
-        inp.fill("")
-        self.wait_until(lambda: len(self._vue_options(blk)) > 1, timeout=self.timeout)
-
     @staticmethod
     def _click_vue_option(blk, text: str, plain: bool = False):
         """点 vue-multiselect 的一个选项。
