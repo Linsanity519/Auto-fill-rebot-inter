@@ -198,10 +198,13 @@
   //（wizard_meta 返回 wizard:true）。资源位投放和价格面板配置共用同一套策略中心。
   // ⚠ 只有资源位投放要选资源位、要新建活动，那两行对别的配置类型要藏掉。
   function hasStrategy() { return modeIs("wizard") || modeIs("price_panel"); }
-  // 「本次投放」那张共用参数表：只有原生商广用。
-  // ⚠ 价格面板配置**故意**没有：那边「投放配置」页上只有选 Excel 一件事，
-  //   可填的东西要么在 Excel 里、要么在策略中心里，不留第三个地方。
-  function hasPrepCard() { return modeIs("ad_native"); }
+  // 「本次投放」那张共用参数表。
+  // ⚠ 价格面板配置 2026-08-26 起也有了，但只放一项：「生效渠道」。
+  //   它不是普通字段 —— 选「定向」之后页面上换成另一套 18 个字段（人群/平台/
+  //   频次/内容设置/赠单片/创意赛马全没了，多一个 价格面板panel_type），
+  //   所以必须在**生成模板之前**就定下来，Excel 才知道该出哪些列。
+  //   除它之外，价格面板可填的东西仍然只在 Excel 或策略中心里，不留第三个地方。
+  function hasPrepCard() { return modeIs("ad_native") || modeIs("price_panel"); }
 
   // 资源位勾选 / 活动设置记在本地，换个配置类型再切回来不用重勾。
   // ⚠ 按配置类型分开存（key 里带 activeForm）：资源位投放和价格面板配置各记各的活动设置。

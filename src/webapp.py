@@ -593,6 +593,11 @@ class Api:
             if cfg.get("mode") == "ad_native":
                 from . import ad_prep as P
                 s["ad_prep"] = P.load(cfg)
+            # 价格面板：投放配置页上的「生效渠道」（+ 定向时的 panel_type）。
+            # ⚠ 它决定页面是哪一套表单，所以填之前必须拿到。
+            if cfg.get("mode") == "price_panel":
+                from . import ad_prep as P
+                s["pp_prep"] = P.load(cfg)
             # 预定会议室专用：抢占任务清单，界面上填的，不走 data_file
             if cfg.get("mode") == "meeting_reserve":
                 from . import meeting_data as MD

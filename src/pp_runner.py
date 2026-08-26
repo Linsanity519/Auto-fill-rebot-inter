@@ -304,10 +304,31 @@ class PriceRunner:
         vals = D.values_for(self.f, data, unit)
         panels = D.panels_for(vals)
 
+        # ---- 0. 生效渠道：它切的是整张表单，必须最先定 ----
+        # ⚠ 页面默认就是「全局」，所以只有选了定向才需要动它；动完页面上
+        #   人群/平台/频次/内容设置/赠单片/创意赛马 会整片消失。
+        # ⚠ 走 data["prep"]，别直接读 settings["pp_prep"] —— 那个键只有 webapp 会塞，
+        #   命令行和自动化脚本跑起来就是空的，于是报「panel_type 没填」而人明明填了。
+        prep = data.get("prep") or {}
+        channel = str(prep.get(D.CHANNEL, "") or "").strip() or D.channel_of(self.f, self.s)
+        if channel == D.DIRECT:
+            pf.radio(D.CHANNEL, D.DIRECT)
+            pf._settle()
+            ptype = str(prep.get("价格面板panel_type", "")).strip()
+            if not ptype:
+                raise FillError("生效渠道选了「定向」，但「价格面板panel_type」没填"
+                                "（在「投放配置」页上）")
+            pf.select("价格面板panel_type", ptype, contains=True)
+            # 定向下 pid / 组合价格的候选跟着 panel_type 拉，偶尔拉成空 ——
+            # 重选一次它就会重拉。把这个动作交给 filler，它发现空池子时自己用。
+            pf._on_empty = lambda: pf.select("价格面板panel_type", ptype,
+                                             contains=True, force=True)
+
         # ---- 1. Excel 里逐单元填的 + 准备页里的通用字段 ----
         # Excel 有值就以 Excel 为准（「优先级」两边都有，就是为了让个别单元能覆盖）
-        excel_named = set()
-        for f in D.unit_fields(self.f):
+        drop = D.dropped_by_channel(self.f, channel)
+        excel_named = set(drop)          # 页面上没有的，策略那一轮也别去填
+        for f in D.unit_fields(self.f, channel):
             if not f.get("type"):
                 continue                     # 活动ID/面板套餐这些不是页面字段
             val = str(h.get(f["name"], "")).strip()
@@ -362,6 +383,21 @@ class PriceRunner:
         m = D.sku_map(self.f, data, vals, sku)
         pf.click_chip(sku)
 
+        # ⚠ 定向下 pid / 组合价格的候选会拉成空，重选一次 panel_type 就会重拉。
+        #   但重选是个面板级操作，**会把选中的卡片打回去** —— 所以补救完必须
+        #   再点回这张卡，否则接着填的那几行已经不属于它了。
+        prep = data.get("prep") or {}
+        if str(prep.get(D.CHANNEL, "")).strip() == D.DIRECT:
+            ptype = str(prep.get("价格面板panel_type", "")).strip()
+
+            def _redo(sku=sku, ptype=ptype):
+                pf.select("价格面板panel_type", ptype, contains=True, force=True)
+                pf._settle()
+                pf.click_chip(sku)
+
+            pf._on_empty = _redo
+            pf._recovered = False   # 每张卡片各给一次补救机会
+
         # 异形SKU 没有「搭售类型」这一档，页面上直接就是 pid + 搭售商品。
         # ⚠ 这两个值来自 Excel 的「异形SKU·价格面板pid」「异形SKU·搭售商品ID」两列，
         #   不是策略中心 —— 它们一个单元一个样（见 yaml 的 sku_unit_fields）。
@@ -372,33 +408,112 @@ class PriceRunner:
 
         tie = m.get("搭售类型", "") or "无"
         pf.radio("搭售类型", tie)
+
+        # ⚠ 定向下**每个选中的 SKU 都要填 pid**，不管它搭不搭售 —— 少一个都保存不了
+        #   （页面只是不跳转，不给任何提示；实测运营手工配的定向单元 40521，
+        #    6 个 SKU 全都带着 sku_ids、搭售类型却都是「无」）。
+        #   全局下则相反：只有标了买赠的那几个才要 pid。
+        # ⚠ 定向下的 pid 是按**策略中心的「生效平台」**挑的（那一栏在定向的表单上
+        #   看不见，但策略中心里配得到）—— 挑空了要把这个口径说出来，见 _no_pid。
+        direct = D.is_direct(data)
+        if direct and tie == "无":
+            pids = m.get("pid清单") or []
+            if not pids:
+                raise FillError(f"定向下「{sku}」也要填 pid，但{self._no_pid(vals)}")
+            self.ui.log(f"    {sku}：pid {'、'.join(pids)}")
+            pf.multi_search_select("价格面板pid", pids, expect=sku)
+            return
         if tie == "无":
             return
 
+        # ⚠ 带 0元购 的，「组合价格」那两格的候选一开始是空的 —— 页面不发请求、
+        #   也不报错，看着就像这个 pid 不存在。要按下面这个顺序**把池子盘出来**
+        #   （运营实测出来的，少一步都不行；必须在填 pid 之前做，切换会重置这张卡）：
+        #       选 panel_type=normal → 切到目标搭售类型 → 再选一遍 panel_type
+        #       → 切到「买赠+加价购」→ 切回目标搭售类型
+        if "0元购" in tie:
+            ptype = str((data.get("prep") or {}).get("价格面板panel_type", "")).strip()
+            # ⚠ 这一串是纯「盘池子」的空转，不产出任何值 —— 稳定窗口用 250ms 就够，
+            #   别用默认的 700ms：这套要走 5 步，每步都按 700 等等于白扔两秒多。
+            def _repick():
+                if ptype and pf.has("价格面板panel_type"):
+                    pf.select("价格面板panel_type", ptype, contains=True, force=True)
+                    pf._settle(250)
+            _repick()
+            pf.radio("搭售类型", tie); pf._settle(250)
+            _repick()
+            pf.radio("搭售类型", "买赠+加价购"); pf._settle(250)
+            pf.radio("搭售类型", tie); pf._settle(250)
+            pf.click_chip(sku)
+
+        # ⚠ 顺序不能反：**必须先填「价格面板pid」，「组合价格」才解禁**。
+        #   组合价格那两格是拿已选的 pid 去配加购商品的，pid 没选之前整个
+        #   .combine-select 是 disabled="true"、input readonly —— 点了不发请求、
+        #   也没有任何选项（试过反着填，DOM 上一眼看得出来）。
+        pids = m.get("pid清单") or []
         if "买赠" in tie:
-            # ⚠ pid 是多选：这个单元投几个平台就填几个（见 pp_data.pids_for_platforms）
-            pf.multi_search_select("价格面板pid", m.get("pid清单") or [])
+            if not pids:
+                raise FillError(f"「{sku}」标了买赠，但{self._no_pid(vals)}")
+            self.ui.log(f"    {sku}：pid {'、'.join(pids)}")
+            pf.multi_search_select("价格面板pid", pids, expect=sku)
             # ⚠ 先选商品类型，「商品ID」那个框是选完才渲染出来的，顺序反了就找不到字段
             pf.select("买赠商品", m["买赠商品类型"])
             pf.search_select("商品ID", m["买赠商品ID"])
         if "0元购" in tie:
             pf.set_combine(D.combine_pairs(m.get("组合价格", "")))
 
+    @staticmethod
+    def _no_pid(vals: dict) -> str:
+        """「一个 pid 都没挑到」怎么说。
+
+        ⚠ pid 是**拿策略中心的「生效平台」去映射表里挑**的，空的那一头可能在任意
+          一边。不把口径说出来，人只会去翻映射表 —— 而定向那套表单上根本看不见
+          「生效平台」这一栏，想不到是被它筛掉的。
+        """
+        plan = str((vals or {}).get("PID映射方案", "") or "")
+        plat = str((vals or {}).get("生效平台", "") or "").strip()
+        how = f"生效平台（{plat}）下" if plat else "这个卡种下"
+        return (f"PID 映射表的方案「{plan}」里，{how}一个 pid 都没配到 —— "
+                f"要么映射表缺了这几行，要么策略中心的生效平台选错了")
+
     # ---------------------------------------------------------------- 保存
     def _save(self, page, pf: PriceFiller) -> str:
         """点「保存并下一步」，返回新建出来的单元ID。
 
-        ⚠ 不能「点了就算成功」：后端校验不过时页面留在原地、只把那一行标红。
+        ⚠ 不能「点了就算成功」：后端校验不过时页面留在原地。
           这里以「离开单元新建页」为判据 —— 保存成功会跳到创意页。
+
+        整条链路实测是这样的：
+            点保存 → GET unit/repeate_judge（同优先级的单元清单）
+                   → 弹「优先级重复」二次确认 → 点确定
+                   → POST unit/save → 跳创意页
+
+        ⚠ 两个坑，都栽过：
+          1. 二次确认的内容是从后台拉的，慢的时候要一两分钟才出来。原来按 timeout
+             （25 秒）等，弹窗还没出来就判成「保存被拒」。所以这里是「一直盯着、
+             出现就点」，不设短窗口；上限只为防死循环，正常由「页面跳走」结束。
+          2. **保存被拒时页面上什么都不显示**，但接口回了一句很清楚的话
+             （实测 {"code":85362,"message":"加购商品和买赠pid不相同"}）。
+             不把它捞出来，报出来就只有「点了保存但页面没跳走」，
+             人对着一屏看着正常的表单根本无从查起。
         """
         btn = self.f.get("next_button", "保存并下一步")
         before = page.url
-        page.get_by_role("button", name=btn).first.click()
+        rejected = []
 
-        # ⚠ 保存时可能弹「优先级重复」这种二次确认（同优先级的单元列一张表让你确认），
-        #   不点掉它页面就一直不跳。而且它的内容是从后台拉的，点完保存两秒内还没出来 ——
-        #   所以整个等待期间都要盯着，不能只瞄一眼。
+        def on_save_resp(resp):
+            if "/unit/save" not in resp.url:
+                return
+            try:
+                j = resp.json()
+            except Exception:
+                return
+            if j.get("code"):
+                rejected.append(f"{j.get('message') or '没给原因'}（code {j['code']}）")
+
         def moved_or_confirm():
+            if rejected:
+                return True
             if page.url != before:
                 return True
             title = pf.confirm_modal()
@@ -406,8 +521,17 @@ class PriceRunner:
                 self.ui.log(f"    弹了「{title}」，已点确定")
             return False
 
-        moved = pf.wait_until(moved_or_confirm, timeout=self.s["timeout"])
-        if not moved:
+        page.on("response", on_save_resp)
+        try:
+            page.get_by_role("button", name=btn).first.click()
+            moved = pf.wait_until(moved_or_confirm,
+                                  timeout=max(self.s["timeout"], 300000))
+        finally:
+            page.remove_listener("response", on_save_resp)
+
+        if rejected:
+            raise FillError(f"后台不收这个单元：{rejected[-1]}")
+        if not moved or page.url == before:
             raise FillError(f"点了「{btn}」但页面没跳走，保存被拒。{pf.form_errors()}")
         return self._unit_id_from(page.url)
 

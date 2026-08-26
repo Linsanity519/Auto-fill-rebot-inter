@@ -78,15 +78,23 @@ JS_CLICK_OPEN_OPTION = f"""
 """
 
 
+# 候选池的「先探一下」时长：拉得出来的一两秒就到，拉不出来等多久都没用。
+PROBE_MS = 2500
+
+
 def _norm(s: str) -> str:
     return (s or "").strip().replace("\n", "")
 
 
 class PriceFiller:
-    def __init__(self, page, timeout: int = 20000, on_note=None):
+    def __init__(self, page, timeout: int = 20000, on_note=None, on_empty=None):
         self.page = page
         self.timeout = timeout
         self._on_note = on_note
+        # 候选池空了时的补救动作。定向那条链路上，pid / 组合价格的候选是跟着
+        # 「价格面板panel_type」拉的，**重选一次它就会重拉**（运营实测）。
+        # 这个动作只有 pp_runner 知道怎么做，所以由它注入。
+        self._on_empty = on_empty
 
     def _note(self, msg: str):
         log.warning(msg)
@@ -229,7 +237,8 @@ class PriceFiller:
     def _is_vue_multiselect(self, blk) -> bool:
         return bool(blk.query_selector(".multiselect"))
 
-    def select(self, label: str, value: str, contains: bool = False, index=None):
+    def select(self, label: str, value: str, contains: bool = False, index=None,
+               force: bool = False):
         """单选下拉。这个后台有两种下拉，块里有没有 .multiselect 就能分出来。
 
         index 是「这个字段块里第几个下拉」。用在「选中类型」上：
@@ -242,7 +251,7 @@ class PriceFiller:
         if self._is_vue_multiselect(scope):
             self._vue_pick(scope, label, value, contains)
         else:
-            self._popup_pick(scope, label, value, contains)
+            self._popup_pick(scope, label, value, contains, force)
 
     def _nth_select(self, blk, label: str, index: int):
         """字段块里第 index 个下拉控件（radio/checkbox 不算）。"""
@@ -295,7 +304,8 @@ class PriceFiller:
             raise FillError("这个下拉里没有可点的输入框")
         return self._open_input(inp, real_click)
 
-    def _popup_pick(self, blk, label: str, value: str, contains: bool):
+    def _popup_pick(self, blk, label: str, value: str, contains: bool,
+                    force: bool = False):
         """浮层 teleport 到 body 上的那种下拉（人群选组 / 频次周期 / 买赠商品…）。
 
         这一族里有两种，只能按 input 当场的可编辑状态区分，不能看 placeholder：
@@ -311,14 +321,19 @@ class PriceFiller:
         """
         # ⚠ 已经就是这个值就别再点了。这些下拉大多有默认值（人群那两个默认就是
         #   「不限」），白点一次不但没意义，还平白多开一次浮层去挡住后面的字段。
-        cur = blk.evaluate("el => { const i = el.querySelector('input'); return i ? i.value : ''; }")
-        if self._match([cur], value, contains) is not None:
-            return
+        # ⚠ force=True 时**必须真的重选一遍**：定向那条链路的补救动作就是
+        #   「重选一次 panel_type 让候选重拉」，值本来就已经是对的 ——
+        #   走这条短路的话补救等于没做（实测栽过一次：日志说重选了，其实没动）。
+        if not force:
+            cur = blk.evaluate("el => { const i = el.querySelector('input'); return i ? i.value : ''; }")
+            if self._match([cur], value, contains) is not None:
+                return
 
         inp = self._open(blk)
         typed = False
         if contains and not inp.evaluate("el => !!el.readOnly"):
-            inp.type(str(value), delay=60)
+            # ⚠ delay 只是为了让远程搜索的防抖认得出「在打字」，不用一个字 60ms
+            inp.type(str(value), delay=15)
             typed = True
 
         # ⚠ 等的是「**匹配上的那条**出现」而不是「有选项了」：远程搜索回来之前，
@@ -334,11 +349,86 @@ class PriceFiller:
             raise FillError(f"「{label}」{how}但没有「{value}」。现在能看到的：{texts[:12]}")
         if not self.page.evaluate(JS_CLICK_OPEN_OPTION, hit):
             raise FillError(f"「{label}」下拉里的「{hit}」点不动")
-        self.page.wait_for_timeout(250)
+        # ⚠ 选完要确认浮层收了。它不收就一直盖着下面的字段，
+        #   后面那个控件点不开、也读不到选项。
+        if not self.wait_until(lambda: not self.page.evaluate(JS_OPEN_OPTIONS), timeout=1000):
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(200)
+
+    def _vue_open(self, blk, label: str):
+        """点开 vue-multiselect，并**确认它真的开了**。
+
+        ⚠ 判据是 `.multiselect--active` 这个类，不是「等一会儿有没有选项」。
+          没打开的时候它压根不渲染 li.multiselect__element —— 等多久都是 0 条，
+          于是报成「下拉里没有 134，能看到的：[]」，看着像没这条数据，
+          实际上是根本没展开（这个坑调了两轮时间才发现）。
+        ⚠ 要点的是外面那层 .multiselect__tags，不是里面的 input：
+          input 没打字时宽度是 0，点它经常不生效。
+        """
+        # ⚠ 先把别人的浮层收掉。浮层是 teleport 到 body 上的，会**盖在这个控件上面**，
+        #   点下去被它吃掉 —— 控件压根没展开，也就不渲染任何选项，
+        #   最后报成「下拉里没有 134，能看到的：[]」，看着像没这条数据。
+        #   （实测：定向那条链路上，上面「价格面板panel_type」的浮层没收，
+        #     下面的「价格面板pid」就一直出不来。）
+        if self.page.evaluate(JS_OPEN_OPTIONS):
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(200)
+
+        is_open = """el => {
+            const m = el.querySelector('.multiselect');
+            return !!m && m.className.includes('multiselect--active');
+        }"""
+
+        # ⚠ 已经开着的先关掉再重开。候选是跟着「选中的 SKU 卡片」现拉的，
+        #   而**面板开着的时候换卡不会重拉** —— 直接读就会拿到上一张卡的池子
+        #   （实测：配「超大连续包年」，读回来一列全是「连续包年」的 pid）。
+        #   关一次再开，等于逼它按当前这张卡重新取一遍。
+        if blk.evaluate(is_open):
+            blk.evaluate("""el => {
+                const ms = el.querySelector('.multiselect');
+                const inp = ms && ms.querySelector('input');
+                if (inp) inp.blur();
+                document.body.click();
+            }""")
+            self.wait_until(lambda: not blk.evaluate(is_open), timeout=2000)
+
+        for _ in range(3):
+            if blk.evaluate(is_open):
+                return
+            blk.evaluate("""el => {
+                const ms = el.querySelector('.multiselect');
+                if (!ms) return;
+                ms.scrollIntoView({block: 'center'});
+                const tags = ms.querySelector('.multiselect__tags') || ms;
+                tags.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                tags.click();
+                const inp = ms.querySelector('input');
+                if (inp) inp.focus();
+            }""")
+            self.wait_until(lambda: blk.evaluate(is_open), timeout=2000)
+        if not blk.evaluate(is_open):
+            raise FillError(f"「{label}」的下拉点了 3 次都没展开")
 
     def _vue_pick(self, blk, label: str, value: str, contains: bool):
         """vue-multiselect（省份 / sku选择 / 价格面板pid）：选项就在块里面。"""
-        inp = self._open(blk, real_click=False)
+        self._vue_open(blk, label)
+        inp = blk.query_selector("input")
+        # ⚠ 打字之前**先等池子加载出来**。「价格面板pid」的候选是点中 SKU 卡片之后
+        #   现拉的（panel/list?...&month=12，一个 SKU 一两百条），内网要好几秒。
+        #   池子还空着就把「134」打进去，等于在空列表上过滤 —— 一条不剩，
+        #   报出来是「下拉里没有 134，能看到的：[]」，看着像这个 pid 不存在，
+        #   实际上它就在池子里（实测 190 条里正有 134）。这个坑排了三轮才定位。
+        # ⚠ 先只等一小会儿（PROBE_MS）。候选拉得出来的话一两秒就到了；
+        #   拉不出来就是**页面把池子丢了**，那种情况等多久都没用 ——
+        #   要立刻去做补救动作（重选一次 panel_type）让它重拉。
+        #   原来这里一上来就按 self.timeout 等满，12 个卡种光干等就好几分钟。
+        if not self.wait_until(lambda: bool(self._vue_options(blk)), timeout=PROBE_MS):
+            if self._recover(label):
+                self._vue_open(blk, label)
+                self.wait_until(lambda: bool(self._vue_options(blk)), timeout=self.timeout)
+            elif not self.wait_until(lambda: bool(self._vue_options(blk)),
+                                     timeout=self.timeout - PROBE_MS):
+                self._note(f"「{label}」的候选一直没加载出来，先按现在能看到的找")
         if contains:
             # ⚠ 有的搜索框是 readonly（打字过滤这条路不存在），往里 fill 只会把
             #   浮层弄没、然后报「下拉里没有 xxx，能看到的：[]」。判据是 readOnly，
@@ -346,8 +436,10 @@ class PriceFiller:
             if inp.evaluate("el => !!el.readOnly"):
                 self._note(f"「{label}」的搜索框是只读的，改成直接在选项里找")
             else:
+                before = self._vue_options(blk)
                 inp.fill(str(value))
-                self.page.wait_for_timeout(400)
+                # 过滤是本地的，列表一变就往下走；别写死 400ms
+                self.wait_until(lambda: self._vue_options(blk) != before, timeout=1500)
         # ⚠ 等的是「**匹配上的那条**出现」，不是「有选项了」：
         #   「价格面板pid」打完字是去后台重搜的，内网实测要好几秒；
         #   而且重搜期间列表里躺的还是上一轮的旧选项 —— 只等「有选项」会拿到旧的，
@@ -461,37 +553,118 @@ class PriceFiller:
         if set(cur) != set(want):
             raise FillError(f"「{label}」最后是 {cur}，想要的是 {want}")
 
-    def multi_search_select(self, label: str, values: list):
+    def multi_search_select(self, label: str, values: list, expect: str = ""):
         """按 ID 同步一个**多选**的可搜索下拉（价格面板pid 就是这种）。
 
-        ⚠ 「价格面板pid」是多选，不是单选：一个单元投几个平台就填几个 pid。
-          以前当单选写，每跑一次就往里**加**一个，越攒越多还看不出来 ——
-          必须双向同步：多的删掉、少的补上。
+        ⚠ 必须双向同步：多的删掉、少的补上。当单选写的话每跑一次就往里加一个，
+          越攒越多还看不出来。
         ⚠ 选项文字是「140(normal,安卓,连续包年,所有用户,…)」，我们手里只有 140，
           所以比对的是**左括号前面那一截**，不能用全等。
+
+        做法：**开一次、读一次全量、把要的逐个点掉**。逐个打字搜的话一个 pid 约
+        5 秒，一个单元 12 个卡种 × 9 个 pid 就是九分钟；不打字池子本来就是全的。
+
+        ⚠ 别拿「选项文字里有没有这个卡种名」当串卡的判据 —— **超大档位的 pid，
+          描述里写的还是「连续包年」**（文档 §2.5 记过）。按那个判会把正常的
+          全判成串卡。真要判就看「想要的 pid 在不在池子里」。
+        ⚠ 每选一次控件会重渲染，所以不能攥着 li 的句柄：每次都在 evaluate 里
+          按文字重新找。
         """
         want = [str(v).strip() for v in (values or []) if str(v).strip()]
         blk = self.block(label)
         head = lambda t: _norm(t).split("(")[0].strip()
+        cur = lambda: [head(t) for t in self._tags(blk)]
 
-        for _ in range(40):
-            cur = [head(t) for t in self._tags(blk)]
-            extra = [t for t, h in zip(self._tags(blk), cur) if h not in want]
-            if extra:
-                self._remove_tag(blk, extra[0])
-                self.page.wait_for_timeout(200)
-                continue
-            missing = [v for v in want if v not in cur]
-            if not missing:
+        # ---- 1. 多出来的先删掉 ----
+        for _ in range(len(want) + 20):
+            tags = self._tags(blk)
+            extra = [t for t in tags if head(t) not in want]
+            if not extra:
                 break
-            self._vue_pick(blk, label, missing[0], contains=True)
-            self.page.wait_for_timeout(250)
-        else:
-            raise FillError(f"「{label}」反复调整了 40 次还没对上，别再转了")
+            n = len(tags)
+            self._remove_tag(blk, extra[0])
+            self.wait_until(lambda n=n: len(self._tags(blk)) < n, timeout=3000)
 
-        cur = [head(t) for t in self._tags(blk)]
-        if set(cur) != set(want):
-            raise FillError(f"「{label}」最后是 {cur}，想要的是 {want}")
+        if not [v for v in want if v not in cur()]:
+            return
+
+        # ---- 2. 开一次读全量；想要的没在池子里就补救一次再读 ----
+        # ⚠ 轮询判据只看「池子非空」，别在每一轮里给 9 个 pid 各扫一遍 190 条候选 ——
+        #   那是纯浪费。匹配放到池子到位之后做一次；真缺了再补救、再匹配一次。
+        self._vue_open(blk, label)
+        if not self.wait_until(lambda: bool(self._vue_options(blk)), timeout=PROBE_MS):
+            if self._recover(label):
+                self._vue_open(blk, label)
+            self.wait_until(lambda: bool(self._vue_options(blk)), timeout=self.timeout)
+
+        def pick_all():
+            opts = self._vue_options(blk)
+            got = {v: self._match(opts, v, contains=True) for v in want}
+            return opts, got
+
+        options, picked = pick_all()
+        if any(h is None for h in picked.values()) and self._recover(label):
+            self._vue_open(blk, label)
+            self.wait_until(lambda: bool(self._vue_options(blk)), timeout=self.timeout)
+            options, picked = pick_all()
+        for v, hit in picked.items():
+            if hit is None:
+                raise FillError(f"「{label}」的候选里没有「{v}」。候选共 {len(options)} 条，"
+                                f"前几条：{options[:6]}")
+
+        # ---- 3. 一口气点完，最后统一核对，只补漏的 ----
+        for _ in range(3):
+            todo = [v for v in want if v not in cur()]
+            if not todo:
+                break
+            for v in todo:
+                self._click_vue_option(blk, picked[v])
+                self.page.wait_for_timeout(50)
+            self.wait_until(lambda: not [v for v in want if v not in cur()], timeout=4000)
+
+        for v in [x for x in want if x not in cur()]:
+            n = len(self._tags(blk))
+            self._click_vue_option(blk, picked[v], plain=True)
+            if not self.wait_until(lambda n=n: len(self._tags(blk)) > n, timeout=4000):
+                raise FillError(f"「{label}」下拉里点了「{picked[v]}」但没选上"
+                                f"（mousedown 和 click 都试过了）")
+
+        got = cur()
+        if set(got) != set(want):
+            raise FillError(f"「{label}」最后是 {got}，想要的是 {want}")
+
+    def _poke_search(self, blk):
+        """空搜一下，逼 vue-multiselect 按当前选中的卡片重新取候选。"""
+        inp = blk.query_selector("input")
+        if inp is None or inp.evaluate("el => !!el.readOnly"):
+            return
+        before = self._vue_options(blk)
+        inp.fill("0")
+        self.wait_until(lambda: self._vue_options(blk) != before, timeout=1500)
+        inp.fill("")
+        self.wait_until(lambda: len(self._vue_options(blk)) > 1, timeout=self.timeout)
+
+    @staticmethod
+    def _click_vue_option(blk, text: str, plain: bool = False):
+        """点 vue-multiselect 的一个选项。
+
+        ⚠ ElementHandle.evaluate 的回调第一个参数是**元素**，第二个才是传进来的值。
+        ⚠ 手势不统一：sku选择 / 省份 认 mousedown，价格面板pid 认 click。
+          两种一起发等于点两下 —— 多选里第二下是取消选中，只能一种一种试。
+        ⚠ 已经选中的不要再点，点了就是取消。
+        """
+        blk.evaluate(
+            """(el, [text, plain]) => {
+                const li = [...el.querySelectorAll('li.multiselect__element')]
+                    .find(x => (x.innerText || '').trim() === text);
+                if (!li) return;
+                const opt = li.querySelector('span.multiselect__option') || li;
+                if (opt.className.includes('--selected')) return;
+                opt.scrollIntoView({block: 'nearest'});
+                if (plain) { opt.click(); return; }
+                opt.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                opt.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+            }""", [text, plain])
 
     @staticmethod
     def _tags(blk) -> list[str]:
@@ -807,18 +980,25 @@ class PriceFiller:
     # ================================================================ 组合价格
     def set_combine(self, pairs: list[list[str]]):
         """0元购的「组合价格」：点 N 次「增加组合价格」，再逐行填两个下拉。"""
+        # ⚠ 「搭售类型」刚选完，0元购那一段还在渲染 —— 不等一下就点加号，
+        #   按钮在、点了却不加行（实测「要 1 行，点了加号只出来 0 行」）。
+        self._settle()
         blk = self.block("组合价格")
-        have = self._combine_rows(blk)
-        for _ in range(max(0, len(pairs) - have)):
+
+        # 点一次验一次，没加上就再点。别「按缺几行点几下」——那样一次没生效就永远差着。
+        for _ in range(len(pairs) * 3 + 3):
+            have = self._combine_rows(blk)
+            if have >= len(pairs):
+                break
             blk.evaluate("""el => {
                 const btn = el.querySelector('button.add-combine-btn');
                 if (btn) { btn.scrollIntoView({block:'center'}); btn.click(); }
             }""")
-            self.page.wait_for_timeout(350)
+            self.wait_until(lambda n=have: self._combine_rows(blk) > n, timeout=3000)
 
         rows = self._combine_rows(blk)
         if rows < len(pairs):
-            raise FillError(f"「组合价格」要 {len(pairs)} 行，点了加号只出来 {rows} 行")
+            raise FillError(f"「组合价格」要 {len(pairs)} 行，反复点加号也只出来 {rows} 行")
 
         for i, (pid, goods) in enumerate(pairs):
             self._combine_fill(blk, i * 2, pid)
@@ -841,13 +1021,20 @@ class PriceFiller:
         self._open_input(inp)
 
         if not inp.evaluate("el => el.readOnly"):
-            inp.type(str(value), delay=60)
+            inp.type(str(value), delay=15)
 
         # ⚠ 等「匹配上的那条」出现，不是「有选项」：这两格也是远程搜的，
         #   回来之前浮层里躺的还是上一轮的旧选项。
-        self.wait_until(
-            lambda: self._match(self.page.evaluate(JS_OPEN_OPTIONS), value, True) is not None,
-            timeout=self.timeout)
+        if not self.wait_until(
+                lambda: self._match(self.page.evaluate(JS_OPEN_OPTIONS), value, True) is not None,
+                timeout=self.timeout):
+            if self._recover(f"组合价格第 {index + 1} 个下拉"):
+                self._open_input(inp)
+                if not inp.evaluate("el => el.readOnly"):
+                    inp.type(str(value), delay=60)
+                self.wait_until(
+                    lambda: self._match(self.page.evaluate(JS_OPEN_OPTIONS), value, True) is not None,
+                    timeout=self.timeout)
         texts = self.page.evaluate(JS_OPEN_OPTIONS)
         hit = self._match(texts, value, contains=True)
         if hit is None:
@@ -856,37 +1043,58 @@ class PriceFiller:
         self.page.evaluate(JS_CLICK_OPEN_OPTION, hit)
         self.page.wait_for_timeout(250)
 
+    def _recover(self, label: str) -> bool:
+        """候选池空了，试一次补救动作。成功发起过就返回 True。
+
+        ⚠ 定向那条链路上，「价格面板pid」和「组合价格」的候选是跟着
+          「价格面板panel_type」拉回来的，偶尔会拉成空。**重选一次 panel_type
+          它就会重拉**（运营实测，也是这个坑唯一的解法）。
+          补救动作由 pp_runner 注入，这里只负责在该用的时候用一次。
+        """
+        if not self._on_empty:
+            return False
+        # 一张卡片上补救一次就够了：pid 拉出来之后，同一张卡的组合价格也跟着有了。
+        if getattr(self, "_recovered", False):
+            return False
+        self._recovered = True
+        self._note(f"「{label}」候选是空的，重选一次 panel_type 让它重新拉")
+        try:
+            self._on_empty()
+        except Exception as e:
+            self._note(f"重选 panel_type 没成功：{e}")
+            return False
+        self._settle()
+        return True
+
     # ================================================================ 二次确认
     def confirm_modal(self) -> str:
         """点掉保存时弹出来的二次确认（「优先级重复」那种）。返回弹窗标题，没弹就返回空。
 
-        ⚠ 页面底部**常驻**一组「保存并下一步 / 保存返回 / 取消」，弹窗里也有
-          「确定 / 取消」——按文字全局找会点到页面自己那个「取消」上，
-          等于把刚填的一整页丢掉。所以只认「祖先里有 position:fixed 的浮层」
-          里面的那个确定。
-        ⚠ 弹窗内容是从后台拉的（还带分页），点完保存两秒内根本弹不出来 ——
-          调用方要在整个等待期间反复看，不能只瞄一眼。
+        ⚠ 判据就是「页面上有没有可见的『确定』按钮」——页面自己的底栏是
+          「保存并下一步 / 保存返回 / 取消」，没有确定，所以不会误伤。
+        ⚠ 这段 JS 里**一个反斜杠转义都不要写**（换行、空白那一类），很容易在某一层
+          （Python 字符串 / 生成脚本 / heredoc）被提前解释成真的换行或制表符，
+          塞进 JS 源码就是语法错误，而报出来只有一句「Invalid or unexpected token」，
+          完全看不出是转义的锅 —— 这个坑连着栽了两次。要取首行就用 charCode。
         """
         return self.page.evaluate("""() => {
+            const NL = String.fromCharCode(10);
             const vis = e => { const r = e.getBoundingClientRect();
                                return r.width > 0 && r.height > 0; };
-            const inOverlay = e => {
-                for (let p = e; p; p = p.parentElement) {
-                    const s = getComputedStyle(p);
-                    if (s.position === 'fixed' && vis(p)) return p;
-                }
-                return null;
-            };
+            const flat = t => (t || '').split(NL).join('').split(' ').join('');
             const btns = [...document.querySelectorAll('button')]
-                .filter(b => vis(b) && b.innerText.replace(/\\s/g, '') === '确定');
-            for (const b of btns.reverse()) {          // 后挂上去的浮层排在后面
-                const box = inOverlay(b);
-                if (!box) continue;
-                const title = (box.innerText || '').trim().split('\\n')[0].slice(0, 30);
-                b.click();
-                return title || '二次确认';
+                .filter(b => vis(b) && flat(b.innerText) === '确定');
+            if (!btns.length) return '';
+            const b = btns[btns.length - 1];      // 后挂上去的浮层排在后面
+            let title = '';
+            for (let p = b; p; p = p.parentElement) {
+                const t = (p.innerText || '').trim().split(NL)[0];
+                if (t && t.length <= 20) title = t;
+                if (p.getBoundingClientRect().height > 200) break;
             }
-            return '';
+            b.scrollIntoView({block: 'center'});
+            b.click();
+            return title || '二次确认';
         }""")
 
     # ================================================================ 页面报错

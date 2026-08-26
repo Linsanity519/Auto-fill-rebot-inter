@@ -45,14 +45,65 @@ PANEL1, PANEL2 = PANEL_KEYS[0], PANEL_KEYS[1]
 
 
 # ---------------------------------------------------------------- cfg 读取
-def unit_fields(cfg: dict) -> list[dict]:
+# ---------------------------------------------------------------- 生效渠道
+# 「生效渠道」切的是整张表单，不是一个普通单选：选「定向」之后页面上
+# 人群 / 生效平台 / 运营商 / 省份 / 投放区域 / 频次 / 优先级 / 内容设置 /
+# 赠单片 / 创意赛马 全都不存在，只多一个「价格面板panel_type」。
+# 它在「投放配置」页上填（yaml 的 prep_from_unit），所以生成模板和跑之前都拿得到，
+# Excel 出哪些列、页面填哪些字段都按它来。
+CHANNEL = "生效渠道"
+DIRECT = "定向"
+
+
+def channel_of(cfg: dict, settings: dict | None = None) -> str:
+    """本批投放走哪套表单。取不到就按「全局」——那是页面默认。"""
+    vals = (settings or {}).get("pp_prep") or {}
+    if not vals:
+        from . import ad_prep as P
+        try:
+            vals = P.load(cfg)
+        except Exception:
+            vals = {}
+    return str(vals.get(CHANNEL, "") or "全局").strip() or "全局"
+
+
+def is_direct(data: dict | None) -> bool:
+    """这一批跑的是不是定向那套表单。判据是 load() 收进来的 prep，不是 settings。"""
+    return str(((data or {}).get("prep") or {}).get(CHANNEL, "")).strip() == DIRECT
+
+
+def dropped_by_channel(cfg: dict, channel: str) -> set[str]:
+    """这套渠道下页面上**不存在**的字段名（含它们 reveals 出来的子孙）。
+
+    ⚠ 子孙必须一起算。direct_drops 里写的是「人群选组」，但「我想投放」
+      「人群名称」这些是它 reveals 出来的 —— 父字段没了，子字段更没有，
+      漏掉的话 Excel 里会留下一串填了也没处填的列。
+    """
+    if str(channel).strip() != DIRECT:
+        return set()
+    drop = {str(x) for x in (cfg.get("direct_drops") or [])}
+    flat = W.flatten(W.unit_fields(cfg, position(cfg)))
+    for _ in range(6):                      # 级联最多几层，跑到不再变为止
+        more = {f["name"] for f in flat
+                if f.get("_when") and f["_when"][0] in drop} - drop
+        if not more:
+            break
+        drop |= more
+    return drop
+
+
+def unit_fields(cfg: dict, channel: str = "全局") -> list[dict]:
     """Excel「单元」表要出的列。
 
     excel_from_unit 里的字段定义在 unit_common（页面控件那份），这里只按名字借过来 ——
     同一个字段的 label / 选项 / 必填 / 级联只该有一处。
     它 reveals 出来的子字段自动跟过来（选中类型 → 面板1/2选中套餐）。
+
+    ⚠ 生效渠道 = 定向 时，direct_drops 里那些列一列都不出 —— 页面上根本没有它们，
+      出了列人填了也没处填，还会在跑的时候报「页面上找不到字段」。
     """
-    out = [dict(f) for f in (cfg.get("unit_fields") or [])]
+    drop = dropped_by_channel(cfg, channel)
+    out = [dict(f) for f in (cfg.get("unit_fields") or []) if f["name"] not in drop]
     names = [str(n) for n in (cfg.get("excel_from_unit") or [])]
     if not names:
         return out
@@ -63,7 +114,7 @@ def unit_fields(cfg: dict) -> list[dict]:
     keep = set(names)
     for f in W.flatten(W.unit_fields(cfg, position(cfg))):
         when = f.get("_when")
-        if f["name"] in owned:
+        if f["name"] in owned or f["name"] in drop:
             continue
         if f["name"] in keep or (when and when[0] in keep):
             keep.add(f["name"])
@@ -238,8 +289,29 @@ def sku_map(cfg: dict, data: dict, values: dict, sku: str) -> dict:
     # ⚠ 搭售类型不从映射表读 —— 那张表只回答「搭什么」，不回答「搭不搭」。
     #   两边都能说同一件事的话，不一致时谁赢没人讲得清。
     item["搭售类型"] = tie
+
+    # ⚠ 定向要**每个选中的 SKU 都填 pid**，搭售是「无」的也要 —— 少一个页面就
+    #   不让保存，而且不给任何提示（实测运营手工配的 40521：6 个 SKU 全带 pid、
+    #   搭售却都是「无」）。所以这一段必须排在 `tie == "无"` 那个提前 return 前面。
+    # ⚠ 定向下页面上没有「生效平台」这一档（整个定向投放段都换掉了），但**策略中心
+    #   里照样配得到** —— 它是策略字段，只是这套表单不显示它。配了就按它挑 pid：
+    #   只投 iPhone 的一批单元，把安卓/PC/HD 的 pid 也挂上去，那几个端就真的
+    #   跟着生效了，等于投出去的范围和策略对不上。策略中心那一栏留空才退回
+    #   「映射表里这个卡种有几个 pid 就填几个」。
+    if is_direct(data):
+        want = str((values or {}).get("生效平台", "") or "").strip()
+        if want:
+            pids, missing = pids_for_platforms(cfg, item, want)
+        else:
+            pids, missing = list(dict.fromkeys((item.get("pids") or {}).values())), []
+        item["pid清单"] = pids
+        item["缺平台"] = missing
+        item["组合价格"] = _spread_combine(item.get("组合价格", ""), pids)
+        return item
+
     if tie == "无":
         return item
+
     pids, missing = pids_for_platforms(cfg, item, (values or {}).get("生效平台", ""))
     item["pid清单"] = pids
     item["缺平台"] = missing
@@ -330,6 +402,9 @@ def values_for(cfg: dict, data: dict, unit: dict) -> dict:
     """
     name = str(unit["header"].get(UNIT_NAME, ""))
     vals = dict(strategy_for(cfg, data.get("strategy") or {}, name))
+    # 「投放配置」页上填的（生效渠道 + 定向时的 panel_type）。本批共用，
+    # 排在策略前面 —— 它是「这批投放长什么样」，不该被某套策略方案盖掉。
+    vals.update({k: str(v) for k, v in (data.get("prep") or {}).items() if str(v).strip()})
     # Excel 这一行填了什么就盖什么（活动/名字/时间，以及借过来的那几个页面字段）
     for k, v in (unit["header"] or {}).items():
         if str(v).strip():
@@ -467,8 +542,19 @@ def load(data_file: str, cfg: dict, settings: dict | None = None) -> dict:
         })
 
     return {"activity": _activity(data_file, cfg, settings),
-            "units": units, "strategy": payload,
+            "units": units, "strategy": payload, "prep": _prep_values(cfg, settings),
             "pid_map": pid_map, "pid_error": pid_error}
+
+
+def _prep_values(cfg: dict, settings: dict) -> dict:
+    vals = (settings or {}).get("pp_prep") or {}
+    if vals:
+        return dict(vals)
+    from . import ad_prep as P
+    try:
+        return P.load(cfg)
+    except Exception:
+        return {}
 
 
 def _activity(data_file: str, cfg: dict, settings: dict) -> dict:
@@ -539,6 +625,7 @@ def validate(cfg: dict, data: dict) -> list[str]:
     issues: list[str] = []
     payload = data.get("strategy") or {}
     pos = position(cfg)
+    channel = str((data.get("prep") or {}).get(CHANNEL, "") or "全局").strip() or "全局"
     all_skus = set(sku_list(cfg))
     units = data.get("units") or []
 
@@ -560,7 +647,7 @@ def validate(cfg: dict, data: dict) -> list[str]:
 
         # 名字没命中任何关键词、组里又没兜底 —— 说人话，别报成「某字段没配」
         issues += [f"{tag}{x}" for x in S.unmatched_hint(cfg, payload, name)]
-        issues += _check_required(cfg, vals, pos, tag)
+        issues += _check_required(cfg, vals, pos, tag, channel)
 
         if len(name) > 24:
             issues.append(f"{tag}「{UNIT_NAME}」超过 24 字（页面限制），现在 {len(name)} 字")
@@ -601,16 +688,23 @@ def validate(cfg: dict, data: dict) -> list[str]:
     return issues
 
 
-def _check_required(cfg: dict, vals: dict, pos: str, tag: str) -> list[str]:
+def _check_required(cfg: dict, vals: dict, pos: str, tag: str,
+                    channel: str = "全局") -> list[str]:
     """该有值而没值的必填字段（不管它是策略中心供的还是投放配置页供的）。
 
-    ⚠ 只查「这个单元这次真的会出现」的字段：条件字段（内容类型只在
-      内容设置=指定 时才有）没触发就不该拦，否则界面上根本没那一项、
-      却一直提示没填。触发判断统一走 wizard_schema.when_active。
+    ⚠ 只查「这个单元这次真的会出现」的字段：
+      · 条件字段（内容类型只在 内容设置=指定 时才有）没触发就不该拦，
+        否则界面上根本没那一项、却一直提示没填。触发判断走 wizard_schema.when_active。
+      · **生效渠道=定向 时页面上整片消失的那些也不能拦**（direct_drops）——
+        模板里连列都没出，再要求填就成了死结（实测：定向模板没有「人群选组」列，
+        校验却说「Excel 里这一行的人群选组没填」）。
     """
     out = []
-    excel_names = {f["name"] for f in unit_fields(cfg)}
+    drop = dropped_by_channel(cfg, channel)
+    excel_names = {f["name"] for f in unit_fields(cfg, channel)}
     for f in W.flatten(W.unit_fields(cfg, pos)):
+        if f["name"] in drop:
+            continue
         if f.get("scope") in ("manual", "derived") or not f.get("required"):
             continue
         when = f.get("_when")
@@ -646,6 +740,10 @@ def _check_sku_map(cfg: dict, data: dict, vals: dict, skus: list, tag: str) -> l
             continue
 
         tie = m.get("搭售类型", "") or "无"
+        # ⚠ 定向下每个选中的 SKU 都要有 pid，搭售是「无」的也要（页面不让保存，
+        #   还不给原因）。所以这一条要排在「搭售=无 就跳过」前面。
+        if is_direct(data):
+            out += _check_direct_pids(m, vals, sku, plan, tag)
         if tie == "无":
             continue
         if tie not in allowed:
@@ -680,6 +778,48 @@ def _check_sku_map(cfg: dict, data: dict, vals: dict, skus: list, tag: str) -> l
                     out.append(f"{tag}{where}的组合价格「{':'.join(pr)}」不成对，"
                                f"要写成「单会员价格pid:加购商品id」")
     return out
+
+
+def _check_direct_pids(m: dict, vals: dict, sku: str, plan: str, tag: str) -> list[str]:
+    """定向下这个卡种的 pid 挑到了没有（和搭不搭售无关，页面每个卡种都要）。
+
+    ⚠ 挑的口径是策略中心的「生效平台」，留空才是「映射表里有几个就填几个」。
+      所以挑空了必须把口径说出来 —— 不然人对着一张明明写满 pid 的映射表，
+      根本想不到是被平台筛掉的（定向那套表单上又看不见「生效平台」这一栏）。
+    """
+    if not plan:
+        return [f"{tag}生效渠道是「定向」，每个卡种都要填 pid，但策略里没选 PID 映射方案"]
+    plat = str((vals or {}).get("生效平台", "") or "").strip()
+    where = f"PID 映射表（方案「{plan}」/ {sku}）"
+    if not m.get("pid清单"):
+        how = f"里，策略中心的生效平台（{plat}）" if plat else "里，这个卡种"
+        return [f"{tag}定向下每个卡种都要填 pid，但{where}{how}一个 pid 都没配到"]
+    if m.get("缺平台"):
+        return [f"{tag}{where}：这几个平台在映射表里没有 pid —— "
+                f"{'、'.join(m['缺平台'])}，这个卡种不会在它们上面生效"]
+    return []
+
+
+def _spread_combine(value: str, pids: list) -> str:
+    """把「组合价格」按买赠选中的那批 pid 铺开。
+
+    ⚠ 后端要求**组合价格覆盖的 pid 和买赠选中的 pid 一模一样**，不一致直接拒：
+        POST unit/save → {"code":85362,"message":"加购商品和买赠pid不相同"}
+      而页面上一点提示都没有。
+    ⚠ 定向下买赠一次就是好几个 pid（按生效平台挑出来的那几个，没配平台就是全部），
+      没道理逼人在映射表里手写七八组一模一样的「pid:加购商品id」—— 这里按加购商品id
+      自动铺开。
+      映射表里已经写全了的（每个 pid 各有各的加购商品）就原样用，不动它。
+    """
+    pairs = combine_pairs(value)
+    goods = [p[1] for p in pairs if len(p) > 1 and p[1]]
+    if not goods or not pids:
+        return value
+    if {p[0] for p in pairs if p} >= set(pids):
+        return value                     # 已经覆盖全了，人自己写的以人为准
+    if len(set(goods)) > 1:
+        return value                     # 每个 pid 配不同商品，说不清怎么铺，别自作主张
+    return ",".join(f"{pid}:{goods[0]}" for pid in pids)
 
 
 def combine_pairs(value: str) -> list[list[str]]:

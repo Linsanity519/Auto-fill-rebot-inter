@@ -22,6 +22,10 @@
 """
 from __future__ import annotations
 
+import logging
+import shutil
+from pathlib import Path
+
 from openpyxl import Workbook
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -29,7 +33,9 @@ from openpyxl.utils import get_column_letter
 
 from . import pp_data as D
 from . import wizard_strategy as S
-from .paths import user_path
+from .paths import resource, user_path
+
+log = logging.getLogger(__name__)
 
 REQ_FILL = PatternFill("solid", fgColor="FFF2CC")     # 必填 浅黄
 OPT_FILL = PatternFill("solid", fgColor="F2F2F2")     # 选填 浅灰
@@ -79,14 +85,15 @@ def build(cfg: dict, existing_activity: bool = False) -> str:
     """
     payload = S.active_payload(cfg)
     per_sku = D.sku_columns(cfg, payload)
+    channel = D.channel_of(cfg)
 
     wb = Workbook()
     if existing_activity:
-        _units_sheet(wb.active, cfg, per_sku)
+        _units_sheet(wb.active, cfg, per_sku, channel)
     else:
         _activity_sheet(wb.active, cfg)
-        _units_sheet(wb.create_sheet("单元"), cfg, per_sku)
-    _help_sheet(wb.create_sheet("填写说明"), cfg, per_sku, existing_activity)
+        _units_sheet(wb.create_sheet("单元"), cfg, per_sku, channel)
+    _help_sheet(wb.create_sheet("填写说明"), cfg, per_sku, existing_activity, channel)
     path = user_path("data", f"{cfg['name']}_模板.xlsx")
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
@@ -99,13 +106,24 @@ def pid_path(cfg: dict):
 
 
 def _build_pid(cfg: dict) -> str:
-    """空的 PID 映射表：表头 + 26 个 SKU 各占一行，人只要往后面几列填。
+    """PID 映射表。
 
-    ⚠ 已经有这个文件就不覆盖 —— 它是人一格一格抄出来的，重生成一次模板
-      就把人家的 pid 冲掉，这种事只要发生一次就再没人敢点「生成模板」。
+    优先**把 assets 里那份默认表拷过来** —— 那是运营一格一格抄出来的真 pid
+    （5 套方案、190 多行），新装的人开箱就能用，不用再抄一遍。
+    assets 里没有才退回去生成一张空表（表头 + 每个 SKU 一行）。
+
+    ⚠ 已经有这个文件就不覆盖 —— 它是人自己维护的，重生成一次模板就把人家的 pid
+      冲掉，这种事只要发生一次就再没人敢点「生成模板」。
     """
     p = pid_path(cfg)
     if p.exists():
+        return str(p)
+
+    default = resource("assets", f"{cfg['name']}_PID映射表.xlsx")
+    if default and Path(default).exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(default, p)
+        log.info("PID 映射表用了自带的默认表：%s", default)
         return str(p)
     cols = D.pid_columns(cfg)
     wb = Workbook()
@@ -180,9 +198,9 @@ def _activity_sheet(ws, cfg: dict):
     ws.freeze_panes = "A2"
 
 
-def _units_sheet(ws, cfg: dict, per_sku: list[dict] | None = None):
+def _units_sheet(ws, cfg: dict, per_sku: list[dict] | None = None, channel: str = "全局"):
     ws.title = "单元"
-    fields = D.unit_fields(cfg) + list(per_sku or [])
+    fields = D.unit_fields(cfg, channel) + list(per_sku or [])
     for i, f in enumerate(fields, 1):
         cell = ws.cell(row=1, column=i, value=f["name"])
         cell.font = Font(bold=True)
@@ -211,7 +229,7 @@ def _units_sheet(ws, cfg: dict, per_sku: list[dict] | None = None):
 
 
 def _help_sheet(ws, cfg: dict, per_sku: list[dict] | None = None,
-                existing_activity: bool = False):
+                existing_activity: bool = False, channel: str = "全局"):
     per_sku = list(per_sku or [])
     ws.column_dimensions["A"].width = 26
     ws.column_dimensions["B"].width = 30
@@ -262,7 +280,14 @@ def _help_sheet(ws, cfg: dict, per_sku: list[dict] | None = None,
         r += 1
 
     head("「单元」表 · 单元层的列")
-    for f in D.unit_fields(cfg):
+    if channel == D.DIRECT:
+        line("生效渠道 = 定向", "", "页面上这一套只有 18 个字段：人群、生效平台、运营商、省份、"
+                                  "投放区域、频次、优先级、内容设置、赠单片、创意赛马**都不存在**，"
+                                  "所以这张表里也不出这些列。要它们就回「投放配置」页把生效渠道切回「全局」，"
+                                  "再重新生成一次模板。"
+                                  "另：策略中心的「生效平台」定向下仍然有用 —— 每个卡种填哪几个 pid "
+                                  "就是按它去 PID 映射表里挑的，留空才是「这个卡种有几个就填几个」。")
+    for f in D.unit_fields(cfg, channel):
         line(f["name"], "必填" if f.get("required") else "", _describe(f))
     r += 1
 

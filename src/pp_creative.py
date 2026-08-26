@@ -190,16 +190,19 @@ class CreativeFiller:
             raise FillError(f"「{label}」找不到这个文件：{path}"
                             f"（可以填本地路径、图片网址，或者直接把图贴进 Excel 那一格）")
 
-        before = blk.locator("img").count()
-        inp.set_input_files(_ascii_copy(path))
-        # ⚠ 必须等预览图出来，而且**等不到要报错**。传图是往 CDN 发的网络请求，
-        #   内网慢的时候十几秒都回不来；早先这里等超时了不管、直接往下走 ——
-        #   非必填的那几栏（icon）页面不会拦，于是保存下来就是空的，
-        #   日志上还一片「成功」。静默丢素材比报错难查一百倍。
-        if not self._wait(lambda: blk.locator("img").count() > before,
+        # ⚠ 必须等预览图出来，而且**等不到要重传、再等不到要报错**。传图是往 CDN
+        #   发的网络请求，实测会偶发地什么都不发生（页面不报错、预览也不出）。
+        #   早先这里等超时了不管、直接往下走 —— 非必填的那几栏（icon）页面不会拦，
+        #   于是保存下来就是空的、日志上还一片「成功」。静默丢素材比报错难查一百倍。
+        local = _ascii_copy(path)
+        for attempt in range(3):
+            before = blk.locator("img").count()
+            inp.set_input_files(local)
+            if self._wait(lambda: blk.locator("img").count() > before,
                           timeout=max(self.timeout, 30000)):
-            raise FillError(f"「{label}」传上去了但页面一直没出预览图，"
-                            f"这一栏多半是空的。文件：{path}")
+                return
+            self._note(f"「{label}」第 {attempt + 1} 次传上去没出预览图，重传")
+        raise FillError(f"「{label}」传了 3 次都没出预览图，这一栏多半是空的。文件：{path}")
 
     def fill_or_upload(self, label: str, value: str):
         """既能填链接也能传文件的那种（sku红包弹窗动画）。

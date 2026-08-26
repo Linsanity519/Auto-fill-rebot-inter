@@ -495,7 +495,12 @@ def field_defs_for_ui(cfg: dict) -> list[dict]:
             kind = "ordered_multi"
         elif t == "pp_file":
             kind = "file"
-        elif t in ("checkbox_sync_formily", "multiselect_vue", "multiselect_antd"):
+        # ⚠ 这张表要覆盖**所有**配置类型的多选类型名。价格面板那套 pp_* 一开始
+        #   没登记，于是「收银台类型」「生效平台」「运营商」「投放区域」「内容类型」
+        #   在策略中心里全被当成 `elif opts` 掉到了单选下拉 —— 页面上明明是复选框，
+        #   界面上却只能选一个，而且一点报错都没有。加类型时记得回来加一行。
+        elif t in ("checkbox_sync_formily", "multiselect_vue", "multiselect_antd",
+                   "pp_checkbox", "pp_multiselect") and opts:
             kind = "multi"
         elif t == "number_range_by_label":
             kind = "range"          # 页面上是「n 天至 m 天」两个数字框，界面要对齐
