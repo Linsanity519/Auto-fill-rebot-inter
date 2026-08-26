@@ -110,11 +110,56 @@ class WizardFiller:
 
             for val, subs in (f.get("reveals") or {}).items():
                 if self._match_option(value, val, f):
-                    # ⚠ 选了值之后条件字段是异步渲染出来的。以前固定睡 300ms：
-                    #   渲染快的时候白等，慢的时候又不够（count() 读到 0 就走了兜底路径）。
-                    #   改成等控件数量真的变化，通常一百多毫秒就返回。
-                    self.wait_until(lambda: self._control_count() != before_n, timeout=1500)
+                    self._wait_revealed(subs, before_n)
                     self.fill(subs, data, scope)
+
+    def _wait_revealed(self, subs: list[dict], before_n: int):
+        """等条件字段渲染出来，能填了就立刻返回。
+
+        ⚠ 别再拿「控件总数变了没有」当判据：v1 创意页选一个单选不改变
+          input/textarea/label 的数量（实测选前选后都是 23 个），条件一辈子不成立，
+          每个带 reveals 的字段白烧满 1.5 秒超时 —— 一条创意就是 1.8 秒，
+          292 条创意里这一处就有 9 分钟。
+          改成直接问「第一个子字段在页面上了吗」：在了就走（通常 5ms），
+          真没渲染出来才接着等。问不出来（既没 ph 也没 label）才退回数控件。
+        """
+        probe = self._probe_of(subs[0]) if subs else None
+        if probe is None:
+            self.wait_until(lambda: self._control_count() != before_n, timeout=1500)
+            return
+        sel, text = probe
+        self.wait_until(lambda: self._exists(sel, text), timeout=1500, step=60)
+
+    @staticmethod
+    def _probe_of(f: dict):
+        """(css, 文字) —— 用来问「这个字段在页面上了吗」。都给不出就 None。"""
+        ph = f.get("ph") or f.get("placeholder")
+        if ph:
+            return (f"input[placeholder*='{ph}'], textarea[placeholder*='{ph}']", None)
+        label = f.get("label")
+        if label:
+            return (None, label)
+        return None
+
+    def _exists(self, sel: str | None, text: str | None) -> bool:
+        """一次 JS 判断页面上有没有这个控件 / 这段 label 文字（约 2ms）。
+
+        ⚠ 文字比对在 JS 里做「剥掉星号和冒号再全等」，不拼正则 ——
+          label 会写成「*生效平台」「文案：」，而字段名里带的括号、星号
+          （「icon图标(138*138)」）拼进正则就是语法炸弹。
+        """
+        try:
+            return bool(self.page.evaluate(r"""([sel, text]) => {
+                if (sel && document.querySelector(sel)) return true;
+                if (!text) return false;
+                const want = text.trim();
+                const norm = s => (s || '').trim()
+                    .replace(/^\*/, '').replace(/[:：]$/, '').trim();
+                return [...document.querySelectorAll('label, span, div')]
+                    .some(e => e.children.length <= 1 && norm(e.innerText) === want);
+            }""", [sel, text]))
+        except Exception:
+            return False
 
     @staticmethod
     def _match_option(value: str, option: str, f: dict) -> bool:
