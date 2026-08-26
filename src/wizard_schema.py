@@ -1,6 +1,8 @@
 """wizard 模式的配置解析：把 profile 展开成「每个资源位实际要填哪些字段」。
 
-⚠ 只服务 mode: wizard 的 profile。老的单弹窗配置（价格配置）不会走到这里。
+⚠ 名字叫 wizard_ 是历史原因，现在 **wizard 和 price_panel 都用它**
+  （pp_runner / pp_data 都 import wizard_schema as W）。
+  老的单弹窗配置（价格配置、DMP人群新建）走 datasource/template，不到这里。
 
 profile 里字段是「公共 + 增量」写法，这里负责合并成完整清单：
   单元层 = unit_common（或 unit_push） + 该资源位的 unit_extra

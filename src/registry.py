@@ -4,11 +4,15 @@
 main.py 的 --make-template 和 --cli 两处），四处要同时改、还很容易漏一处。
 新增一个 mode 现在只用在这个文件里加一条 MODES[...]。
 
-⚠ 保持函数体内 lazy import：build.bat 打包时给 PyInstaller 加了
-  --hidden-import src.dmp_data / src.ab_runner 之类的显式声明，就是因为这些模块
-  只在用到的分支里 import，静态扫描找不到，所以才需要显式声明。这里继续沿用
-  「lazy import + build.bat 里显式 hidden-import」这个组合，不要把 import 挪到模块顶部
-  （挪了的话 PyInstaller 会自动收进去，但那是巧合，不是这个组合设计上的保证）。
+⚠ 保持函数体内 lazy import。理由是**启动速度**，不是打包：
+  每个 mode 的 runner 会顺带拖进 playwright、openpyxl 那一串（browser.py
+  顶层 import sync_playwright，*_data.py 顶层 import openpyxl），
+  挪到模块顶部就变成开界面时全都 import 一遍，而用户一次只会跑一个 mode。
+
+  （2026-08-26 订正：这里原来写"lazy import 是为了配合 build.bat 里的
+   --hidden-import"，已经不对了。src/ 现在以普通文件放在 exe 旁边、不冻进包，
+   build_app.spec 的 scan_imports() 明确把 "src" 从 hiddenimports 里剔除，
+   所以 lazy 与否对打包没有任何影响。见 build_app.spec 开头。）
 """
 from __future__ import annotations
 

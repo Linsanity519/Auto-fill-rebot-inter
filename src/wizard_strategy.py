@@ -1,6 +1,10 @@
 """策略中心：把「每次都一样」的投放规则从 Excel 里搬出来，配一次、全局套用。
 
-⚠ 只服务 mode: wizard 的资源位投放。别的配置类型完全走不到这里。
+⚠ 名字叫 wizard_ 是历史原因，现在 **wizard（资源位投放）和 price_panel
+  （价格面板配置）共用这一套** —— 同一个界面、同样存 config/strategies/。
+  界面上判断「这个配置类型有没有策略中心」的依据是 yaml 里有没有
+  strategy_groups / scheme_groups，不是 mode 等于什么（见 webapp.py 的注释），
+  所以再接一个配置类型进来也不用改这里。
 
 一套策略由三块组成：
 
