@@ -75,7 +75,7 @@
     <div class="subtab hidden" id="wizardTabs">
       <div class="segmented" id="wizardTabSegmented">
         <div class="seg-item" data-wtab="strategy">策略中心</div>
-        <div class="seg-item active" data-wtab="deliver">资源位投放配置</div>
+        <div class="seg-item active" data-wtab="deliver" id="wizardDeliverTab">资源位投放配置</div>
       </div>
       <span style="color:var(--mu);font-size:11px" id="wizardTabHint"></span>
     </div>
@@ -110,7 +110,7 @@
         <div class="card col hidden" id="wizardCard" style="padding:16px 18px;gap:14px;margin-bottom:12px">
           <div class="sect"><span class="bar"></span><b>本次投放</b><span>先定资源位和活动，模板按这里的选择生成</span></div>
 
-          <div class="row" style="gap:10px;align-items:flex-start">
+          <div class="row" id="wizardPosRow" style="gap:10px;align-items:flex-start">
             <span class="form-label">资源位</span>
             <div class="col" style="flex:1;gap:6px;min-width:0">
               <!-- 多选下拉：18 个资源位平铺太占地方，收进下拉里，按场景分组 + 可搜索 -->
@@ -131,7 +131,7 @@
             </div>
           </div>
 
-          <div class="row" style="gap:10px;flex-wrap:wrap">
+          <div class="row" id="wizardActivityRow" style="gap:10px;flex-wrap:wrap">
             <span class="form-label">活动</span>
             <div class="segmented" id="activitySegmented">
               <div class="seg-item active" data-activity="new">本次新建活动</div>
@@ -286,7 +286,7 @@
           </div>
 
           <div class="strategy-foot">
-            <label class="row" style="gap:6px;cursor:pointer;color:var(--sub);font-size:11px">
+            <label class="row" id="strategyScopeWrap" style="gap:6px;cursor:pointer;color:var(--sub);font-size:11px">
               <input type="checkbox" id="strategyScopeCheck" checked style="accent-color:var(--pink)">
               只看本次要投的资源位用得上的字段
             </label>

@@ -46,25 +46,61 @@ def step_by_key(cfg: dict, key: str) -> dict:
 def flatten(fields: list[dict]) -> list[dict]:
     """把 reveals 里的条件字段摊平成一维清单（保序、去重）。
 
-    展开后每个字段带上 _when = (触发字段名, 触发值)，
+    展开后每个字段带上 _when = (触发字段名, [触发值...])，
     模板和校验靠它告诉用户「这列只在某某=某值时才要填」。
+
+    ⚠ 触发值是**一个清单**，因为同一个字段常常挂在同一个父字段的好几个取值下：
+      「跳转类型」选「收银台」和选「跳转链接」都要填 PC端跳转链接；
+      「搭售类型」选「买赠」和「买赠+0元购」都要填 价格面板pid。
+      以前只记第一个命中的值，界面上就会出现「选了买赠+0元购，pid 那一行反而没了」。
+      父字段不同的两处同名字段仍然只认第一处 —— 那种情况本来就该改名。
     """
     out: list[dict] = []
-    seen: set[str] = set()
+    index: dict[str, dict] = {}
 
     def walk(fs, when):
-        for f in fs:
-            f = dict(f)
-            if when:
-                f.setdefault("_when", when)
-            if f["name"] not in seen:
-                seen.add(f["name"])
+        for raw in fs:
+            name = raw["name"]
+            done = index.get(name)
+            if done is None:
+                f = dict(raw)
+                if when:
+                    f["_when"] = (when[0], [when[1]])
+                index[name] = f
                 out.append(f)
-            for val, subs in (f.get("reveals") or {}).items():
-                walk(subs, (f["name"], val))
+            elif when and done.get("_when") and done["_when"][0] == when[0]:
+                # 同一个父字段的另一个取值也会带出它 —— 把这个值也记上
+                if when[1] not in done["_when"][1]:
+                    done["_when"][1].append(when[1])
+            # ⚠ 往下走用的是 yaml 里这一处的 reveals（raw），不是已登记的那份 ——
+            #   同名字段在两处各带各的子字段时，两边的子字段都要收进来
+            for val, subs in (raw.get("reveals") or {}).items():
+                walk(subs, (name, val))
 
     walk(fields, None)
     return out
+
+
+def when_values(f: dict) -> list[str]:
+    """这个字段的触发值清单（没有条件就是空）。"""
+    when = f.get("_when")
+    return list(when[1]) if when else []
+
+
+def when_active(f: dict, trigger_value: str) -> bool:
+    """父字段现在是这个值的话，这个条件字段该不该出现 / 该不该填。
+
+    ⚠ 三种匹配都要：
+      全等   —— 常规
+      成员   —— 父字段是多选（我想投放 =「在期大会员,未登录」）
+      前缀   —— 选项后面常跟一串说明文字（特殊最优池(慎重使用…)）
+    """
+    vals = when_values(f)
+    if not vals:
+        return True
+    cur = str(trigger_value or "").strip()
+    members = [x.strip() for x in cur.replace("，", ",").split(",") if x.strip()]
+    return any(cur == v or v in members or (cur and cur.startswith(v)) for v in vals)
 
 
 def unit_fields(cfg: dict, position: str) -> list[dict]:
@@ -126,10 +162,11 @@ def scheme_groups(cfg: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for name, spec in (cfg.get("scheme_groups") or {}).items():
         spec = spec or {}
+        fields = [str(f) for f in (spec.get("fields") or [])]
         out[str(name)] = {
             "key": str(spec.get("key") or name),
             "exception_field": str(spec.get("exception_field") or f"{name}方案"),
-            "fields": [str(f) for f in (spec.get("fields") or [])],
+            "fields": fields,
             "presets": list(spec.get("presets") or []),
         }
     return out
@@ -305,7 +342,7 @@ def describe(f: dict) -> str:
         bits.append(f"多选，最多 {f['max_pick']} 个，用逗号分隔")
     elif f.get("type") in ("checkbox_sync_formily", "multiselect_vue", "multiselect_antd"):
         bits.append("多选，用英文逗号分隔")
-    when = f.get("_when")
-    if when:
-        bits.append(f"仅当「{when[0]}」=「{when[1]}」时需要填")
+    vals = when_values(f)
+    if vals:
+        bits.append(f"仅当「{f['_when'][0]}」= {'、'.join(vals)} 时需要填")
     return "；".join(bits) or "自由填写"

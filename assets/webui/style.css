@@ -580,3 +580,45 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .spos > summary::-webkit-details-marker { display: none; }
 .spos > summary .tag { font-size: 11px; color: var(--mu); margin-left: auto; }
 .spos .strategy-grid { padding: 12px; }
+
+/* 按顺序多选（策略中心的面板套餐）：上面是已选、带序号、可移出；下面是还能选的 */
+.spicked { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; align-items: center; }
+.spick-empty { font-size: 11px; color: var(--mu); }
+.spick {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 7px; border-radius: 6px;
+  background: var(--pink-weak, rgba(251, 114, 153, .12));
+  border: 1px solid var(--pink, #fb7299); color: var(--tx); font-size: 12px;
+}
+.spick .spick-no {
+  font-style: normal; font-size: 10px; min-width: 14px; height: 14px; line-height: 14px;
+  text-align: center; border-radius: 7px; background: var(--pink, #fb7299); color: #fff;
+}
+.spick .spick-x { cursor: pointer; color: var(--mu); font-weight: 700; }
+.spick .spick-x:hover { color: var(--bad, #e54545); }
+.spool { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.spool-item {
+  padding: 3px 7px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  border: 1px dashed var(--bd, #d8d8d8); color: var(--sub);
+}
+.spool-item:hover { border-style: solid; border-color: var(--pink, #fb7299); color: var(--tx); }
+
+/* 套餐卡片上的搭售角标：点开四选一（无 / 买赠 / 0元购 / 买赠+0元购）。
+   ⚠ 没搭售时也要显示成虚线的「搭售 ⌄」而不是留白 —— 留白的话没人知道那儿能点。 */
+.stie-wrap { position: relative; display: inline-flex; }
+.stie {
+  font-size: 10px; font-weight: 400; padding: 1px 5px; border-radius: 7px;
+  cursor: pointer; white-space: nowrap;
+  border: 1px dashed var(--bd); color: var(--mu); background: none;
+}
+.stie:hover { border-style: solid; border-color: var(--pink); color: var(--tx); }
+.stie.on { border-style: solid; border-color: var(--warn); color: var(--warn); }
+.stie-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
+  min-width: 104px; padding: 3px; font-size: 12px;
+  background: var(--card); border: 1px solid var(--bd); border-radius: 8px;
+  box-shadow: var(--shadow-card);
+}
+.stie-item { padding: 4px 8px; border-radius: 4px; color: var(--sub); cursor: pointer; white-space: nowrap; }
+.stie-item:hover { background: var(--head); color: var(--tx); }
+.stie-item.sel { background: var(--pink-light); color: var(--pink-text-on-light); }

@@ -461,18 +461,41 @@ def unmatched_hint(cfg: dict, payload: dict | None, unit_name: str) -> list[str]
 
 
 # ---------------------------------------------------------------- 给界面
+def _exclusive_siblings(cfg: dict, f: dict) -> list[str]:
+    """和这个字段共用一份选项池的其它字段名。"""
+    key = f.get("exclusive_key")
+    if not key:
+        return []
+    out = []
+    for pos in W.position_names(cfg):
+        for other in W.flatten(W.unit_fields(cfg, pos)):
+            if (other.get("exclusive_key") == key and other["name"] != f["name"]
+                    and other["name"] not in out):
+                out.append(other["name"])
+    return out
+
+
 def field_defs_for_ui(cfg: dict) -> list[dict]:
     """策略中心要渲染的字段清单。
 
-    kind：multi = 多选勾选框（逗号分隔存）、single = 单选下拉、text = 自由填。
+    kind：multi = 多选勾选框（逗号分隔存）、single = 单选下拉、text = 自由填、
+          ordered_multi = **按点选顺序**的多选（顺序本身有意义），
+          file = 文件路径（界面上给个「浏览…」）。
     when：(触发字段, 触发值) —— 界面按它做级联，父字段没选中就不显示这一项。
     scheme_group：属于哪个方案组的存盘键（空 = 通用规则字段）。
     """
     out = []
+    own = {f["name"] for f in W.strategy_field_defs(cfg)}
     for f in W.strategy_field_defs(cfg):
         t = f.get("type", "")
         opts = list(f.get("options") or [])
-        if t in ("checkbox_sync_formily", "multiselect_vue", "multiselect_antd"):
+        if t == "pp_panel_pick":
+            # 按点选顺序的多选：顺序 = 页面上从左到右的摆放顺序，不能用勾选框
+            # （勾选框只能给出「选了哪些」，给不出「按什么顺序」）
+            kind = "ordered_multi"
+        elif t == "pp_file":
+            kind = "file"
+        elif t in ("checkbox_sync_formily", "multiselect_vue", "multiselect_antd"):
             kind = "multi"
         elif t == "number_range_by_label":
             kind = "range"          # 页面上是「n 天至 m 天」两个数字框，界面要对齐
@@ -482,16 +505,29 @@ def field_defs_for_ui(cfg: dict) -> list[dict]:
             kind = "text"
         when = f.get("_when")
         gkey = W.group_key_of_field(cfg, f["name"])
+        note = W.describe(f)
+        # ⚠ 兜底：父字段不在策略中心里（比如被放进了 Excel）时，界面上不做级联、
+        #   直接显示这一项（见 app.js fieldRevealed），但触发条件要写进说明，
+        #   不然人不知道「我配了这一项，怎么有些单元没生效」。
+        if when and when[0] not in own and when[0] not in note:
+            cond = f"⚠ 只有「{when[0]}」= {'/'.join(str(v) for v in when[1])} 的单元才用得上这一项"
+            note = f"{note}；{cond}" if note else cond
         out.append({
             "name": f["name"],
             "kind": kind,
+            # 互斥：同一个 exclusive_key 下的几个字段共用一份选项池，
+            # 一个值只能落在其中一个字段里（三个面板不能重复放同一个 SKU）
+            "exclusive_with": _exclusive_siblings(cfg, f),
             "options": opts,
             "required": bool(f.get("required")),
             "when": list(when) if when else None,
             "positions": list(f.get("_positions") or []),
             "scheme_group": gkey,
             "group": W.group_of(cfg, f["name"]),
-            "note": W.describe(f),
+            "note": note,
+            # 特殊呈现方式。目前只有 sku_tie_badge：不单独占一行，由套餐卡片右边
+            # 那个小角标读写（见 app.js renderTieBadge）。
+            "ui": str(f.get("ui") or ""),
         })
     return out
 

@@ -194,11 +194,20 @@
   function isWizard() { return modeIs("wizard"); }
   function isAdNative() { return modeIs("ad_native"); }
   function isMeeting() { return modeIs("meeting_reserve"); }
+  // 有没有策略中心：由 Python 端按 yaml 里有没有 strategy_groups / scheme_groups 判断
+  //（wizard_meta 返回 wizard:true）。资源位投放和价格面板配置共用同一套策略中心。
+  // ⚠ 只有资源位投放要选资源位、要新建活动，那两行对别的配置类型要藏掉。
+  function hasStrategy() { return modeIs("wizard") || modeIs("price_panel"); }
+  // 「本次投放」那张共用参数表：只有原生商广用。
+  // ⚠ 价格面板配置**故意**没有：那边「投放配置」页上只有选 Excel 一件事，
+  //   可填的东西要么在 Excel 里、要么在策略中心里，不留第三个地方。
+  function hasPrepCard() { return modeIs("ad_native"); }
 
-  // 资源位勾选 / 活动设置记在本地，换个配置类型再切回来不用重勾
+  // 资源位勾选 / 活动设置记在本地，换个配置类型再切回来不用重勾。
+  // ⚠ 按配置类型分开存（key 里带 activeForm）：资源位投放和价格面板配置各记各的活动设置。
   function prefsKey() { return `formbot.wizard.${state.activeForm}`; }
   function savePrefs() {
-    if (!isWizard()) return;
+    if (!hasStrategy()) return;
     try {
       localStorage.setItem(prefsKey(), JSON.stringify({
         positions: state.positions, activityMode: state.activityMode,
@@ -926,7 +935,7 @@
   // ---------------- 准备页：wizard 卡片（资源位 / 活动 / 策略）----------------
   function renderWizardCard() {
     const card = $("#wizardCard");
-    if (!isWizard()) {
+    if (!hasStrategy()) {
       card.classList.add("hidden");
       $("#wizardTabs").classList.add("hidden");
       $(".stepbar").classList.remove("hidden");
@@ -938,6 +947,13 @@
     }
     card.classList.remove("hidden");
     $("#wizardTabs").classList.remove("hidden");
+    // 资源位选择是资源位投放独有的（价格面板配置只有一个资源位）。
+    // 活动那一行两边都有：都是「本批共用一个活动」，要么本次新建、要么挂到已有。
+    const wiz = isWizard();
+    $("#wizardPosRow").classList.toggle("hidden", !wiz);
+    $("#wizardActivityRow").classList.toggle("hidden", !hasStrategy());
+    $("#strategyScopeWrap").classList.toggle("hidden", !wiz);
+    $("#wizardDeliverTab").textContent = wiz ? "资源位投放配置" : "投放配置";
     loadPrefs();
     renderActivityRow();
 
@@ -962,7 +978,7 @@
   // 所以往 yaml 里加一项（比如再来个「投放时段」）不用改这段代码。
   function renderAdCard() {
     const card = $("#adCard");
-    if (!isAdNative()) {
+    if (!hasPrepCard()) {
       card.classList.add("hidden");
       state.adMeta = null;
       state.prepValues = {};
@@ -986,9 +1002,21 @@
     const box = $("#adPrepFields");
     box.innerHTML = "";
     const fields = (state.adMeta && state.adMeta.fields) || [];
+    let lastGroup = null;
     fields.forEach((f) => {
-      // when: [字段名, 值] —— 只有那个字段等于该值时这一项才出现
-      if (f.when && String(state.prepValues[f.when[0]] || "") !== String(f.when[1])) return;
+      // when: [字段名, 值] 或 [字段名, [值1, 值2]] —— 依赖字段是这些值之一时才出现。
+      // 用列表是因为「价格面板pid」在搭售类型 = 买赠 和 买赠+0元购 时都要填。
+      if (!prepShown(f)) return;
+
+      // 同一个 group 的字段归到一个小标题下（26 个 SKU 各自一组，不分组根本没法看）
+      if (f.group && f.group !== lastGroup) {
+        lastGroup = f.group;
+        const h = el("div", "sect");
+        h.style.cssText = "margin-top:6px";
+        h.appendChild(el("span", "bar"));
+        h.appendChild(el("b", null, f.group));
+        box.appendChild(h);
+      }
 
       const row = el("div", "row");
       row.style.cssText = "gap:10px;align-items:flex-start";
@@ -1009,10 +1037,48 @@
     renderPrepHint();
   }
 
+  // when 的求值：[字段名, 值] 和 [字段名, [值1, 值2]] 两种写法都认。
+  // ⚠ 必须和 Python 端 ad_prep.shown() 保持一致，否则会出现
+  //   「界面上没有这一项、却一直提示没填」，人完全没法处理。
+  function prepShown(f) {
+    if (!f.when) return true;
+    const cur = String(state.prepValues[f.when[0]] || "");
+    const want = f.when[1];
+    return Array.isArray(want) ? want.map(String).includes(cur) : cur === String(want);
+  }
+
   function prepControl(f) {
     const cur = String(state.prepValues[f.name] == null ? "" : state.prepValues[f.name]);
+    // ⚠ 长什么样由 Python 端算好（webapp._prep_kind），不要在这儿看 type：
+    //   原生商广的 type 写的就是长相，价格面板配置的 type 是「填写方式」
+    //   （pp_radio / pp_checkbox…，给 pp_filler 用的），只认 type 会全渲染成文本框。
+    const kind = f.kind || f.type;
 
-    if (f.type === "segmented" || (f.type === "select" && (f.options || []).length <= 3)) {
+    // 文件路径：给个「浏览」按钮，省得人去粘路径
+    if (kind === "file") {
+      const wrap = el("div", "row");
+      wrap.style.cssText = "gap:6px;align-items:center;flex:1;min-width:0";
+      const inp = el("input", "field");
+      inp.value = cur;
+      inp.placeholder = f.ph || "选一个 Excel，或直接粘路径";
+      inp.addEventListener("input", () => {
+        state.prepValues[f.name] = inp.value;
+        renderPrepHint();
+      });
+      const btn = el("button", "btn", "浏览…");
+      btn.addEventListener("click", () => {
+        callApi("pick_file").then((path) => {
+          if (!path) return;
+          state.prepValues[f.name] = path;
+          renderPrepFields();
+        });
+      });
+      wrap.appendChild(inp);
+      wrap.appendChild(btn);
+      return wrap;
+    }
+
+    if (kind === "segmented" || (kind === "select" && (f.options || []).length <= 3)) {
       const seg = el("div", "segmented");
       (f.options || []).forEach((opt) => {
         const it = el("div", "seg-item" + (opt === cur ? " active" : ""), opt);
@@ -1025,7 +1091,7 @@
       return seg;
     }
 
-    if (f.type === "select") {
+    if (kind === "select") {
       const sel = el("select", "field");
       sel.style.cssText = "width:220px;flex:none";
       (f.options || []).forEach((opt) => {
@@ -1046,7 +1112,7 @@
     const inp = el("input", "field");
     inp.value = cur;
     inp.placeholder = f.ph || "";
-    if (f.type === "number") inp.style.cssText = "width:120px;flex:none";
+    if (kind === "number") inp.style.cssText = "width:120px;flex:none";
     inp.addEventListener("input", () => {
       state.prepValues[f.name] = inp.value;
       renderPrepHint();
@@ -1064,7 +1130,7 @@
     const fields = (state.adMeta && state.adMeta.fields) || [];
     const missing = fields
       .filter((f) => f.required && !String(state.prepValues[f.name] || "").trim())
-      .filter((f) => !f.when || String(state.prepValues[f.when[0]] || "") === String(f.when[1]))
+      .filter(prepShown)
       .map((f) => f.name);
     $("#adPrepHint").textContent = missing.length
       ? "还没填：" + missing.join("、")
@@ -1074,7 +1140,7 @@
   // ⚠ 必须显式保存：生成模板和「载入并检查」都是 Python 端重新读盘上的 json，
   //   不保存就会拿到上一次的值 —— renderPrepHint 里那句提示说的就是这件事。
   function savePrep() {
-    if (!isAdNative()) return;
+    if (!hasPrepCard()) return;
     callApi("prep_save", state.activeForm, state.prepValues).then((r) => {
       if (!r) return;
       if (!r.ok) {
@@ -1505,6 +1571,10 @@
     $("#btnPosDone").addEventListener("click", () => setPosPanelOpen(false));
     document.addEventListener("click", (e) => {
       if (!$("#posSelect").contains(e.target)) setPosPanelOpen(false);
+      // 点到别处就收起搭售角标的菜单（角标自己的 click 已经 stopPropagation）
+      if (!e.target.closest || !e.target.closest(".stie-wrap")) {
+        document.querySelectorAll(".stie-menu").forEach((m) => m.remove());
+      }
     });
     $("#btnOpenStrategy").addEventListener("click", openStrategy);
     $("#strategySelect").addEventListener("change", (e) => {
@@ -1627,7 +1697,7 @@
   // 策略中心是这个配置类型下和「投放配置」并列的一块，不是弹窗：
   // 规则在这里统一管，投放配置那边只管选资源位、填 Excel、跑。
   function setWizardTab(tab) {
-    if (!isWizard()) tab = "deliver";
+    if (!hasStrategy()) tab = "deliver";
     if (tab === "strategy" && (!state.wizardMeta || !state.strategyDoc)) {
       appendLog("策略还没载入好，稍等一下再点", "warn");
       return;
@@ -1639,9 +1709,14 @@
     const onStrategy = tab === "strategy";
     $(".stepbar").classList.toggle("hidden", onStrategy);
     $(".footer-bar").classList.toggle("hidden", onStrategy);
+    // 提示语按配置类型说人话：两边的字段和步骤都不一样
+    const wiz = isWizard();
     $("#wizardTabHint").textContent = onStrategy
-      ? "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了"
-      : "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑";
+      ? (wiz ? "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了"
+             : "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，"
+               + "Excel 里就只剩活动和这个面板放哪几个 SKU")
+      : (wiz ? "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑"
+             : "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑");
 
     if (onStrategy) {
       if (!strategyUI.draft) strategyUI.draft = JSON.parse(JSON.stringify(state.strategyDoc));
@@ -1795,6 +1870,12 @@
           .then(handleTemplateResult);
         return;
       }
+      if (hasStrategy()) {   // 价格面板配置：没有资源位可选，但活动那个开关一样要带上
+        callApi("make_template", state.activeForm, null, null,
+                { existing_activity: state.activityMode === "existing" })
+          .then(handleTemplateResult);
+        return;
+      }
       callApi("make_template", state.activeForm, state.scopeValue).then(handleTemplateResult);
     });
 
@@ -1818,7 +1899,7 @@
   }
 
   function wizardOptions() {
-    if (!isWizard()) return null;
+    if (!hasStrategy()) return null;
     return {
       positions: state.positions,
       activity: {
@@ -1830,7 +1911,7 @@
 
   function doLoadCheck() {
     if (!state.activeForm) return;
-    if (isWizard() && state.activityMode === "existing" && !state.activityId) {
+    if (hasStrategy() && state.activityMode === "existing" && !state.activityId) {
       appendLog("选了「挂到已有活动」，先把活动ID填上", "warn");
       return;
     }
@@ -2128,29 +2209,118 @@
 
   /** 这个字段这次用不用得上：本次选中的资源位里有没有它 */
   function fieldInScope(f) {
+    if (!isWizard()) return true;          // 单资源位的配置类型，没有「本次投哪些位」这回事
     if (!strategyUI.scopeToSelection || !state.positions.length) return true;
     return (f.positions || []).some((p) => state.positions.includes(p));
   }
 
-  /** 级联：父字段没选到触发值，这个字段就不该出现 */
+  /** 级联：父字段没选到触发值，这个字段就不该出现
+   *
+   *  when = [父字段, [触发值...]]。**触发值是个数组**：同一个字段常常挂在父字段的
+   *  好几个取值下（「搭售类型」选「买赠」和「买赠+0元购」都要填 价格面板pid）。
+   *  ⚠ 要和 Python 端 wizard_schema.when_active 保持同一套判断，
+   *    否则会出现「界面上没这一项、跑起来却说它必填」。 */
   function fieldRevealed(f, values) {
     if (!f.when) return true;
+    // ⚠ 兜底：父字段压根不在策略中心里（比如它被放进了 Excel）——这儿永远取不到
+    //   它的值，照级联判就是整组恒定不显示，那几项再也配不了，而且界面上一点
+    //   报错都没有。父字段不在这份清单里就不做级联，触发条件由 field_defs_for_ui
+    //   写进字段说明给人看。
+    //   （价格面板的「内容限制」曾经就是这么整组空掉的：父字段收银台类型在 Excel 里。
+    //     2026-08-26 已经把收银台类型搬进策略中心，这条兜底现在不该再被触发 ——
+    //     留着是防同样的配法再出现一次。）
+    if (!strategyFieldExists(f.when[0])) return true;
     const cur = String(values[f.when[0]] || "");
     // 多选父字段（我想投放 =「在期大会员,未登录」）按成员判断
     const members = cur.split(/[,，]/).map((s) => s.trim());
-    return cur === f.when[1] || members.includes(f.when[1]) || (cur && cur.startsWith(f.when[1]));
+    const want = Array.isArray(f.when[1]) ? f.when[1] : [f.when[1]];
+    return want.some((v) => cur === v || members.includes(v) || (cur && cur.startsWith(v)));
   }
 
   function visibleFields(list, values, scoped) {
-    return list.filter((f) => (!scoped || fieldInScope(f)) && fieldRevealed(f, values));
+    // ui: sku_tie_badge 的字段不单独占一行 —— 它们是套餐卡片右边那个小角标读写的
+    //（买赠SKU / 0元购SKU）。「这个 SKU 上不上面板」和「它搭什么」是一个决定，
+    // 拆成两处填必然对不上。
+    return list.filter((f) => f.ui !== "sku_tie_badge"
+      && (!scoped || fieldInScope(f)) && fieldRevealed(f, values));
   }
 
-  /** 这个字段在级联里的第几层：人群选组 0 → 人群类型 1 → 人群ID / 人群标签 2 */
+  // 搭售角标：四选一，两个存盘字段拼出来（和后台的 sale_strategy / add_type 同构）
+  const TIE_FIELDS = ["买赠SKU", "0元购SKU"];
+  const TIE_CHOICES = [
+    { label: "无", bits: [] },
+    { label: "买赠", bits: ["买赠SKU"] },
+    { label: "0元购", bits: ["0元购SKU"] },
+    { label: "买赠+0元购", bits: ["买赠SKU", "0元购SKU"] },
+  ];
+
+  function tieHasBadge(values) {
+    return TIE_FIELDS.some((n) => strategyFieldExists(n));
+  }
+  function tieListOf(values, name) {
+    return String(values[name] || "").split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  }
+  function tieOf(values, sku) {
+    const bits = TIE_FIELDS.filter((n) => tieListOf(values, n).includes(sku));
+    return TIE_CHOICES.find((c) => c.bits.length === bits.length
+      && c.bits.every((b) => bits.includes(b))) || TIE_CHOICES[0];
+  }
+  function setTie(values, sku, choice) {
+    TIE_FIELDS.forEach((n) => {
+      const cur = tieListOf(values, n).filter((x) => x !== sku);
+      if (choice.bits.includes(n)) cur.push(sku);
+      values[n] = cur.join(",");
+    });
+  }
+  /** 从三段面板里移出一个 SKU 时，它的搭售标记也要跟着清掉，
+   *  否则面板里没有的 SKU 还挂着「买赠」，跑起来谁都找不到那张卡片。 */
+  function dropTie(values, sku) { setTie(values, sku, TIE_CHOICES[0]); }
+
+  /** 套餐卡片右边那个角标：点开是四选一，不是循环切换 ——
+   *  循环点法看不出「一共有哪几种」，也不知道自己点到第几下了。 */
+  function tieBadge(sku, values, fire) {
+    const cur = tieOf(values, sku);
+    const wrap = el("span", "stie-wrap");
+    const btn = el("b", "stie" + (cur.bits.length ? " on" : ""),
+                   (cur.bits.length ? cur.label : "搭售") + " ⌄");
+    btn.title = `搭售类型：${cur.label}（点一下改）`;
+    wrap.appendChild(btn);
+
+    const close = () => { const m = wrap.querySelector(".stie-menu"); if (m) m.remove(); };
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (wrap.querySelector(".stie-menu")) { close(); return; }
+      document.querySelectorAll(".stie-menu").forEach((m) => m.remove());
+      const menu = el("div", "stie-menu");
+      TIE_CHOICES.forEach((c) => {
+        const it = el("div", "stie-item" + (c.label === cur.label ? " sel" : ""), c.label);
+        it.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          setTie(values, sku, c);
+          close();
+          fire();
+        });
+        menu.appendChild(it);
+      });
+      wrap.appendChild(menu);
+    });
+    return wrap;
+  }
+
+  function strategyFieldExists(name) {
+    return (state.wizardMeta.strategy_fields || []).some((f) => f.name === name);
+  }
+
+  /** 这个字段在级联里的第几层：人群选组 0 → 人群类型 1 → 人群ID / 人群标签 2
+   *  ⚠ 父字段不在策略中心里的（见 fieldRevealed）算第 0 层 —— 它在这儿是顶层项，
+   *    缩进成子项反而让人以为上面还有一行没填。 */
   function fieldDepth(f) {
     const all = state.wizardMeta.strategy_fields || [];
     let depth = 0, cur = f;
     while (cur && cur.when && depth < 6) {
-      cur = all.find((x) => x.name === cur.when[0]);
+      const parent = all.find((x) => x.name === cur.when[0]);
+      if (!parent) return 0;
+      cur = parent;
       depth++;
     }
     return depth;
@@ -2380,7 +2550,7 @@
       visibleFields(fields, vals, false).forEach((f) => {
         const line = el("div", "scas");
         line.style.paddingLeft = fieldDepth(f) * 20 + "px";
-        if (f.when) line.appendChild(el("span", "scas-arrow", "└"));
+        if (f.when && strategyFieldExists(f.when[0])) line.appendChild(el("span", "scas-arrow", "└"));
         const fw = strategyField(f, vals, null, () => renderStrategyPanel());
         fw.style.flex = "1";
         line.appendChild(fw);
@@ -2623,7 +2793,71 @@
     const cur = String(values[key] || "");
     const fire = () => { if (onChange) onChange(); };
 
-    if (f.kind === "multi") {
+    if (f.kind === "ordered_multi") {
+      // 按点选顺序的多选：**顺序本身有意义**（= 页面上从左到右怎么摆），
+      // 所以不能用勾选框（勾选框只说得出「选了哪些」）。
+      // 互斥：同一个 SKU 只能落在一个面板里，别的面板选过的这里就不出现。
+      const picked = cur.split(",").map((x) => x.trim()).filter(Boolean);
+      const taken = new Set();
+      (f.exclusive_with || []).forEach((other) => {
+        String(values[other] || "").split(",").map((x) => x.trim())
+          .filter(Boolean).forEach((x) => taken.add(x));
+      });
+      const write = (arr) => {
+        values[key] = arr.join(",");
+        if (key === f.name) clearDescendants(values, f.name);
+        fire();
+      };
+
+      const chosen = el("div", "spicked");
+      if (!picked.length) chosen.appendChild(el("span", "spick-empty", "还没选 —— 一个都不选就是这一段不要"));
+      const badgeOn = tieHasBadge(values);
+      picked.forEach((o, i) => {
+        const chip = el("div", "spick");
+        chip.appendChild(el("i", "spick-no", String(i + 1)));
+        chip.appendChild(el("span", null, o));
+        if (badgeOn) chip.appendChild(tieBadge(o, values, fire));
+        const x = el("b", "spick-x", "×");
+        x.title = "移出这一段";
+        x.addEventListener("click", () => {
+          dropTie(values, o);
+          write(picked.filter((v) => v !== o));
+        });
+        chip.appendChild(x);
+        chosen.appendChild(chip);
+      });
+      box.appendChild(chosen);
+
+      const pool = el("div", "spool");
+      const rest = (f.options || []).filter((o) => !picked.includes(o) && !taken.has(o));
+      if (!rest.length) chosen.appendChild(el("span", "spick-empty", "（没有别的可选了）"));
+      rest.forEach((o) => {
+        const b = el("div", "spool-item", o);
+        b.title = "点一下加到末尾";
+        b.addEventListener("click", () => write(picked.concat([o])));
+        pool.appendChild(b);
+      });
+      box.appendChild(pool);
+    } else if (f.kind === "file") {
+      const row = el("div", "row");
+      row.style.cssText = "gap:6px;align-items:center";
+      const inp = document.createElement("input");
+      inp.className = "field";
+      inp.value = cur;
+      inp.placeholder = "选一个 Excel，或直接粘路径";
+      inp.addEventListener("input", () => { values[key] = inp.value.trim(); });
+      const btn = el("button", "btn btn-sm", "浏览…");
+      btn.addEventListener("click", () => {
+        callApi("pick_file").then((path) => {
+          if (!path) return;
+          values[key] = path;
+          fire();
+        });
+      });
+      row.appendChild(inp);
+      row.appendChild(btn);
+      box.appendChild(row);
+    } else if (f.kind === "multi") {
       const picked = cur.split(",").map((s) => s.trim()).filter(Boolean);
       const opts = el("div", "sopts");
       (f.options || []).forEach((o) => {

@@ -170,6 +170,40 @@ class WebUI(BaseUI):
         self._push("onFinished", title, body, ok)
 
 
+def _prep_field(f: dict) -> dict:
+    """一个字段发给界面的样子。
+
+    ⚠ 把 _when 归一成 when：从 unit_common 借来的字段带的是 _when（reveals 展开出来的），
+      prep_fields 里自己写的是 when。界面只认一个名字，不然级联会失灵 ——
+      表现是「选中类型=默认，底下那两个套餐下拉还杵在那儿」。
+    """
+    out = dict(f, kind=_prep_kind(f))
+    if not out.get("when") and out.get("_when"):
+        out["when"] = list(out["_when"])
+    return out
+
+
+def _prep_kind(f: dict) -> str:
+    """这一项在界面上长什么样：segmented / select / number / file / text。
+
+    ⚠ 不能直接拿 type 当长相。原生商广的 prep_fields 里 type 写的就是长相
+      （segmented/select/number）；价格面板配置的字段是从 unit_common 借来的，
+      那边的 type 是**填写方式**（pp_radio / pp_checkbox…，给 pp_filler 用的）。
+      只认 type 的话，后者所有字段都会渲染成纯文本框，下拉和分段全没了。
+    """
+    t = str(f.get("type") or "")
+    if t in ("segmented", "select", "number", "file", "text"):
+        return t                      # 自己就写的是长相（原生商广）
+    if t == "pp_number":
+        return "number"
+    opts = f.get("options") or []
+    if "checkbox" in t or "multiselect" in t:
+        return "text"                 # 多选：逗号分隔的文本，选项写在提示里
+    if opts:
+        return "segmented" if len(opts) <= 3 else "select"
+    return "text"
+
+
 class Api:
     """暴露给前端 JS 的方法（window.pywebview.api.xxx()，前端按 Promise 用）。
 
@@ -380,7 +414,10 @@ class Api:
         from . import wizard_strategy as S
 
         cfg = self._form_cfg(form_name)
-        if cfg.get("mode") != "wizard":
+        # ⚠ 判据是「这个配置类型有没有声明策略中心的分组」，不是「mode == wizard」。
+        #   价格面板配置也用同一套策略中心（同一个界面、同一份 config/strategies/），
+        #   按 mode 写死的话，每接一个新配置类型都要回来改一次 Python。
+        if not (cfg.get("strategy_groups") or cfg.get("scheme_groups")):
             return {"wizard": False}
         positions = []
         for name in W.position_names(cfg):
@@ -401,18 +438,22 @@ class Api:
             "scheme_groups": S.group_defs_for_ui(cfg),
         })
 
-    # ---------------- 原生商广：准备阶段参数 ----------------
+    # ---------------- 准备阶段参数（原生商广 / 价格面板配置）----------------
     # ⚠ 和 wizard 的「策略中心」是两码事：那边有方案库/关键词匹配/资源位例外，
     #   这边就是一张「字段名 → 值」的平表，界面上直接铺开填，不另开一页。
+    #
+    # ⚠ 判据是「yaml 里有没有声明 prep_fields」，不是「mode 等于 ad_native」——
+    #   价格面板配置也用这张表（26 个 SKU 各自的搭售类型/pid/买赠商品），
+    #   按 mode 写死的话，新加一个用这套表的配置类型就要回来改一次 Python。
     def ad_meta(self, form_name: str) -> dict:
         from . import ad_prep as P
 
         cfg = self._form_cfg(form_name)
-        if cfg.get("mode") != "ad_native":
+        if not P.has_prep(cfg):
             return {"ad": False}
         return _json_safe({
             "ad": True,
-            "fields": P.field_defs(cfg),
+            "fields": [_prep_field(f) for f in P.field_defs(cfg)],
             "values": P.load(cfg),
             "grouping": cfg.get("grouping") or {},
         })
@@ -503,6 +544,10 @@ class Api:
                 # 人群/内容限制恒定不出列，界面上没有开关
                 path = WT.build(cfg, positions,
                                 existing_activity=bool(opts.get("existing_activity")))
+            elif cfg.get("mode") == "price_panel":
+                # 和资源位投放同一个开关：挂到已有活动就不生成「活动」sheet
+                from . import pp_template as PT
+                path = PT.build(cfg, existing_activity=bool((options or {}).get("existing_activity")))
             else:
                 spec = registry.spec_for(cfg.get("mode"))
                 if registry.scopes_for(cfg) and scope != "id_list":
@@ -538,8 +583,9 @@ class Api:
             s["resume"] = True     # 「跳过已成功的」由前端勾选框在开跑时决定，这里始终读断点
             s["dmp_scope"] = scope
             s["ab_scope"] = scope
-            # wizard 专用：活动挂哪儿、按哪套策略跑。别的 mode 用不到这两个键。
-            if cfg.get("mode") == "wizard":
+            # 活动挂哪儿、按哪套策略跑。资源位投放和价格面板配置共用这两个键
+            # （界面上就是同一行控件）；别的 mode 用不到。
+            if cfg.get("mode") in ("wizard", "price_panel"):
                 from . import wizard_strategy as S
                 s["wizard_activity"] = dict(options or {}).get("activity") or {}
                 s["wizard_strategy"] = S.active_payload(cfg)

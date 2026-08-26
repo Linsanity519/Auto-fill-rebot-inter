@@ -371,13 +371,9 @@ def _check_row(fields: list[dict], row: dict, label: str) -> list[str]:
         when = f.get("_when")
 
         if when:
-            trigger = str(row.get(when[0], "")).strip()
-            # 多选的父字段（我想投放 = 「在期大会员,未登录」）按成员判断，
-            # 单选的还是老规矩：全等或前缀（选项后面常跟一串说明文字）
-            members = [x.strip() for x in trigger.replace("，", ",").split(",") if x.strip()]
-            active = (trigger == when[1] or when[1] in members
-                      or (trigger and trigger.startswith(when[1])))
-            if not active:
+            # 触发值可能有好几个（同一个字段挂在父字段的多个取值下），
+            # 匹配规则统一在 wizard_schema.when_active 里，别再各写一份
+            if not W.when_active(f, row.get(when[0], "")):
                 continue          # 条件没触发，这列不用填
 
         if not val:

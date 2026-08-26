@@ -64,6 +64,9 @@ FIXED_SECONDS = {
     "原生商广": 90,        # 计划/单元/创意三段页面 + 等素材上传
     "DMP人群新建": 40,     # 开弹窗、提交、等结果
     "价格配置": 30,
+    # 老后台的单元页：进页面、在 164 行的资源位表格里翻到「收银台价格面板」、
+    # 保存并等跳创意页、回头扫一眼有没有标红
+    "价格面板配置": 60,
 }
 DEFAULT_FIXED = 30
 
@@ -181,6 +184,39 @@ def ad_form(cfg: dict) -> tuple[int, list[str]]:
     ]
 
 
+# 价格面板配置：一条 = 一个单元。时间大头不在「字段多」，而在**每个 SKU 都要单独配一遍**：
+# 点中卡片 → 选搭售类型 → 在一两百条的下拉里找到那个 pid → 再选买赠商品的类型和 id。
+# 外加「套餐排列」是纯手工拖出来的。机器省掉的正是这两块。
+# ⚠ 人工做的时候 pid 一样要一个个去下拉里找 —— 机器人是从 PID 映射表读，
+#   但那张表本来就是人抄一次、之后一直复用，摊到每个单元上可以忽略。
+SKUS_PER_UNIT = 4               # ⚠ 拍的：面板最多 2+2，常见 3~5 个 SKU
+DRAG_SECONDS = 12               # 拖一张卡片到位（拖歪了还得再来一次）
+
+
+def price_panel_form(cfg) -> tuple[int, list[str]]:
+    """price_panel：Excel 只出几列，其余走策略中心，所以要把两边都算上。"""
+    pos = W.position_names(cfg)[0]
+    unit = [f for f in (cfg.get("unit_fields") or []) if f.get("type")]
+    # ⚠ 策略中心供的字段也要算：机器人是配一次全批套用，人工做的话
+    #   **每个单元都得重填一遍** —— 这正是这工具省掉的部分（同 wizard_form 的口径）。
+    common = [f for f in W.flatten(W.unit_fields(cfg, pos)) if f.get("scope") != "manual"]
+    t_unit, _ = weigh(unit)
+    t_common, _ = weigh(common)
+
+    per_sku = UNIT_SECONDS["single"] + UNIT_SECONDS["picker"] * 2
+    t_sku = per_sku * SKUS_PER_UNIT
+    t_drag = DRAG_SECONDS * SKUS_PER_UNIT
+
+    return round(t_unit + t_common + t_sku + t_drag), [
+        f"  单元级字段 {len(unit)} 个 ＝ {t_unit:.0f} 秒",
+        f"  策略中心供的字段 {len(common)} 个 ＝ {t_common:.0f} 秒"
+        f"（人工做则每个单元都要重填一遍）",
+        f"  每个 SKU 单独配搭售 {per_sku} 秒 × {SKUS_PER_UNIT} 个 ＝ {t_sku:.0f} 秒"
+        f"（⚠ 每单元几个 SKU 是拍的）",
+        f"  套餐排列拖拽 {DRAG_SECONDS} 秒 × {SKUS_PER_UNIT} ＝ {t_drag:.0f} 秒",
+    ]
+
+
 def main():
     print("=" * 62)
     print("人工基准估算　—— 一条配置，人自己在页面上填要多久")
@@ -210,6 +246,10 @@ def main():
             fixed = FIXED_SECONDS.get(name, DEFAULT_FIXED)
         elif cfg.get("mode") == "ad_native":
             body, lines = ad_form(cfg)
+            print("\n".join(lines))
+            fixed = FIXED_SECONDS.get(name, DEFAULT_FIXED)
+        elif cfg.get("mode") == "price_panel":
+            body, lines = price_panel_form(cfg)
             print("\n".join(lines))
             fixed = FIXED_SECONDS.get(name, DEFAULT_FIXED)
         else:

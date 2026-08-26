@@ -50,6 +50,11 @@ def _runner_meeting(settings, cfg, ui):
     return MeetingRunner(settings, cfg, ui)
 
 
+def _runner_price_panel(settings, cfg, ui):
+    from .pp_runner import PriceRunner
+    return PriceRunner(settings, cfg, ui)
+
+
 def _runner_default(settings, cfg, ui):
     from .runner import Runner
     return Runner(settings, cfg, ui)
@@ -73,6 +78,16 @@ def _template_ad(name: str) -> str:
 
     cfg = yaml.safe_load(user_path("config", "forms", f"{name}.yaml").read_text(encoding="utf-8"))
     return ad_template.build(cfg)
+
+
+def _template_price_panel(name: str) -> str:
+    import yaml
+
+    from . import pp_template
+    from .paths import user_path
+
+    cfg = yaml.safe_load(user_path("config", "forms", f"{name}.yaml").read_text(encoding="utf-8"))
+    return pp_template.build(cfg)
 
 
 def _template_default(name: str) -> str:
@@ -113,6 +128,12 @@ MODES: dict[str, ModeSpec] = {
             "直接在「准备」页的「抢占任务」里加几条（日期/时间段/人数/楼栋），"
             "填完点「载入并检查」。"),
         no_template_hint_cli="抢会议室不用 Excel 模板，任务清单在图形界面上填",
+    ),
+    # 价格面板配置：老后台（manager.bilibili.co）的收银台价格面板单元。
+    # 不新建活动，也没有「延期范围」，所以 scopes 留空。
+    "price_panel": ModeSpec(
+        make_runner=_runner_price_panel,
+        build_template=_template_price_panel,
     ),
     "ab_extension": ModeSpec(
         make_runner=_runner_ab,
