@@ -344,6 +344,31 @@ def test_report_roundtrip():
               {f["name"]: f["ok"] for f in got["forms"] if f["ok"]}
               == {"DMP延期": 19, "资源位投放": 3, "原生商广": 99},
               str(got["forms"]))
+
+        # ---- 回归：什么算「这一周变了」 ----
+        # ⚠ 原来签名里含「版本」，于是每升一次级、全部历史周的签名同时失配，
+        #   几十周前的旧数据被原样重发一遍。实测 1.0.19 升级当天，统计群里
+        #   刷出了 08-17、08-24 两条早就发过的周 —— 这三条就是防它回来的。
+        usage.mark_reported(usage.report_rows({}, FORMS, nickname="子凡"))
+        real_ver = usage._app_version
+        usage._app_version = lambda: "9.9.9"
+        try:
+            after = usage.report_rows({}, FORMS, nickname="子凡")
+            check("升级之后不重发历史", after == [], f"又报了 {[r[0] for r in after]}")
+        finally:
+            usage._app_version = real_ver
+        renamed = usage.report_rows({}, FORMS, nickname="换了个花名")
+        check("改花名也不重发历史", renamed == [], f"又报了 {[r[0] for r in renamed]}")
+
+        # 老格式的记账（含花名/版本那两段）要能迁过来 —— 不然「修掉重发」这个
+        # 改动**自己**会让所有老记账失配，升级当天再刷一遍全历史
+        every = usage.report_rows({}, FORMS, nickname="子凡", only_changed=False)
+        usage.reported_path().write_text(
+            json.dumps({r[0]: "|".join(str(v) for v in list(r)[:-1]) for r in every},
+                       ensure_ascii=False), encoding="utf-8")
+        migrated = usage.report_rows({}, FORMS, nickname="子凡")
+        check("老格式的上报记账能迁过来（升级当天不刷屏）", migrated == [],
+              f"又报了 {[r[0] for r in migrated]}")
     finally:
         usage.reported_path = orig_mark
         shutil.rmtree(tmp, ignore_errors=True)
@@ -417,10 +442,13 @@ def _from_line(header, form_names, line):
     """收集端那一步：一条 webhook 单行 JSON → parse_report 认识的行。
 
     ⚠ 这是 tools/collect_usage.py 里同一套还原逻辑的测试替身。改了那边记得改这里。
+    ⚠ 「周」不在消息里（1.0.20 起不发了），从「最后活跃」反推 —— 和收集端
+      tools/collect_usage.py 的 _week 一个口径。
     """
     d = json.loads(line)
     forms = d.get("分类型") or {}
-    return ([d.get("周", ""), d.get("指纹", ""), d.get("花名", ""), d.get("版本", ""),
+    wk = usage.norm_week(d.get("周")) or usage.week_of(str(d.get("最后活跃") or ""))
+    return ([wk, d.get("指纹", ""), d.get("花名", ""), d.get("版本", ""),
              d.get("次数", 0), d.get("成功", 0), d.get("失败", 0), d.get("机器秒", 0)]
             + [forms.get(n, 0) for n in form_names]
             + [d.get("最后活跃", ""), ""])
@@ -434,15 +462,21 @@ def test_webhook_payload():
     row = ["2026-08-17", "abc12345", "子凡", "1.0.5", 3, 38, 1, 624, 38, 0,
            "2026-08-20 21:43", "2026-08-21 13:00"]
     pl = report._payload(header, row, FORMS)
-    check("字段对得上", pl["成功"] == 38 and pl["机器秒"] == 624 and pl["周"] == "2026-08-17",
-          str(pl))
+    check("字段对得上", pl["成功"] == 38 and pl["机器秒"] == 624, str(pl))
+    # 群里那条消息越短越好：能算出来的、和没人填的，都不发
+    check("不发「周」（收集端从最后活跃反推）", "周" not in pl, str(pl))
+    check("不发「花名」（真人名字，少露一处是一处）", "花名" not in pl, str(pl))
+    check("「版本」还在（判断谁没升级就靠它）", pl["版本"] == "1.0.5", str(pl))
     check("零的配置类型不占位置", pl["分类型"] == {"DMP延期": 38}, str(pl["分类型"]))
     line = json.dumps(pl, ensure_ascii=False)
     check("一条消息就一行（换行会把群消息拆散、也没法逐行解析）", "\n" not in line)
     check("没超过企微 2048 字节上限", len(line.encode("utf-8")) < 2048,
           f"{len(line.encode('utf-8'))} 字节")
     back = _from_line(header, FORMS, line)
-    check("复制回来还原得回去", back[:8] == row[:8], str(back[:8]))
+    # 花名那一列现在还原不回来（本来就没发过），其余七列必须原样回来
+    check("复制回来还原得回去", back[0] == row[0] and back[1] == row[1]
+          and back[3:8] == row[3:8], str(back[:8]))
+    check("周从最后活跃反推得对", back[0] == "2026-08-17", back[0])
 
     # 配置类型多到顶上限时，宁可丢明细也要把总数发出去
     many = [f"配置类型{i:02d}" for i in range(200)]

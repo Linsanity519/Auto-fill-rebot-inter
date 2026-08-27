@@ -608,7 +608,10 @@ def load_reported() -> dict:
         p = reported_path()
         if p.exists():
             d = json.loads(p.read_text(encoding="utf-8"))
-            return d if isinstance(d, dict) else {}
+            if not isinstance(d, dict):
+                return {}
+            # 老版本写下的签名格式不一样，读进来就地迁移（见 _migrate_sign）
+            return {str(k): _migrate_sign(str(v)) for k, v in d.items()}
     except Exception:
         log.warning("上报记录读不了，当成没报过", exc_info=True)
     return {}
@@ -623,9 +626,39 @@ def save_reported(marks: dict):
         log.warning("上报记录写不进去（下次会重报一遍，不丢数据）", exc_info=True)
 
 
+# 签名要排掉的列（下标按 REPORT_FIXED）。「上报时间」是最后一列，另外单独切。
+_SIGN_SKIP = (REPORT_FIXED.index("花名"), REPORT_FIXED.index("版本"))
+SIGN_TAG = "v2"          # 签名格式代号，load_reported 靠它认出老记账并迁过来
+
+
 def _row_sign(row) -> str:
-    """一行的指纹。⚠ 不含最后那列「上报时间」——那列每次都变，含进去就永远是「变了」。"""
-    return "|".join(str(v) for v in list(row)[:-1])
+    """一行的指纹，用来判断「这一周的数字变了没有」。
+
+    ⚠ 不含最后那列「上报时间」——那列每次都变，含进去就永远是「变了」。
+    ⚠ 也不含「版本」和「花名」。这是修掉的一个真 bug：版本号原来在签名里，
+      于是**每升一次级、全部历史周的签名同时变化**，report_rows 判定「都变了」，
+      把几十周前的旧数据原样重发一遍。实测 1.0.19 升级当天统计群里刷出了
+      08-17、08-24 两条早就发过的周。
+      签名要回答的是「数字变了没有」——版本号变了不是数字变了。
+    """
+    row = list(row)[:-1]
+    return "|".join([SIGN_TAG]
+                    + [str(v) for i, v in enumerate(row) if i not in _SIGN_SKIP])
+
+
+def _migrate_sign(sign: str) -> str:
+    """老格式（含花名/版本）的签名 → 新格式。
+
+    ⚠ 为什么必须迁、不能让它自然失配一次：不迁的话「修掉重发」这个改动**自己**
+      会让所有老记账对不上，升级当天再刷一遍全历史 —— 正好就是这次要修掉的
+      那个毛病。迁完这一次就彻底安静了。
+    ⚠ 老花名里真有个「|」会迁歪，代价是那一周多发一条，仅此而已。
+    """
+    if not sign or sign.startswith(SIGN_TAG + "|"):
+        return sign
+    parts = sign.split("|")
+    return "|".join([SIGN_TAG]
+                    + [p for i, p in enumerate(parts) if i not in _SIGN_SKIP])
 
 
 def weekly_buckets(settings: dict) -> dict:

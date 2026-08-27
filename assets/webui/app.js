@@ -129,11 +129,18 @@
               seconds: 5400, human: 47000, saved: 41600, ok_rate: 0.972 },
     week: { items: 21, seconds: 900, saved: 7000 },
     longest: { seconds: 2400, items: 40, form: "资源位投放", ts: "2026-08-18T10:00:00+08:00" },
+    // ⚠ 至少铺三个配置类型：「用在哪儿了」那张卡要的就是"条数最长的那行和
+    //   省时最长的那行不是同一行"，只有一行的话这个效果根本看不出来
     forms: [{ name: "资源位投放", runs: 5, ok: 100, failed: 2, skipped: 0, total: 102,
-              seconds: 4000, human: 48000, saved: 44000, last: "2026-08-20T09:00:00+08:00" }],
-    weeks: [{ week: "2026-08-17", label: "08-17", items: 21, seconds: 900, saved: 7000 }],
+              seconds: 4000, human: 48000, saved: 44000, last: "2026-08-20T09:00:00+08:00" },
+            { name: "DMP延期", runs: 3, ok: 38, failed: 2, skipped: 6, total: 46,
+              seconds: 900, human: 9120, saved: 8220, last: "2026-08-19T15:20:00+08:00" },
+            { name: "预定会议室", runs: 4, ok: 3, failed: 0, skipped: 0, total: 7,
+              seconds: 500, human: 0, saved: 0, last: "2026-08-25T09:30:00+08:00" }],
     recent: [{ ts: "2026-08-20T09:00:00+08:00", form: "资源位投放", mode: "auto",
-               uid: "abc12345", ok: 20, total: 20, seconds: 900 }],
+               uid: "abc12345", ok: 20, total: 20, seconds: 900 },
+             { ts: "2026-08-19T15:20:00+08:00", form: "DMP延期", mode: "confirm",
+               uid: "abc12345", ok: 12, total: 14, seconds: 300 }],
   };
 
   function callApi(name, ...args) {
@@ -728,8 +735,8 @@
       return;
     }
     box.appendChild(homeHero(sum, t, false));
+    box.appendChild(homeLedger(sum, t));
     box.appendChild(homeForms(sum));
-    box.appendChild(homeTrend(sum));
     box.appendChild(homeRecent(sum));
     box.appendChild(homeFootnote(sum));
   }
@@ -806,70 +813,218 @@
       + `（实测，已扣掉等你点确认的时间）。`;
   }
 
-  // ② 用在哪儿了：横向条形
+  // ② 两本账：条数落在哪儿（环形）+ 时间去哪儿了（对比条）
+  //
+  // ⚠ 这两本账的**分母不一样** —— 条数账的分母是「这次要处理多少条」，时间账的
+  //   分母是「人工要花多久」。所以是两张图，不能凑成一张。
+  // ⚠ 时间账画成上下两条**各自独立**的条、不叠成一条：saved 是逐次运行
+  //   max(0, 人工 − 机器) 累加出来的，机器比人工还慢的那几次贡献 0，所以
+  //   「机器实跑 + 省下」并不恒等于「人工要花」。叠成一条等于宣称它们相加，那是假的。
+  function homeLedger(sum, t) {
+    const c = homeCard("这些数字怎么来的", "左边是条数落在哪儿，右边是时间去哪儿了");
+    const duo = el("div", "ledger-duo");
+
+    // 左：成败环形。中心那个数和 hero 上的「一次做对」是同一个，
+    // 这里补的是它的分母长什么样 —— 失败几条、跳过几条
+    const ok = statNum(t.items), bad = statNum(t.failed), skip = statNum(t.skipped);
+    const rate = (t.ok_rate == null) ? "—" : `${(t.ok_rate * 100).toFixed(1)}%`;
+    const left = el("div", "ledger-cell");
+    left.appendChild(donut([
+      { name: "成功", value: ok, cls: "ok" },
+      { name: "失败", value: bad, cls: "bad" },
+      { name: "跳过", value: skip, cls: "skip" },
+    ], rate, "一次做对"));
+    const lg = el("div", "legend-row");
+    lg.appendChild(legendItem("ok", "成功", ok));
+    lg.appendChild(legendItem("bad", "失败", bad));
+    lg.appendChild(legendItem("skip", "跳过", skip));
+    left.appendChild(lg);
+    left.appendChild(el("div", "home-note", "跳过的不算错，不进「一次做对」的分母"));
+    duo.appendChild(left);
+
+    // 右：时间账。两条同尺归一（都除以两者里大的那个），所以「机器实跑」那条
+    // 有多短是看得出来的 —— 各归各的最大值就全都顶格，什么也说明不了
+    const human = statNum(t.human), machine = statNum(t.seconds);
+    const saved = statNum(t.saved == null ? t.seconds : t.saved);
+    const scale = Math.max(human, machine, 1);
+    const right = el("div", "ledger-cell ledger-time");
+    right.appendChild(meterRow("人工要花", human / scale, fmtDuration(human), "估"));
+    right.appendChild(meterRow("机器实跑", machine / scale, fmtDuration(machine), "实测", "blue"));
+    const big = el("div", "ledger-saved");
+    big.appendChild(el("b", null, fmtDuration(saved)));
+    big.appendChild(el("span", null, "省下的差额"
+      + (fmtWorkdays(saved) ? `　${fmtWorkdays(saved)}` : "")));
+    right.appendChild(big);
+    right.appendChild(el("div", "home-note",
+      "上面那条是估的，下面那条是实测的 —— 差额才是省下的。口径见页脚那行小字。"));
+    duo.appendChild(right);
+
+    c.appendChild(duo);
+    return c;
+  }
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const statNum = (v) => Math.max(0, Number(v) || 0);
+
+  /** 环形图。内联 SVG + CSS 变量上色。
+   *
+   *  ⚠ 为什么不引图表库：assets/webui/ 里一个外部依赖都不能有（离线内网工具，
+   *    而且 assets/ 整个进那个 300KB 的代码包）。另外 canvas 画的图在深浅色
+   *    切换时得手动重绘，SVG 吃 CSS 变量，主题一变自己就跟着变。
+   *  ⚠ 起点在 12 点方向：整个 svg 转了 -90°（见 style.css 的 .donut）。
+   *    中心文字因此不能放进 svg —— 会跟着一起歪 —— 用 HTML 浮在上面。
+   *
+   *  segs: [{name, value, cls}]，cls 决定描边颜色（见 style.css 的 .donut-seg.xx）。 */
+  function donut(segs, bigText, smallText) {
+    const R = 52, C = 2 * Math.PI * R;      // 半径 + 周长：dasharray 全靠这两个数
+    const total = segs.reduce((s, x) => s + Math.max(0, x.value || 0), 0);
+    const wrap = el("div", "donut-wrap");
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 132 132");
+    svg.setAttribute("class", "donut");
+    // 底环：一条数据都没有时也得看得见个圈，不然那块地方是纯空白
+    svg.appendChild(donutArc("donut-track", C, C, 0));
+    let at = 0;
+    segs.forEach((s) => {
+      const v = Math.max(0, s.value || 0);
+      if (!v || !total) return;
+      const len = (v / total) * C;
+      const a = donutArc(`donut-seg ${s.cls || ""}`, C, len, at);
+      const tip = document.createElementNS(SVG_NS, "title");
+      tip.textContent = `${s.name}：${v} 条（${((v / total) * 100).toFixed(1)}%）`;
+      a.appendChild(tip);
+      svg.appendChild(a);
+      at += len;
+    });
+    wrap.appendChild(svg);
+    const center = el("div", "donut-center");
+    center.appendChild(el("div", "donut-big", bigText));
+    if (smallText) center.appendChild(el("div", "donut-small", smallText));
+    wrap.appendChild(center);
+    return wrap;
+  }
+
+  /** ⚠ dasharray 一次给到终值，进场动画完全交给 CSS（见 style.css 的 donut-in）。
+   *  原来是「先画 0、rAF 里再拨到真值」，那样在**窗口没显示时 rAF 根本不触发**，
+   *  统计页会停在一个空心圈上。终值给死就没有这种时序依赖了。 */
+  function donutArc(cls, C, len, offset) {
+    const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("cx", "66");
+    c.setAttribute("cy", "66");
+    c.setAttribute("r", "52");
+    c.setAttribute("class", cls);
+    c.setAttribute("stroke-dasharray", `${len} ${C - len}`);
+    c.setAttribute("stroke-dashoffset", String(-offset));
+    return c;
+  }
+
+  /** 一条带标签的横条。tone 是描边/填色的类名（留空 = 主色）。 */
+  function meterRow(label, ratio, value, tag, tone) {
+    const row = el("div", "meter-row");
+    row.appendChild(el("div", "meter-label", label));
+    const track = el("div", "meter-track");
+    const fill = el("i", tone || "");
+    fill.style.width = `${Math.round(Math.min(1, Math.max(0, ratio || 0)) * 100)}%`;
+    track.appendChild(fill);
+    row.appendChild(track);
+    row.appendChild(el("div", "meter-value", value));
+    row.appendChild(el("div", "meter-tag", tag || ""));
+    return row;
+  }
+
+  function legendItem(cls, name, n) {
+    const s = el("span", "legend");
+    s.appendChild(el("i", cls));
+    s.appendChild(el("span", null, (n === "" || n == null) ? name : `${name} ${n}`));
+    return s;
+  }
+
+  function barSeg(cls, ratio) {
+    const i = el("i", cls);
+    const pct = Math.min(100, Math.max(0, (ratio || 0) * 100));
+    // 有值就至少给 1.5%，不然「失败 1 条」那一段细到看不见，等于没画
+    i.style.width = pct ? `${Math.max(1.5, pct)}%` : "0";
+    return i;
+  }
+
+  // ③ 用在哪儿了：一行两条 —— 上条是条数（成功/失败分段），下条是省下的时间。
+  //    两条各按自己那一列的最大值归一，所以最长的条数条和最长的时间条常常**不是
+  //    同一行** —— 这张卡要说的就是这件事，副标题那句话原来没有图能对着看。
   function homeForms(sum) {
-    const c = homeCard("用在哪儿了", "条数最多的，未必是最费时间的");
+    const c = homeCard("用在哪儿了", "上面一条是条数，下面一条是省下的时间");
     const rows = (sum.forms || []).slice();
-    const max = Math.max(1, ...rows.map((r) => r.ok || 0));
     // ⚠ 判据是「这个配置类型的跑法是不是抢占」，不是名字叫不叫预定会议室。
     //   跑法来自后端 ui.run_kind（见 webapp.Api._ui_text），不在这里列名单。
     const grabNames = state.forms
       .filter((f) => f.ui && f.ui.run_kind === "grab").map((f) => f.name);
+    const savedOf = (r) => statNum(r.saved == null ? r.seconds : r.saved);
+    const maxItems = Math.max(1, ...rows.map((r) => statNum(r.ok) + statNum(r.failed)));
+    const maxSaved = Math.max(1, ...rows.map(savedOf));
+    // ⚠ 分母只算非抢占型：抢占型那行显示的是「抢中 3/7」而不是占比，
+    //   把它的条数算进分母的话，屏幕上那几个百分比加起来永远差几个点
+    const allItems = rows.reduce(
+      (s, r) => s + (grabNames.includes(r.name) ? 0 : statNum(r.ok)), 0);
+
+    const lg = el("div", "legend-row");
+    lg.appendChild(legendItem("ok", "成功", ""));
+    lg.appendChild(legendItem("bad", "失败", ""));
+    lg.appendChild(legendItem("time", "省下的时间", ""));
+    c.appendChild(lg);
 
     rows.forEach((r) => {
       // 抢占型按「抢中率」讲才有意义，按条数/耗时讲等于没有价值
-      const isMeeting = grabNames.includes(r.name);
+      const isGrab = grabNames.includes(r.name);
+      const ok = statNum(r.ok), bad = statNum(r.failed), total = statNum(r.total);
       const row = el("div", "bar-row");
       row.appendChild(el("div", "bar-name", formLabel(r.name)));
-      const track = el("div", "bar-track");
-      const fill = el("i");
-      fill.style.width = `${Math.max(2, Math.round((r.ok / max) * 100))}%`;
-      track.appendChild(fill);
-      row.appendChild(track);
-      row.appendChild(el("div", "bar-num", isMeeting
-        ? `抢中 ${r.ok}/${r.total}` : `${r.ok} 条`));
-      row.appendChild(el("div", "bar-side", isMeeting
-        ? fmtWhen(r.last)
-        : `省下 ${fmtDuration(r.saved == null ? r.seconds : r.saved)} · 机器实跑 ${fmtDuration(r.seconds)}`));
-      row.title = `跑了 ${r.runs} 次，最近一次 ${fmtWhen(r.last)}` + (r.failed ? `，失败 ${r.failed} 条` : "");
+
+      const tracks = el("div", "bar-tracks");
+      const top = el("div", "bar-track");
+      // 抢占型的分母是「一共抢了几次」，条形读作抢中率；其余按全场最大值归一
+      const denom = isGrab ? Math.max(1, total) : maxItems;
+      top.appendChild(barSeg("ok", ok / denom));
+      top.appendChild(barSeg("bad", (isGrab ? Math.max(0, total - ok) : bad) / denom));
+      tracks.appendChild(top);
+      const bottom = el("div", "bar-track thin");
+      bottom.appendChild(barSeg("time", isGrab ? 0 : savedOf(r) / maxSaved));
+      tracks.appendChild(bottom);
+      row.appendChild(tracks);
+
+      const numBox = el("div", "bar-num");
+      numBox.appendChild(el("b", null, isGrab ? `抢中 ${ok}/${total}` : `${ok} 条`));
+      if (!isGrab && allItems) {
+        numBox.appendChild(el("span", "bar-pct", `占 ${Math.round((ok / allItems) * 100)}%`));
+      }
+      row.appendChild(numBox);
+
+      row.appendChild(el("div", "bar-side", isGrab
+        ? `不按时长算价值 · ${fmtWhen(r.last)}`
+        : `省下 ${fmtDuration(savedOf(r))} · 机器实跑 ${fmtDuration(r.seconds)}`));
+      row.title = `跑了 ${r.runs} 次，最近一次 ${fmtWhen(r.last)}`
+        + (r.failed ? `，失败 ${r.failed} 条` : "");
       row.addEventListener("click", () => selectForm(r.name));
       c.appendChild(row);
     });
     return c;
   }
 
-  // ③ 近 12 周
-  function homeTrend(sum) {
-    const weeks = sum.weeks || [];
-    const c = homeCard("近 12 周", "按周看，这类工具本来就是攒一批集中跑");
-    const chart = el("div", "spark");
-    const max = Math.max(1, ...weeks.map((w) => w.items || 0));
-    weeks.forEach((w) => {
-      const col = el("div", "spark-col");
-      col.title = `${w.week} 那周：${w.items} 条 · 省下 ${fmtDuration(w.saved == null ? w.seconds : w.saved)}`
-        + ` · 机器实跑 ${fmtDuration(w.seconds)}`;
-      const bar = el("i");
-      bar.style.height = `${w.items ? Math.max(4, Math.round((w.items / max) * 100)) : 0}%`;
-      if (!w.items) bar.classList.add("empty");
-      col.appendChild(bar);
-      col.appendChild(el("span", null, w.label.slice(-5)));
-      chart.appendChild(col);
-    });
-    c.appendChild(chart);
-    return c;
-  }
-
   // ④ 最近几次 + 最长的一次
   function homeRecent(sum) {
-    const c = homeCard("最近跑的", "");
+    const c = homeCard("最近跑的", "中间那条是这一次的完成度");
     (sum.recent || []).forEach((r) => {
+      const ok = statNum(r.ok), total = statNum(r.total);
+      const okAll = total > 0 && ok >= total;
       const line = el("div", "feed-row");
       line.appendChild(el("span", "feed-when", fmtWhen(r.ts)));
       line.appendChild(el("span", "feed-form", formLabel(r.form)));
-      const okAll = r.ok >= r.total;
-      const stat = el("span", okAll ? "feed-stat" : "feed-stat bad",
-        okAll ? `${r.ok} 条全成` : `${r.ok}/${r.total} 条`);
-      line.appendChild(stat);
+      const mini = el("div", "feed-bar");
+      const fill = el("i", okAll ? "" : "bad");
+      fill.style.width = total ? `${Math.max(3, Math.round((ok / total) * 100))}%` : "0";
+      mini.appendChild(fill);
+      mini.title = total ? `${ok}/${total} 条` : "";
+      line.appendChild(mini);
+      line.appendChild(el("span", okAll ? "feed-stat" : "feed-stat bad",
+        okAll ? `${ok} 条全成` : `${ok}/${total} 条`));
       line.appendChild(el("span", "feed-cost", fmtDuration(r.seconds)));
       c.appendChild(line);
     });

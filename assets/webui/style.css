@@ -349,9 +349,13 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .step-panel.active { display: flex; }
 
 
-/* ---------------- 首页 ----------------
-   没有任何图表库：柱子和条形都是 div + 百分比宽高。这是个离线内网工具，
-   assets/webui/ 里一个外部依赖都不能有。 */
+/* ---------------- 首页 / 数据统计 ----------------
+   没有任何图表库：条形是 div + 百分比宽度，环形是内联 SVG 的 stroke-dasharray。
+   这是个离线内网工具，assets/webui/ 里一个外部依赖都不能有 —— 而且 assets/
+   整个会进那个 300KB 的代码包（见 tools/make_payload.py），塞个图表库进去
+   等于让每个人每次升级都多下几百 KB。
+   ⚠ 颜色一律走 CSS 变量，别写死色值：深浅色主题靠换变量实现，写死的那份
+     在深色下会直接消失。SVG 也吃变量，所以切主题不用重绘（canvas 就得重绘）。 */
 .home-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 2px; }
 .home-card { padding: 16px 18px; gap: 12px; flex: none; }
 .home-scroll > * { flex: none; }
@@ -369,28 +373,91 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .home-welcome-title { font-size: 17px; font-weight: 700; color: var(--tx); }
 .home-welcome-sub { font-size: 12px; color: var(--sub); line-height: 1.8; }
 
-/* 横向条形：配置类型用量 */
-.bar-row { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 6px; border-radius: 6px; cursor: pointer; }
+/* ---- 两本账：左边环形（条数），右边对比条（时间）---- */
+/* 窗口最窄 940px，内容区大约 740px，两栏各 ~350px 够用；再窄就自己掉成一栏 */
+.ledger-duo { display: grid; grid-template-columns: 232px 1fr; gap: 20px; align-items: start; }
+.ledger-cell { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; }
+.ledger-cell.ledger-time { align-items: stretch; justify-content: center; gap: 8px; }
+@media (max-width: 820px) { .ledger-duo { grid-template-columns: 1fr; } }
+
+/* 环形图：纯 SVG，描边吃 CSS 变量，所以深浅色切换不用重绘 */
+.donut-wrap { position: relative; width: 132px; height: 132px; flex: none; }
+/* ⚠ 进场动画走 @keyframes 而不是 JS 里改 dasharray：窗口没显示时
+   requestAnimationFrame 不触发，靠 JS 拨值的话统计页会停在一个空心圈上。
+   CSS 动画没这个时序依赖，而且终值本来就是画对的，动画只是锦上添花。 */
+.donut { width: 132px; height: 132px; display: block; transform: rotate(-90deg);
+  animation: donut-in .5s cubic-bezier(.4,0,.2,1); }
+@keyframes donut-in {
+  from { opacity: 0; transform: rotate(-160deg) scale(.9); }
+  to   { opacity: 1; transform: rotate(-90deg) scale(1); }
+}
+.donut circle { fill: none; stroke-width: 13; stroke-linecap: butt; }
+.donut .donut-track { stroke: var(--head); }
+.donut .donut-seg { stroke: var(--pink); }
+.donut .donut-seg.ok { stroke: var(--ok); }
+.donut .donut-seg.bad { stroke: var(--bad); }
+.donut .donut-seg.skip { stroke: var(--bd); }
+.donut .donut-seg:hover { stroke-width: 15; }
+/* 中心文字不能放进 svg —— svg 整个转了 -90°，文字会跟着歪 */
+.donut-center { position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1px; pointer-events: none; }
+.donut-big { font-size: 21px; font-weight: 700; color: var(--tx); line-height: 1.1; font-variant-numeric: tabular-nums; }
+.donut-small { font-size: 11px; color: var(--mu); }
+
+/* 有人把系统动画关了（晕动症/远程桌面），这几个进场动画就别放了 */
+@media (prefers-reduced-motion: reduce) {
+  .donut, .meter-track i, .bar-track i { animation: none; }
+}
+
+/* 图例 */
+.legend-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--sub); }
+.legend { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 8px; height: 8px; border-radius: 2px; background: var(--pink); flex: none; }
+.legend i.ok { background: var(--ok); }
+.legend i.bad { background: var(--bad); }
+.legend i.skip { background: var(--bd); }
+.legend i.time { background: var(--blue); }
+
+/* 时间账：人工 vs 机器，两条同尺归一 */
+.meter-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.meter-label { width: 60px; flex: none; color: var(--sub); }
+.meter-track { flex: 1; min-width: 40px; height: 12px; background: var(--head); border-radius: 999px; overflow: hidden; }
+.meter-track i { display: block; height: 100%; background: var(--pink); border-radius: 999px;
+  transform-origin: left center; animation: bar-in .45s cubic-bezier(.4,0,.2,1); }
+/* 同上：宽度是创建时就写死的，transition 不会触发，得用 keyframes */
+@keyframes bar-in { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.meter-track i.blue { background: var(--blue); }
+.meter-value { width: 74px; flex: none; text-align: right; color: var(--tx); font-variant-numeric: tabular-nums; }
+.meter-tag { width: 30px; flex: none; color: var(--mu); font-size: 11px; }
+.ledger-saved { display: flex; align-items: baseline; gap: 8px; padding: 6px 0 0 70px; flex-wrap: wrap; }
+.ledger-saved b { font-size: 20px; color: var(--pink-text-on-light); font-variant-numeric: tabular-nums; }
+.ledger-saved span { font-size: 11px; color: var(--mu); }
+
+/* 横向条形：配置类型用量。一行两条 —— 上条条数（成功/失败分段），下条省下的时间 */
+.bar-row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
 .bar-row:hover { background: var(--pink-light); }
 .bar-name { width: 96px; flex: none; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar-track { flex: 1; min-width: 40px; height: 8px; background: var(--head); border-radius: 999px; overflow: hidden; }
-.bar-track i { display: block; height: 100%; background: var(--pink); border-radius: 999px; }
-.bar-num { width: 76px; flex: none; text-align: right; color: var(--tx); font-variant-numeric: tabular-nums; }
+.bar-tracks { flex: 1; min-width: 40px; display: flex; flex-direction: column; gap: 4px; }
+.bar-track { display: flex; height: 9px; background: var(--head); border-radius: 999px; overflow: hidden; }
+.bar-track.thin { height: 5px; }
+.bar-track i { display: block; height: 100%; background: var(--pink);
+  transform-origin: left center; animation: bar-in .45s cubic-bezier(.4,0,.2,1); }
+.bar-track i.ok { background: var(--ok); }
+.bar-track i.bad { background: var(--bad); }
+.bar-track i.time { background: var(--blue); }
+.bar-num { width: 84px; flex: none; text-align: right; display: flex; flex-direction: column; gap: 1px; }
+.bar-num b { color: var(--tx); font-weight: 600; font-variant-numeric: tabular-nums; }
+.bar-pct { color: var(--mu); font-size: 11px; font-variant-numeric: tabular-nums; }
 .bar-side { width: 168px; flex: none; text-align: right; color: var(--mu); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 近 12 周柱状 */
-.spark { display: flex; align-items: flex-end; gap: 6px; height: 96px; }
-.spark-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
-.spark-col i { width: 100%; max-width: 26px; background: var(--pink); border-radius: 4px 4px 0 0; min-height: 2px; }
-.spark-col i.empty { background: var(--bd); height: 2px !important; }
-.spark-col span { font-size: 10px; color: var(--mu); flex: none; }
-.spark-col:hover i { background: var(--pink-hover); }
-
 /* 最近跑的 */
-.feed-row { display: flex; align-items: center; gap: 10px; height: 26px; font-size: 12px; }
+.feed-row { display: flex; align-items: center; gap: 10px; height: 28px; font-size: 12px; }
 .feed-when { width: 72px; flex: none; color: var(--mu); font-size: 11px; }
 .feed-form { flex: 1; min-width: 0; color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.feed-stat { color: var(--ok); font-variant-numeric: tabular-nums; }
+.feed-bar { width: 84px; flex: none; height: 6px; background: var(--head); border-radius: 999px; overflow: hidden; }
+.feed-bar i { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+.feed-bar i.bad { background: var(--warn); }
+.feed-stat { width: 84px; flex: none; text-align: right; color: var(--ok); font-variant-numeric: tabular-nums; }
 .feed-stat.bad { color: var(--warn); }
 .feed-cost { width: 72px; flex: none; text-align: right; color: var(--mu); font-variant-numeric: tabular-nums; }
 

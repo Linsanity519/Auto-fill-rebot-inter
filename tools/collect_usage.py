@@ -39,9 +39,21 @@ if sys.stdout:
 from src import usage  # noqa: E402
 
 # 上报消息长这样（src/report.py 拼的）：
-#   {"周": "2026-08-17", "指纹": "16d69684", ..., "分类型": {"DMP延期": 38}}
+#   {"指纹": "16d69684", "版本": "1.0.20", "次数": 3, ..., "分类型": {"DMP延期": 38}}
 # ⚠ 用「找 { 再配对括号」而不是正则一把梭：分类型是嵌套对象，正则配不平。
 NEEDLE = '"指纹"'
+
+
+def _week(d: dict) -> str:
+    """这条上报属于哪一周。
+
+    ⚠ 1.0.20 起上报里**不再带「周」**——它是可推的：「最后活跃」就是那一周桶里
+      最大的那个时间戳（见 src/usage.py 的 weekly_buckets），week_of 一下就还原了。
+    ⚠ 老消息还带着「周」，优先用它 —— 群里两种消息会长期混在一起，
+      只认新的等于把历史全丢了。
+    """
+    wk = usage.norm_week(d.get("周"))
+    return wk or usage.week_of(str(d.get("最后活跃") or ""))
 
 
 def read_clipboard() -> str:
@@ -122,7 +134,7 @@ def extract(text: str) -> list[dict]:
             continue
         try:
             d = json.loads(text[start:end])
-            if isinstance(d, dict) and d.get("指纹") and d.get("周"):
+            if isinstance(d, dict) and d.get("指纹") and _week(d):
                 out.append(d)
         except json.JSONDecodeError:
             pass
@@ -148,7 +160,7 @@ def archive_path(root) -> Path:
 
 
 def _key(d: dict) -> str:
-    return f"{d.get('指纹', '')}|{usage.norm_week(d.get('周'))}"
+    return f"{d.get('指纹', '')}|{_week(d)}"
 
 
 def _num(x) -> int:
@@ -233,10 +245,12 @@ def to_rows(msgs: list[dict], form_names: list[str]) -> list[list]:
     """
     latest: dict[tuple, dict] = {}
     for d in msgs:
-        latest[(str(d.get("指纹")), usage.norm_week(d.get("周")))] = d
+        latest[(str(d.get("指纹")), _week(d))] = d
     rows = []
     for (uid, wk), d in sorted(latest.items()):
         forms = d.get("分类型") or {}
+        # ⚠ 「花名」这一列还在表结构里，但 1.0.20 起上报不带它了，新消息一律是空。
+        #   老归档里那些还有值，照旧填回去。
         rows.append([wk, uid, d.get("花名", ""), d.get("版本", ""),
                      d.get("次数", 0), d.get("成功", 0), d.get("失败", 0), d.get("机器秒", 0)]
                     + [forms.get(n, 0) for n in form_names]
@@ -366,7 +380,7 @@ def main() -> int:
         print(f"  {head}")
         print()
         print("要找的是形如下面这样的整行 JSON：")
-        print('  {"周": "2026-W34", "指纹": "16d69684", "次数": 3, ...}')
+        print('  {"指纹": "16d69684", "版本": "1.0.20", "次数": 3, ...}')
         print()
         print("对照检查：")
         print("  · 复制的是不是「机器人统计」那个群？别的群里没有上报")
