@@ -9,16 +9,18 @@
 import yaml
 from openpyxl import Workbook
 from openpyxl.comments import Comment
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from .datasource import header_field_names, item_field_names
+from . import xlsx_kit as X
 from .paths import user_path
 
-REQ_FILL = PatternFill("solid", fgColor="FFF2CC")   # 必填 - 浅黄
-OPT_FILL = PatternFill("solid", fgColor="F2F2F2")   # 选填 - 浅灰
-KEY_FILL = PatternFill("solid", fgColor="DDEBF7")   # 分组 - 浅蓝
+# 颜色统一在 src/xlsx_kit.py 里定义（原来六份模板各声明了一遍同样的十六进制值）
+REQ_FILL = X.FILLS["req"]    # 必填 - 浅黄
+OPT_FILL = X.FILLS["opt"]    # 选填 - 浅灰
+KEY_FILL = X.FILLS["key"]    # 分组 - 浅蓝
 
 
 def collect_meta(form_cfg: dict) -> dict:
@@ -102,10 +104,7 @@ def build(form_name: str) -> str:
     ws.freeze_panes = "B2"
     _write_doc_sheet(wb, cfg, cols, meta, grouped)
 
-    out = user_path("data", f"{form_name}_模板.xlsx")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out)
-    return str(out)
+    return X.save(wb, f"{form_name}_模板.xlsx")
 
 
 def _write_doc_sheet(wb, cfg, cols, meta, grouped=True):

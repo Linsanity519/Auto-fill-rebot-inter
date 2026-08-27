@@ -18,18 +18,19 @@ from __future__ import annotations
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from . import wizard_schema as W
 from . import wizard_strategy as S
-from .paths import user_path
+from . import xlsx_kit as X
 
-REQ_FILL = PatternFill("solid", fgColor="FFF2CC")    # 必填 浅黄
-OPT_FILL = PatternFill("solid", fgColor="F2F2F2")    # 选填 浅灰
-KEY_FILL = PatternFill("solid", fgColor="DDEBF7")    # 关联键 浅蓝
-COND_FILL = PatternFill("solid", fgColor="FCE4D6")   # 条件列 浅橙
+# 颜色统一在 src/xlsx_kit.py 里定义
+REQ_FILL = X.FILLS["req"]     # 必填 浅黄
+OPT_FILL = X.FILLS["opt"]     # 选填 浅灰
+KEY_FILL = X.FILLS["key"]     # 关联键 浅蓝
+COND_FILL = X.FILLS["cond"]   # 条件列 浅橙
 
 UNIT_NAME = "单元名称"
 CREATIVE_PREFIX = "创意·"
@@ -156,10 +157,7 @@ def build(cfg: dict, positions: list[str], existing_activity: bool = False,
     _doc_sheet(wb, cfg, positions, existing_activity, strategy)
 
     name = out_name or f"{cfg['name']}_模板"
-    out = user_path("data", f"{name}.xlsx")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out)
-    return str(out)
+    return X.save(wb, f"{name}.xlsx")
 
 
 def _doc_sheet(wb, cfg: dict, positions: list[str], existing_activity: bool,

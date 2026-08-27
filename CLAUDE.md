@@ -64,6 +64,7 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 | `settings.py` | 全部 | 读 `config/settings.yaml`，缺的字段用 `assets/settings.default.yaml` 兜底 |
 | `preview.py` `ui.py` `validate.py` `images.py` `usage.py` `report.py` | 全部 | 预检行 / 界面回调 / 离线校验 / 图片 / 埋点 / 结果 csv |
 | `fill_core.py` | **新写的 filler 用它** | 和 DOM 无关的填表原语，见下 |
+| `xlsx_kit.py` | **全部 6 份 template** | 生成 Excel 时的样式活儿：表头上色/批注/列宽、填写说明页、存盘。各家 template 只管「有哪几列、说明写什么」 |
 
 ### `src/fill_core.py`：新 filler 从这儿起步，别再抄第五遍
 
