@@ -22,6 +22,7 @@ from .browser import Browser
 from .filler import FillError
 from .images import is_url, prefetch
 from .preview import PreviewRow
+from .runstate import StateMixin
 from .ui import BaseUI, ConsoleUI, Stopped
 from .wizard_filler import WizardFiller
 
@@ -30,7 +31,17 @@ log = logging.getLogger(__name__)
 DRY_TAG = ""          # 试跑时给活动/单元名加的前缀；留空 = 不加
 
 
-class WizardRunner:
+def _key(unit: dict) -> str:
+    """断点的 key：「资源位/单元名」。
+
+    ⚠ 不能只用单元名：同一个单元名在不同资源位下是两条不同的配置，
+      都要建。也不能用列表下标 —— 用户在 Excel 中间插一行就全错位了。
+    """
+    from . import wizard_data as _D
+    return f"{unit.get('position', '')}/{str(unit['header'].get(_D.UNIT_NAME, '')).strip()}"
+
+
+class WizardRunner(StateMixin):
     def __init__(self, settings: dict, form_cfg: dict, ui: BaseUI | None = None):
         self.s = settings
         self.f = form_cfg
@@ -39,6 +50,7 @@ class WizardRunner:
         self.shot_dir.mkdir(parents=True, exist_ok=True)
         self.auto = False
         self.created = []          # 记录建出来的活动/单元，跑完报给用户
+        self._init_state()
 
     # ---------------- 等待 ----------------
     def _wait(self, page, cond, timeout: int | None = None, step: int = 150) -> bool:
@@ -79,7 +91,7 @@ class WizardRunner:
             # payload 保留 position/header/creatives 原样：run() 就是按这三个键消费单元数据的
             rows.append(PreviewRow(
                 index=i + 1, name=name, kind=u["position"], detail_count=len(u["creatives"]),
-                issues=mine, done=False, payload=u,
+                issues=mine, done=self.state.is_done(_key(u)), payload=u,
             ))
         # 活动层和策略中心的问题不属于任何一个单元，挂在第一行上，
         # 免得「校验通过」满屏绿、真正拦路的那条反而没人看见
@@ -211,6 +223,9 @@ class WizardRunner:
                             spent["保存创意"] = time.monotonic() - t1
                             stats["ok"] += 1
                             results.append(self._row(i, pos, name, "ok", ""))
+                            # ⚠ 单元和创意都在后台真存在了才记断点。
+                            #   重跑不跳过的话会建出重复的单元。
+                            self.state.mark_done(_key(u))
                             # 每条跑完报一下时间都花在哪，慢了自己就能看出来
                             self.ui.log(f"{label} 完成（" + "、".join(
                                 f"{k} {v:.0f}s" for k, v in spent.items()) + "）", "ok")
@@ -223,6 +238,7 @@ class WizardRunner:
                         shot = self._shot(b.page, i + 1, "error")
                         stats["failed"] += 1
                         results.append(self._row(i, pos, name, "failed", msg))
+                        self.state.mark_failed(_key(u), f"{pos}/{name}", msg)
                         self.ui.log(f"{label} 失败：{msg}", "error")
                         self.ui.log(f"    截图：{shot}")
                         if not self.ui.ask_continue(msg):

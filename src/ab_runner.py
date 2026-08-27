@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import re
 from datetime import date, datetime
@@ -26,6 +25,7 @@ from .browser import Browser
 from .dmp_date import fmt as fmt_date
 from .filler import FillError
 from .preview import PreviewRow
+from .runstate import StateMixin
 from .ui import BaseUI, ConsoleUI, Stopped
 
 log = logging.getLogger(__name__)
@@ -46,45 +46,19 @@ class NotExtendable(FillError):
     """
 
 
-class AbRunner:
+class AbRunner(StateMixin):
     def __init__(self, settings: dict, form_cfg: dict, ui: BaseUI | None = None):
         self.s = settings
         self.f = form_cfg
         self.ui = ui or ConsoleUI()
-        self.state_path = Path(settings["state_file"])
         self.shot_dir = Path(settings["screenshot_dir"])
         self.shot_dir.mkdir(parents=True, exist_ok=True)
-        self.state = self._load_state()
+        self._init_state()
         self.auto = False
         self.scope = (settings.get("ab_scope") or form_cfg.get("scope") or SCOPE_MINE)
         if self.scope not in SCOPE_LABELS:
             raise FillError(f"不认识的延期范围「{self.scope}」，可选：{list(SCOPE_LABELS)}")
 
-    # ---------------- 状态 ----------------
-    def _load_state(self) -> dict:
-        if self.s.get("resume") and self.state_path.exists():
-            try:
-                all_state = json.loads(self.state_path.read_text(encoding="utf-8"))
-                return all_state.get(self.f["name"], {"done": [], "failed": []})
-            except Exception:
-                log.warning("AB 断点文件读不了，当作从头开始")
-        return {"done": [], "failed": []}
-
-    def _save_state(self):
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            all_state = json.loads(self.state_path.read_text(encoding="utf-8")) \
-                if self.state_path.exists() else {}
-        except Exception:
-            all_state = {}
-        all_state[self.f["name"]] = self.state
-        self.state_path.write_text(
-            json.dumps(all_state, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-    def clear_state(self):
-        self.state = {"done": [], "failed": []}
-        self._save_state()
 
     # ---------------- 预检 ----------------
     def preview(self) -> list[PreviewRow]:
@@ -115,7 +89,7 @@ class AbRunner:
                 kind=SCOPE_LABELS[self.scope],
                 detail_count=0,
                 issues=list(target.get("issues") or []),
-                done=target["key"] in self.state["done"],
+                done=self.state.is_done(target["key"]),
                 # 与 Gui 的通用详情弹窗保持兼容
                 payload={"header": header, "items": []},
             ))
@@ -205,7 +179,7 @@ class AbRunner:
                         self._goto_page(b.page, page_no)
                     for i, target in [(i, t) for i, t in enumerate(targets, 1)
                                       if t["page"] == page_no]:
-                        if target["key"] in self.state["done"]:
+                        if self.state.is_done(target["key"]):
                             self.ui.log(f"[{i}/{total}] {target['name']} 已完成过，跳过")
                             continue
                         self.ui.checkpoint()
@@ -251,8 +225,7 @@ class AbRunner:
                                 continue
 
                             self._submit(b.page)
-                            self.state["done"].append(target["key"])
-                            self._save_state()
+                            self.state.mark_done(target["key"])
                             stats["ok"] += 1
                             results.append(self._result(i, target, "ok", "", picked))
                             self.ui.log(f"{label} {target['name']} 已续期到 {picked}", "ok")
@@ -269,9 +242,7 @@ class AbRunner:
                             msg = str(e)
                             log.exception("AB 续期失败：%s", target["name"])
                             shot = self._screenshot(b.page, i, "error")
-                            self.state["failed"].append(
-                                {"key": target["key"], "name": target["name"], "error": msg})
-                            self._save_state()
+                            self.state.mark_failed(target["key"], target["name"], msg)
                             stats["failed"] += 1
                             results.append(self._result(i, target, "failed", msg, ""))
                             self.ui.log(f"{label} {target['name']} 失败：{msg}", "error")

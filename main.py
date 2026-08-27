@@ -48,7 +48,8 @@ def main():
     ap = argparse.ArgumentParser(description="大会员业务后台 配置助手")
     ap.add_argument("--cli", action="store_true", help="走命令行，不开图形界面")
     ap.add_argument("--tk", action="store_true",
-                    help="走旧版 tkinter 界面；新版（默认）出问题时的备用选项")
+                    help="走旧版 tkinter 界面。⚠ 它没有「准备」页/策略中心/活动选择，"
+                         "这几样只能先在默认界面里配好；不支持的配置类型开进去会提示")
     ap.add_argument("--form", help="配置类型（config/forms/ 下的文件名）")
     ap.add_argument("--settings", default="config/settings.yaml")
     ap.add_argument("--data", help="覆盖数据文件")

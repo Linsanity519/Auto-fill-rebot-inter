@@ -26,6 +26,7 @@ from . import ad_prep as P
 from .ad_filler import AdFiller
 from .browser import Browser
 from .preview import PreviewRow
+from .runstate import StateMixin
 from .ui import BaseUI, ConsoleUI, Stopped
 
 log = logging.getLogger(__name__)
@@ -48,7 +49,12 @@ def _accept_dialog(dialog):
         log.debug("关弹窗失败，多半是它自己已经没了", exc_info=True)
 
 
-class AdRunner:
+def _key(unit: dict) -> str:
+    """断点的 key：单元名。这套后台里单元名本来就唯一（重名建不出来）。"""
+    return str(unit.get("name") or unit.get("key") or "")
+
+
+class AdRunner(StateMixin):
     def __init__(self, settings: dict, form_cfg: dict, ui: BaseUI | None = None):
         self.s = settings
         self.f = form_cfg
@@ -57,6 +63,7 @@ class AdRunner:
         self.shot_dir.mkdir(parents=True, exist_ok=True)
         self.auto = False
         self.created = []          # 建出来的单元，跑完报给用户
+        self._init_state()
 
     # ---------------- 预检 ----------------
     def preview(self) -> list[PreviewRow]:
@@ -69,7 +76,8 @@ class AdRunner:
             mine = [x for x in issues if x.startswith(f"「{u['name']}」")]
             rows.append(PreviewRow(
                 index=i + 1, name=u["name"], kind=u["key"],
-                detail_count=len(u["creatives"]), issues=mine, done=False, payload=u,
+                detail_count=len(u["creatives"]), issues=mine,
+                done=self.state.is_done(_key(u)), payload=u,
             ))
 
         # 准备阶段的问题不属于任何一个单元，挂在第一行上，
@@ -149,6 +157,9 @@ class AdRunner:
                         self._submit(af, b.page)
                         stats["ok"] += 1
                         results.append(self._row(i, name, "ok", ""))
+                        # ⚠ 建出去了就立刻记断点：这个单元在后台是真存在了，
+                        #   重跑再建一遍就是重复的单元
+                        self.state.mark_done(_key(u))
                         self.created.append((name, len(u["creatives"])))
                         self.ui.log(f"{label} 已保存", "ok")
 
@@ -169,6 +180,7 @@ class AdRunner:
                         shot = self._shot(b.page, i + 1, "error")
                         stats["failed"] += 1
                         results.append(self._row(i, name, "failed", msg))
+                        self.state.mark_failed(_key(u), name, msg)
                         self.ui.log(f"{label} 失败：{msg}", "error")
                         self.ui.log(f"    截图：{shot}")
                         if not self.ui.ask_continue(msg):

@@ -3,7 +3,6 @@
 界面交互全部走 ui（BaseUI 的实现），Runner 本身不知道是命令行还是图形界面。
 """
 import csv
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -12,47 +11,23 @@ from .browser import Browser
 from .datasource import load_table, build_records
 from .filler import Filler
 from .preview import PreviewRow
+from .runstate import StateMixin
 from .ui import BaseUI, ConsoleUI, Stopped
 from .validate import validate_all, summarize
 
 log = logging.getLogger(__name__)
 
 
-class Runner:
+class Runner(StateMixin):
     def __init__(self, settings: dict, form_cfg: dict, ui: BaseUI | None = None):
         self.s = settings
         self.f = form_cfg
         self.ui = ui or ConsoleUI()
-        self.state_path = Path(settings["state_file"])
         self.shot_dir = Path(settings["screenshot_dir"])
         self.shot_dir.mkdir(parents=True, exist_ok=True)
-        self.state = self._load_state()
         self.auto = False
-
-    # ---------- 状态 ----------
-    def _load_state(self) -> dict:
-        if self.s.get("resume") and self.state_path.exists():
-            try:
-                st = json.loads(self.state_path.read_text(encoding="utf-8"))
-                return st.get(self.f["name"], {"done": [], "failed": []})
-            except Exception:
-                log.warning("断点文件读不了，当作从头开始")
-        return {"done": [], "failed": []}
-
-    def _save_state(self):
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        allst = {}
-        if self.state_path.exists():
-            try:
-                allst = json.loads(self.state_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        allst[self.f["name"]] = self.state
-        self.state_path.write_text(json.dumps(allst, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def clear_state(self):
-        self.state = {"done": [], "failed": []}
-        self._save_state()
+        # 断点走 src/runstate.py，六个执行器同一套（原来这里各写了一份）
+        self._init_state()
 
     # ---------- 预检 ----------
     def preview(self) -> list[PreviewRow]:
@@ -65,7 +40,7 @@ class Runner:
             s = summarize(r, self.f)
             out.append(PreviewRow(
                 index=i + 1, name=s["名称"], kind=s["类型"], detail_count=s["明细"],
-                issues=issues[i], done=i in self.state["done"], payload=r,
+                issues=issues[i], done=self.state.is_done(i), payload=r,
             ))
         return out
 
@@ -88,7 +63,7 @@ class Runner:
                 filler = Filler(b.page, self.f)
 
                 for i, rec in enumerate(records):
-                    if i in self.state["done"]:
+                    if self.state.is_done(i):
                         self.ui.log(f"[{i + 1}] 已完成过，跳过")
                         continue
 
@@ -121,8 +96,7 @@ class Runner:
                                 self._cancel(b.page)
                             else:
                                 self._submit(b.page)
-                                self.state["done"].append(i)
-                                self._save_state()
+                                self.state.mark_done(i)
                                 stats["ok"] += 1
                                 results.append(self._result(i, rec, "ok", ""))
                                 self.ui.log(f"{label} 提交成功", "ok")
@@ -133,8 +107,7 @@ class Runner:
                         msg = str(e)
                         log.exception("%s 失败", label)
                         shot = self._screenshot(b.page, i, tag="error")
-                        self.state["failed"].append({"record": i, "name": name, "error": msg})
-                        self._save_state()
+                        self.state.mark_failed(i, name, msg)
                         stats["failed"] += 1
                         results.append(self._result(i, rec, "failed", msg))
                         self.ui.log(f"{label} 失败：{msg}", "error")

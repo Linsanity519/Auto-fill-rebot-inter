@@ -400,9 +400,35 @@ class App:
             self.form_var.set(names[0])
             self._sync_form_ui()
             self.log(f"已加载 {len(names)} 个配置类型，当前：{names[0]}")
+            self._warn_unsupported()
+
+    # ⚠ 这个老界面**没有**「准备」页 / 策略中心 / 活动选择 / 抢占任务清单那几块 UI。
+    #   Runner 那边都有「界面没给就读存盘」的兜底，所以能跑 —— 跑的是**上次在默认界面
+    #   里配好、存在 config/strategies|prep 下的那份**。不说清楚的话，用户在这里改了
+    #   Excel 就开跑，实际生效的却是别处配的参数，而且一声不吭。
+    #   （main.py 的 --tk 帮助文字里也写了同一件事。）
+    _TK_MISSING = {
+        "strategy": "策略中心",
+        "prep": "「准备」页的共用参数",
+        "activity": "活动选择（新建 / 挂已有）",
+        "task_list": "抢占任务清单",
+    }
+
+    def _warn_unsupported(self):
+        from .webapp import Api
+        try:
+            caps = Api._caps(self._form_cfg())
+        except Exception:
+            return
+        missing = [label for key, label in self._TK_MISSING.items() if caps.get(key)]
+        if missing:
+            self.log("⚠ 这个界面配不了：" + "、".join(missing)
+                     + " —— 跑的时候用的是默认界面里配好、存在 config/ 下的那一份。"
+                       "要改这几样请开默认界面（不加 --tk）。", "warn")
 
     def on_form_change(self):
         self.log(f"已切换配置类型：{self.form_var.get()}")
+        self._warn_unsupported()
         self.tree.delete(*self.tree.get_children())
         self.preview_rows = []
         self.preview_stat.config(text="")

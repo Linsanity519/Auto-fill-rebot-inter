@@ -40,12 +40,23 @@ from .filler import FillError
 from .pp_creative import CreativeFiller
 from .pp_filler import PriceFiller, apply_field
 from .preview import PreviewRow
+from .runstate import StateMixin
 from .ui import BaseUI, ConsoleUI, Stopped
 
 log = logging.getLogger(__name__)
 
 
-class PriceRunner:
+def _key(unit: dict) -> str:
+    """断点的 key：「Excel行号/单元名」。
+
+    ⚠ 带上单元名而不是只用行号：用户在 Excel 中间插一行，行号会整体挪，
+      光看行号就会把没跑过的当成跑过的。名字改了也当成新的一条，那是对的。
+    """
+    from . import pp_data as _D
+    return f"{unit.get('row', '')}/{str(unit['header'].get(_D.UNIT_NAME, '')).strip()}"
+
+
+class PriceRunner(StateMixin):
     def __init__(self, settings: dict, form_cfg: dict, ui: BaseUI | None = None):
         self.s = settings
         self.f = form_cfg
@@ -55,6 +66,7 @@ class PriceRunner:
         self.auto = False
         self.created = []
         self._data = None
+        self._init_state()
 
     # ---------------------------------------------------------------- 预检
     def preview(self) -> list[PreviewRow]:
@@ -69,7 +81,7 @@ class PriceRunner:
                 name=u["header"].get(D.UNIT_NAME, "") or "(未命名)",
                 kind=self.f.get("position", "价格面板"),
                 detail_count=len({x for seg in segs for x in seg}),
-                issues=mine, done=False, payload=u,
+                issues=mine, done=self.state.is_done(_key(u)), payload=u,
             ))
         # 准备阶段和跨行的问题不属于任何一行，挂到第一行上，
         # 否则「校验通过」满屏绿、真正拦路的那条没人看见
@@ -158,6 +170,9 @@ class PriceRunner:
                                 self._shot(b.page, i, "creative")
                                 stats["ok"] += 1
                                 results.append(self._result(i, u, "ok", ""))
+                                # ⚠ 单元和创意都保存成功了才记断点 ——
+                                #   这个单元在后台真存在了，重跑会建出重复的
+                                self.state.mark_done(_key(u))
                                 self.created.append(name)
                                 self.ui.log(f"{label} 单元 + 创意都保存成功", "ok")
 
@@ -169,6 +184,7 @@ class PriceRunner:
                         shot = self._shot(b.page, i, "error")
                         stats["failed"] += 1
                         results.append(self._result(i, u, "failed", msg))
+                        self.state.mark_failed(_key(u), name, msg)
                         self.ui.log(f"{label} 失败：{msg}", "error")
                         self.ui.log(f"    错误截图：{shot}")
                         if not self.ui.ask_continue(msg):
