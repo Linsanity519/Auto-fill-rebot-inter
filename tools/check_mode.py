@@ -263,6 +263,28 @@ def check_global() -> Report:
         return "干净"
 
     r.check("_caps() 里没有 mode 名", caps_no_mode_names)
+
+    def scaffold_anchors():
+        """tools/new_mode.py 靠字符串锚点往 registry / formcfg 里插条目。
+
+        ⚠ 这几个锚点一旦被改掉，脚手架会静默少插一处 —— 生成出来的新配置类型
+          跑起来才发现「mode 不在 registry 里」。所以在这儿盯着。
+        """
+        missing = []
+        reg = (ROOT / "src" / "registry.py").read_text(encoding="utf-8")
+        for anchor in ("\n\ndef _runner_default(", "}\n\nDEFAULT_SPEC"):
+            if anchor not in reg:
+                missing.append(f"registry.py: {anchor!r}")
+        fc = (ROOT / "src" / "formcfg.py").read_text(encoding="utf-8")
+        if "BY_MODE = {" not in fc:
+            missing.append("formcfg.py: BY_MODE")
+        if missing:
+            raise AssertionError(
+                f"tools/new_mode.py 依赖的锚点没了：{missing}"
+                "　← 要么把锚点改回来，要么去修 new_mode.py")
+        return "都在"
+
+    r.check("脚手架 new_mode.py 依赖的锚点还在", scaffold_anchors)
     return r
 
 

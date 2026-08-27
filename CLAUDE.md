@@ -154,6 +154,16 @@ python tools\check_mode.py <配置类型名>
 给了 `--data xxx.xlsx` 还会走一遍和「载入并检查」同一条路。
 ⚠ **全过 ≠ 能跑通**：选择器准不准只有实跑能验。
 
+**先跑脚手架，接线那部分不用手写**：
+
+```bash
+python tools\new_mode.py 新配置类型名 --prefix xx
+```
+
+它铺好 yaml 骨架、抓取记录占位、runner/filler 骨架，并往 `registry.py` 的 MODES、
+`formcfg.py` 的 BY_MODE、`docs/README.md` 索引各插一条。跑完立刻 `check_mode` 应该全绿。
+剩下的是真业务：抓页面、填字段、写控件填法。
+
 | # | 文件 | 干什么 | 能省吗 |
 |---|---|---|---|
 | 0 | `python tools\capture.py --out docs\<配置类型>-配置项抓取.md` | 先自动 dump 一份草稿，别从零手抓 | — |

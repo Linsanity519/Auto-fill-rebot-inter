@@ -120,8 +120,13 @@ def _edit1(a: str, b: str) -> bool:
 
 
 def known_keys(mode) -> set:
-    """这个 mode 认得的全部顶层键。"""
-    return CORE | BY_MODE.get(mode or "_default", set())
+    """这个 mode 认得的全部顶层键。
+
+    ⚠ 用 set() 包一层：新加的 mode 那一格常常先是空的，而**空集合在 Python 里
+      没法写成字面量** —— `{}` 是空 dict，`CORE | {}` 直接 TypeError。
+      （tools/new_mode.py 生成骨架时真踩过。）
+    """
+    return CORE | set(BY_MODE.get(mode or "_default") or ())
 
 
 # ---------------------------------------------------------------- 读
