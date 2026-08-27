@@ -47,6 +47,18 @@ from .paths import user_path
 
 log = logging.getLogger(__name__)
 
+def has_strategy(cfg: dict) -> bool:
+    """这个配置类型有没有策略中心。
+
+    ⚠ 判据是「yaml 里有没有声明分组」，不是 mode 等于什么 —— 按 mode 写死的话，
+      每接一个新配置类型都要回来改这里。资源位投放和价格面板配置就是共用这一套。
+    ⚠ 这是**唯一**的判据来源：webapp.list_forms 发给界面的 caps.strategy、
+      wizard_meta 的早退、以后任何地方要问「有没有策略中心」，都调这个函数。
+      在别处重写一遍 cfg.get("strategy_groups") 就又变成两份会走样的实现了。
+    """
+    return bool(cfg.get("strategy_groups") or cfg.get("scheme_groups"))
+
+
 DEFAULT_NAME = "默认策略"
 MODE_FIXED, MODE_KEYWORD = "fixed", "keyword"
 MODES = (MODE_FIXED, MODE_KEYWORD)

@@ -11,6 +11,10 @@ nav:
   order: 1
 mode: meeting_reserve
 
+# ⚠ 这个配置类型不读 Excel：任务清单在「准备」页上直接填，存 config/prep/预定会议室.json。
+#   界面据此藏掉「数据文件」那一行（webapp.Api._caps 的 excel 项）。
+data_source: none
+
 form_url: 'https://administration.biliapi.net/f1-space/web/index.html#/home/meeting/reserve'
 
 # ⚠ 这个配置类型不读 Excel、也不点 DOM。

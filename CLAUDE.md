@@ -82,9 +82,34 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
   怎么读出选项文字。剩下的从 `fill_core` 拿。
 - 改它之后跑 `python tools\test_fill_core.py`（51 项，不联网不开浏览器）。
 
-界面上「这个配置类型有没有策略中心 / 有没有准备页」的判据是
-**yaml 里有没有 `strategy_groups` / `prep_fields`**，不是 `mode == xxx`。
-新接一个配置类型想用这两样，写 yaml 就行，不用回来改 Python。
+### 界面能力一律声明化，不许按 mode 名判断
+
+「这个配置类型有没有策略中心 / 要不要勾资源位 / 吃不吃 Excel」，
+**唯一的判据是 `webapp.Api._caps(cfg)` 按 yaml 算出来的那几个布尔**，
+随 `list_forms()` 一起发给前端：
+
+| caps | 含义 | yaml 判据 |
+|---|---|---|
+| `strategy` | 有策略中心 | `strategy_groups` / `scheme_groups`（转调 `wizard_strategy.has_strategy`）|
+| `prep` | 有「准备」页共用参数表 | `prep_fields` / `prep_from_unit`（转调 `ad_prep.has_prep`）|
+| `positions` | 要勾「本次投哪些资源位」 | `positions` 多于 1 项 |
+| `activity` | 本批共用一个活动 | 有 `activity` 或 `steps` |
+| `task_list` | 抢占任务清单那张卡 | 有 `grab` |
+| `excel` | 吃 Excel 数据文件 | `data_source` 不是 `none` |
+
+配套的还有 `ui:` 段（`deliver_label` / `deliver_hint` / `strategy_hint` / `run_kind`），
+界面上跟着类型变的几句话写在 yaml 里，不写用默认。
+
+⚠ **`_caps()` 函数体里一个 mode 名都不该出现**；`app.js` 里也不许再写
+  `modeIs("xxx")`。要一个新开关，就往 `_caps()` 加一项、在 yaml 里声明。
+
+为什么定这条：原来 `app.js` 写的是 `hasStrategy(){ return modeIs("wizard")
+|| modeIs("price_panel") }`，而 Python 那边早就改成看 yaml 了 —— **同一个判断
+两套实现**，接一个新类型两边都要改，漏改还是静默的（卡片不显示，一句报错都没有）。
+
+改了 `_caps()` / `_ui_text()` 或加了配置类型之后，跑一次
+`python tools\gen_stub_forms.py` 把 `app.js` 里那份假数据同步上
+（它是"不启动 pywebview 也能核对布局"的依据，走样了就白搭）。
 
 ---
 

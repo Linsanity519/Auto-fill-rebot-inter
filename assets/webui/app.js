@@ -24,14 +24,19 @@
 
   // group / label / *_order 对应 config/forms/*.yaml 里的 nav 段，
   // 真实值来自 list_forms，这里只是没有后端时的样子货
+  // ⚠ 这份假数据要和 list_forms 的真实返回**同构**（含 caps / ui），
+  //   否则拿普通浏览器打开 index.html 核对样式时，卡片的显隐会和真机不一样。
+  //   加了配置类型或改了 _caps 之后，重新生成一遍：
+  //     python tools\gen_stub_forms.py
   const STUB_FORMS = [
-    { name: "DMP延期", mode: "dmp_extension", group: "DMP人群包", group_order: 1, label: "DMP人群延期", order: 1, desc: "大会员 DMP 人群管理 - 批量把人群有效期延长", scopes: [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]] },
-    { name: "AB实验延期", mode: "ab_extension", group: "AB实验", group_order: 2, label: "AB实验延期", order: 1, desc: "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", scopes: [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]] },
-    { name: "DMP人群新建", mode: null, group: "DMP人群包", group_order: 1, label: "DMP人群新建", order: 2, desc: "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", scopes: [] },
-    { name: "价格配置", mode: null, group: "价格", group_order: 3, label: "价格策略配置", order: 1, desc: "策略中心 - 算法价格人群配置", scopes: [] },
-    { name: "资源位投放", mode: "wizard", group: "大会员资源位", group_order: 4, label: "常规资源位配置", order: 1, desc: "大会员投放系统 - 活动 / 单元 / 创意 三步配置", scopes: [] },
-    { name: "原生商广", mode: "ad_native", group: "商业化广告", group_order: 5, label: "原生商广", order: 1, desc: "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", scopes: [] },
-    { name: "预定会议室", mode: "meeting_reserve", group: "日常办公", group_order: 6, label: "预定会议室", order: 1, desc: "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", scopes: [] },
+    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
+    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
+    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
+    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
+    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill"}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
+    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
+    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
+    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab"}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
   ];
 
   // 没有后端时的假抢占任务数据：只够看清任务行的排版，真实楼栋清单来自
@@ -187,30 +192,46 @@
     meetingTasks: [],       // 抢占任务清单，存盘走 meeting_save
   };
 
-  function modeIs(mode) {
-    const meta = state.forms.find((f) => f.name === state.activeForm);
-    return !!(meta && meta.mode === mode);
+  // ============================================================ 能力判断
+  //
+  // ⚠ 界面上「这个配置类型有没有 xxx」**一律看后端发来的 caps，不看 mode 名**。
+  //   caps 由 src/webapp.py 的 Api._caps() 按 yaml 算出来（strategy_groups /
+  //   prep_fields / positions / activity / grab / data_source），那边一个 mode 名
+  //   都没有。
+  //
+  //   为什么定这条规矩：原来这里写的是
+  //       hasStrategy() { return modeIs("wizard") || modeIs("price_panel"); }
+  //   而 Python 那边早就改成看 yaml 了 —— 同一个判断两套实现，接一个新配置类型
+  //   要两边都记得改，漏改还是**静默的**（卡片不显示，一句报错都没有）。
+  //
+  //   所以：往下写新功能时，**不要再引入 modeIs("xxx")**。需要一个新的开关，
+  //   去 _caps() 里加一项、在 yaml 里声明，这里只管读。
+  function formMeta() {
+    return state.forms.find((f) => f.name === state.activeForm) || null;
   }
-  function isWizard() { return modeIs("wizard"); }
-  function isAdNative() { return modeIs("ad_native"); }
-  function isMeeting() { return modeIs("meeting_reserve"); }
-  // 有没有策略中心：由 Python 端按 yaml 里有没有 strategy_groups / scheme_groups 判断
-  //（wizard_meta 返回 wizard:true）。资源位投放和价格面板配置共用同一套策略中心。
-  // ⚠ 只有资源位投放要选资源位、要新建活动，那两行对别的配置类型要藏掉。
-  function hasStrategy() { return modeIs("wizard") || modeIs("price_panel"); }
-  // 「本次投放」那张共用参数表。
-  // ⚠ 价格面板配置 2026-08-26 起也有了，但只放一项：「生效渠道」。
-  //   它不是普通字段 —— 选「定向」之后页面上换成另一套 18 个字段（人群/平台/
-  //   频次/内容设置/赠单片/创意赛马全没了，多一个 价格面板panel_type），
-  //   所以必须在**生成模板之前**就定下来，Excel 才知道该出哪些列。
-  //   除它之外，价格面板可填的东西仍然只在 Excel 或策略中心里，不留第三个地方。
-  function hasPrepCard() { return modeIs("ad_native") || modeIs("price_panel"); }
+  function caps() { return (formMeta() || {}).caps || {}; }
+  function uiText() { return (formMeta() || {}).ui || {}; }
+
+  // 策略中心（配一次全批套用，可建多套方案、按单元名关键词切）
+  function hasStrategy() { return !!caps().strategy; }
+  // 「准备」页那张共用参数平表（原生商广的投放参数、价格面板的生效渠道）
+  function hasPrepCard() { return !!caps().prep; }
+  // 要不要勾「本次投哪些资源位」。只有一个资源位的配置类型没这回事
+  function hasPositions() { return !!caps().positions; }
+  // 本批共用一个活动：本次新建 or 挂到已有
+  function hasActivity() { return !!caps().activity; }
+  // 抢占任务清单那张卡（会议室）
+  function hasTaskList() { return !!caps().task_list; }
+  // 吃不吃 Excel 数据文件
+  function needsExcel() { return caps().excel !== false; }
+  // 跑法：grab=抢占（只找不订／开抢），fill=填表（空跑／逐条确认／全自动）
+  function isGrabRun() { return uiText().run_kind === "grab"; }
 
   // 资源位勾选 / 活动设置记在本地，换个配置类型再切回来不用重勾。
   // ⚠ 按配置类型分开存（key 里带 activeForm）：资源位投放和价格面板配置各记各的活动设置。
   function prefsKey() { return `formbot.wizard.${state.activeForm}`; }
   function savePrefs() {
-    if (!hasStrategy()) return;
+    if (!hasPositions() && !hasActivity()) return;
     try {
       localStorage.setItem(prefsKey(), JSON.stringify({
         positions: state.positions, activityMode: state.activityMode,
@@ -790,11 +811,14 @@
     const c = homeCard("用在哪儿了", "条数最多的，未必是最费时间的");
     const rows = (sum.forms || []).slice();
     const max = Math.max(1, ...rows.map((r) => r.ok || 0));
-    const meetingNames = state.forms.filter((f) => f.mode === "meeting_reserve").map((f) => f.name);
+    // ⚠ 判据是「这个配置类型的跑法是不是抢占」，不是名字叫不叫预定会议室。
+    //   跑法来自后端 ui.run_kind（见 webapp.Api._ui_text），不在这里列名单。
+    const grabNames = state.forms
+      .filter((f) => f.ui && f.ui.run_kind === "grab").map((f) => f.name);
 
     rows.forEach((r) => {
-      // 抢会议室按「抢中率」讲才有意义，按条数/耗时讲等于没有价值
-      const isMeeting = meetingNames.includes(r.name);
+      // 抢占型按「抢中率」讲才有意义，按条数/耗时讲等于没有价值
+      const isMeeting = grabNames.includes(r.name);
       const row = el("div", "bar-row");
       row.appendChild(el("div", "bar-name", formLabel(r.name)));
       const track = el("div", "bar-track");
@@ -952,11 +976,11 @@
     $("#wizardTabs").classList.remove("hidden");
     // 资源位选择是资源位投放独有的（价格面板配置只有一个资源位）。
     // 活动那一行两边都有：都是「本批共用一个活动」，要么本次新建、要么挂到已有。
-    const wiz = isWizard();
-    $("#wizardPosRow").classList.toggle("hidden", !wiz);
-    $("#wizardActivityRow").classList.toggle("hidden", !hasStrategy());
-    $("#strategyScopeWrap").classList.toggle("hidden", !wiz);
-    $("#wizardDeliverTab").textContent = wiz ? "资源位投放配置" : "投放配置";
+    const multi = hasPositions();
+    $("#wizardPosRow").classList.toggle("hidden", !multi);
+    $("#wizardActivityRow").classList.toggle("hidden", !hasActivity());
+    $("#strategyScopeWrap").classList.toggle("hidden", !multi);
+    $("#wizardDeliverTab").textContent = uiText().deliver_label || "投放配置";
     loadPrefs();
     renderActivityRow();
 
@@ -1165,9 +1189,11 @@
   //   「载入并检查」时 Python 端重新读盘 —— 所以改完必须点保存，和原生商广那张卡一个规矩。
   function renderMeetingCard() {
     const card = $("#meetingCard");
-    if (!isMeeting()) {
+    // 「数据文件」那一行跟着 caps.excel 走（yaml 里 data_source: none 就藏掉），
+    // 不跟着「是不是会议室」走 —— 以后再来个不吃 Excel 的类型不用改这儿
+    $("#dataFileRow").classList.toggle("hidden", !needsExcel());
+    if (!hasTaskList()) {
       card.classList.add("hidden");
-      $("#dataFileRow").classList.remove("hidden");
       $("#dataSourceTitle").textContent = "配置来源";
       $("#dataSourceHint").textContent = "选择数据文件，勾选延期范围（如果有）";
       state.meetingMeta = null;
@@ -1175,8 +1201,6 @@
       return;
     }
     card.classList.remove("hidden");
-    // 抢会议室没有「数据文件」这一说，整行藏掉，免得看着像少填了什么
-    $("#dataFileRow").classList.add("hidden");
     $("#dataSourceTitle").textContent = "开抢";
     $("#dataSourceHint").textContent = "任务在上面填，这里点「载入并检查」核对开抢时刻";
 
@@ -1205,11 +1229,11 @@
   function syncModeSegmented() {
     const seg = $("#modeSegmented");
     const item = (m) => seg.querySelector(`.seg-item[data-mode="${m}"]`);
-    const meeting = isMeeting();
-    item("dry").textContent = meeting ? "空跑（只找不订）" : "空跑（只填不提交）";
-    item("auto").textContent = meeting ? "开抢" : "全自动";
-    item("confirm").classList.toggle("hidden", meeting);
-    if (meeting && state.runMode === "confirm") {
+    const grab = isGrabRun();
+    item("dry").textContent = grab ? "空跑（只找不订）" : "空跑（只填不提交）";
+    item("auto").textContent = grab ? "开抢" : "全自动";
+    item("confirm").classList.toggle("hidden", grab);
+    if (grab && state.runMode === "confirm") {
       item("confirm").classList.remove("active");
       item("auto").classList.add("active");
       state.runMode = "auto";
@@ -1421,7 +1445,7 @@
   }
 
   function saveMeetingTasks() {
-    if (!isMeeting()) return;
+    if (!hasTaskList()) return;
     callApi("meeting_save", state.activeForm, state.meetingTasks).then((r) => {
       if (!r) return;
       if (!r.ok) {
@@ -1713,13 +1737,9 @@
     $(".stepbar").classList.toggle("hidden", onStrategy);
     $(".footer-bar").classList.toggle("hidden", onStrategy);
     // 提示语按配置类型说人话：两边的字段和步骤都不一样
-    const wiz = isWizard();
     $("#wizardTabHint").textContent = onStrategy
-      ? (wiz ? "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了"
-             : "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，"
-               + "Excel 里就只剩活动和这个面板放哪几个 SKU")
-      : (wiz ? "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑"
-             : "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑");
+      ? (uiText().strategy_hint || "配在这里的字段，模板里就不用逐个单元填了")
+      : (uiText().deliver_hint || "生成模板 → 填好 Excel → 载入并检查 → 跑");
 
     if (onStrategy) {
       if (!strategyUI.draft) strategyUI.draft = JSON.parse(JSON.stringify(state.strategyDoc));
@@ -1774,7 +1794,7 @@
   }
 
   function blockedReason(targetStep) {
-    if (targetStep === "review" && isWizard() && !state.positions.length) {
+    if (targetStep === "review" && hasPositions() && !state.positions.length) {
       return "先在「准备」页勾选本次要投的资源位";
     }
     if (targetStep === "review" && !state.loaded) return "请先在「准备」页选好数据文件，点「载入并检查」";
@@ -1863,7 +1883,7 @@
     // 这里只负责按已选好的东西出一份 Excel
     $("#btnMakeTemplate").addEventListener("click", () => {
       if (!state.activeForm) return;
-      if (isWizard()) {
+      if (hasPositions()) {
         if (!state.positions.length) {
           appendLog("先在上面勾选本次要投的资源位，再生成模板", "warn");
           return;
@@ -1873,7 +1893,7 @@
           .then(handleTemplateResult);
         return;
       }
-      if (hasStrategy()) {   // 价格面板配置：没有资源位可选，但活动那个开关一样要带上
+      if (hasActivity()) {   // 没有资源位可选、但要挂活动的类型（价格面板配置）
         callApi("make_template", state.activeForm, null, null,
                 { existing_activity: state.activityMode === "existing" })
           .then(handleTemplateResult);
@@ -1902,7 +1922,7 @@
   }
 
   function wizardOptions() {
-    if (!hasStrategy()) return null;
+    if (!hasPositions() && !hasActivity()) return null;
     return {
       positions: state.positions,
       activity: {
@@ -1914,7 +1934,7 @@
 
   function doLoadCheck() {
     if (!state.activeForm) return;
-    if (hasStrategy() && state.activityMode === "existing" && !state.activityId) {
+    if (hasActivity() && state.activityMode === "existing" && !state.activityId) {
       appendLog("选了「挂到已有活动」，先把活动ID填上", "warn");
       return;
     }
@@ -2212,7 +2232,7 @@
 
   /** 这个字段这次用不用得上：本次选中的资源位里有没有它 */
   function fieldInScope(f) {
-    if (!isWizard()) return true;          // 单资源位的配置类型，没有「本次投哪些位」这回事
+    if (!hasPositions()) return true;      // 单资源位的配置类型，没有「本次投哪些位」这回事
     if (!strategyUI.scopeToSelection || !state.positions.length) return true;
     return (f.positions || []).some((p) => state.positions.includes(p));
   }

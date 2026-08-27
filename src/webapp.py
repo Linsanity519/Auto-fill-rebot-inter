@@ -231,6 +231,59 @@ class Api:
         self._updater = update.UpdateService(settings, __version__)
 
     # ---------------- 配置类型 ----------------
+    #
+    # ⚠ 界面上「这个配置类型有没有 xxx」一律由这里按 yaml 算出来发给前端，
+    #   前端不许再写 `mode === "wizard" || mode === "price_panel"` 这种清单。
+    #
+    #   为什么：那种清单在 Python 和 JS 各存一份，接一个新配置类型要两边都改，
+    #   而且漏改是**静默的**（卡片不显示，没有任何报错）。
+    #   实际发生过：hasStrategy / hasPrepCard 在 app.js 里按 mode 名写死，
+    #   而 Python 这边早就改成看 strategy_groups / prep_fields 了 —— 同一个判断
+    #   两套实现。现在只有这一处。
+    #
+    #   ⚠ 下面这个函数体里**一个 mode 名都不该出现**。要是又忍不住写
+    #     `mode == "xxx"`，说明该在 yaml 里补一个声明，不是在这里加分支。
+    @staticmethod
+    def _caps(cfg: dict) -> dict:
+        # ⚠ strategy / prep 一律转调各自模块里那个唯一的判据函数，不在这里重写条件。
+        #   重写一遍就等于又多一份会走样的实现（prep 的条件是
+        #   prep_fields **或** prep_from_unit，价格面板走的正是后者）。
+        from . import ad_prep as P
+        from . import wizard_strategy as S
+
+        positions = cfg.get("positions") or {}
+        return {
+            # 策略中心（配一次全批套用，可建多套方案、按单元名关键词切）
+            "strategy": S.has_strategy(cfg),
+            # 「准备」页那张共用参数平表
+            "prep": P.has_prep(cfg),
+            # 要不要勾「本次投哪些资源位」。只有一个资源位的类型没这回事
+            "positions": len(positions) > 1,
+            # 本批共用一个活动：要么本次新建、要么挂到已有
+            "activity": bool(cfg.get("activity") or cfg.get("steps")),
+            # 抢占任务清单那张卡（日期/时间段/人数/楼栋，在界面上填不走 Excel）
+            "task_list": bool(cfg.get("grab")),
+            # 吃不吃 Excel 数据文件。不吃的在 yaml 里写 data_source: none
+            "excel": cfg.get("data_source", "excel") != "none",
+        }
+
+    # 界面上跟着配置类型变的那几句话。yaml 里 ui: 段可以覆盖，
+    # 不写就用下面的默认 —— 新接一个类型不用回来改 JS 的文案。
+    @staticmethod
+    def _ui_text(cfg: dict, caps: dict) -> dict:
+        ui = cfg.get("ui") or {}
+        multi = caps["positions"]
+        return {
+            "deliver_label": ui.get("deliver_label") or ("资源位投放配置" if multi else "投放配置"),
+            "deliver_hint": ui.get("deliver_hint") or (
+                "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑" if multi
+                else "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑"),
+            "strategy_hint": ui.get("strategy_hint") or
+            "配在这里的字段，模板里就不用逐个单元填了",
+            # 跑法：fill=填表（空跑/逐条确认/全自动），grab=抢占（只找不订/开抢）
+            "run_kind": ui.get("run_kind") or ("grab" if caps["task_list"] else "fill"),
+        }
+
     def list_forms(self) -> list:
         out = []
         for p in sorted(FORMS_DIR.glob("*.yaml")):
@@ -240,9 +293,14 @@ class Api:
                 log.warning("配置读取失败：%s", p, exc_info=True)
                 continue
             nav = cfg.get("nav") or {}
+            caps = self._caps(cfg)
             out.append({
                 "name": p.stem,
+                # ⚠ mode 仍然发出去，但前端只拿它做日志/埋点，不许拿它判断界面长什么样。
+                #   要判断长什么样，看下面的 caps。
                 "mode": cfg.get("mode"),
+                "caps": caps,
+                "ui": self._ui_text(cfg, caps),
                 "scopes": registry.scopes_for(cfg),
                 # 侧栏归类。yaml 没写 nav 的（比如新加的配置）落到「其他」组，
                 # 名字就用文件名 —— 界面照样能显示，不至于漏掉一整项。
@@ -417,7 +475,7 @@ class Api:
         # ⚠ 判据是「这个配置类型有没有声明策略中心的分组」，不是「mode == wizard」。
         #   价格面板配置也用同一套策略中心（同一个界面、同一份 config/strategies/），
         #   按 mode 写死的话，每接一个新配置类型都要回来改一次 Python。
-        if not (cfg.get("strategy_groups") or cfg.get("scheme_groups")):
+        if not S.has_strategy(cfg):
             return {"wizard": False}
         positions = []
         for name in W.position_names(cfg):

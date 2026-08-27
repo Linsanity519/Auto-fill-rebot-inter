@@ -29,6 +29,14 @@ nav:
 
 mode: price_panel
 
+# 界面文案，见 资源位投放.yaml 里同名段落的说明
+ui:
+  deliver_label: 投放配置
+  deliver_hint: 配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑
+  strategy_hint: >-
+    生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel
+    里就只剩活动和这个面板放哪几个 SKU
+
 # ---------------- 页面 ----------------
 # 这个后台的单元页必须挂在一个已有活动下，activityId 从 Excel 里逐单元给。
 # activityName 只影响页面上那行面包屑，给个占位也能跑，但给对了好核对。
