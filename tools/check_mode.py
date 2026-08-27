@@ -34,6 +34,7 @@ if sys.stdout:
 
 import yaml                                     # noqa: E402
 
+from src import formcfg                         # noqa: E402
 from src import registry                        # noqa: E402
 from src.paths import user_path                 # noqa: E402
 
@@ -81,64 +82,6 @@ class Report:
             print(f"  {mark} {msg}")
 
 
-def _known_keys(exclude: Path) -> set:
-    """别的 yaml 用过的顶层键，当作「已知词汇表」。"""
-    known = set()
-    for q in FORMS.glob("*.yaml"):
-        if q == exclude:
-            continue
-        try:
-            d = yaml.safe_load(q.read_text(encoding="utf-8")) or {}
-        except Exception:
-            continue
-        known |= set(d.keys())
-    return known
-
-
-def _edit1(a: str, b: str) -> bool:
-    """a 和 b 差一步以内（改一个字符 / 多一个 / 少一个）。"""
-    if a == b:
-        return False
-    if abs(len(a) - len(b)) > 1:
-        return False
-    if len(a) == len(b):
-        return sum(x != y for x, y in zip(a, b)) == 1
-    lo, hi = (a, b) if len(a) < len(b) else (b, a)
-    for i in range(len(hi)):
-        if hi[:i] + hi[i + 1:] == lo:
-            return True
-    return False
-
-
-def _check_typos(r: Report, cfg: dict, path: Path):
-    """顶层键名打错一个字母是**静默**的：yaml 照样解析，功能悄悄少一半。
-
-    ⚠ 这一条是拿一个故意写坏的 yaml 试出来的：把 strategy_groups 打成
-      strategy_group，策略中心的字段数从 24 掉到 6，其它检查全绿。
-
-    ⚠ **这是启发式，有已知误报，所以默认不跑，要加 --typos。**
-      词汇表是「别的 yaml 用过的顶层键」，于是只在一份 yaml 里出现的键会被当成可疑：
-        DMP延期 的 search_input_selector ⇄ AB实验延期 的 search_input_selectors
-        价格面板配置 的 position ⇄ positions
-      这三对都是**故意的**，不是打错。光看名字分不出「打错了」和「就是个新键」——
-      真正的解法是给 form yaml 定一份 schema（架构优化方向 ②），那时这个函数就该退休。
-      在**写一份新 yaml** 的时候手动跑一次最划算：那会儿所有键都还热乎，误报好认。
-    """
-    known = _known_keys(path)
-    suspects = []
-    for k in cfg:
-        if k in known:
-            continue
-        near = [x for x in known if _edit1(str(k), str(x))]
-        if near:
-            suspects.append(f"「{k}」是不是想写 {near[:2]}")
-    if suspects:
-        r.warn("顶层键名可能打错了：" + "；".join(suspects)
-               + "　← yaml 照样解析，功能会悄悄少一半，没有报错")
-    else:
-        r.ok("顶层键名没有和已知键差一个字母的")
-
-
 # ------------------------------------------------------------ 单个配置类型
 def check_form(path: Path, data_file: str | None = None) -> Report:
     r = Report(f"{path.stem}　（{path.name}）")
@@ -150,20 +93,14 @@ def check_form(path: Path, data_file: str | None = None) -> Report:
         return r
     r.ok("yaml 能解析")
 
-    # --- 基本键 ---
-    if cfg.get("name") != path.stem:
-        r.bad(f"yaml 里的 name 是「{cfg.get('name')}」，和文件名「{path.stem}」对不上"
-              "　← 界面按文件名选，runner 按 name 报，两边必须一致")
-    else:
-        r.ok("name 和文件名一致")
-
-    if not cfg.get("description"):
-        r.warn("没写 description　← 首页当功能导航用的就是这句话")
-    if not cfg.get("nav"):
-        r.warn("没写 nav　← 侧栏会把它扔进「其他」组")
-
-    if "--typos" in sys.argv:
-        _check_typos(r, cfg, path)
+    # --- 基本键 + 顶层键名词汇表（判据都在 src/formcfg.py，这里只负责显示）---
+    errs, warns = formcfg.validate(cfg, path.stem)
+    for m in errs:
+        r.bad(m)
+    for m in warns:
+        r.warn(m)
+    if not errs and not warns:
+        r.ok("基本键齐、顶层键名都认得")
 
     # --- registry 接线 ---
     mode = cfg.get("mode")
@@ -333,8 +270,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="配置类型的离线自检（不开浏览器）")
     ap.add_argument("form", nargs="?", help="只查这一个；不给就查全部")
     ap.add_argument("--data", help="连数据文件一起查（走和「载入并检查」同一条路）")
-    ap.add_argument("--typos", action="store_true",
-                    help="顺带查顶层键名是不是打错了（启发式，有已知误报，写新 yaml 时用）")
     ap.add_argument("-v", action="store_true", help="出错时打完整调用栈")
     args = ap.parse_args()
 

@@ -60,6 +60,8 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 | `wizard_schema.py` | **wizard + price_panel** | yaml 字段结构的读取/展开 |
 | `ad_prep.py` | **ad_native + price_panel** | 「准备」页上填一次全批共用的参数，存 `config/prep/*.json` |
 | `browser.py` / `chrome.py` | 全部 | 挂到 9222 的 CDP、把标签页拨到前台（`front()`，不拨会被 Chrome 降频 15 倍） |
+| `formcfg.py` | 全部 | **form yaml 的唯一入口**：读 + 按 mtime 缓存 + 校验顶层键名。不要再写 `yaml.safe_load(config/forms/...)` |
+| `runstate.py` | 六个执行器 | 断点（哪些已跑成功）。`StateMixin` 混进去就有 `clear_state` |
 | `paths.py` | 全部 | `user_path()` 可写目录 / `resource()` 只读资源。**不要拼相对路径** |
 | `settings.py` | 全部 | 读 `config/settings.yaml`，缺的字段用 `assets/settings.default.yaml` 兜底 |
 | `preview.py` `ui.py` `validate.py` `images.py` `usage.py` `report.py` | 全部 | 预检行 / 界面回调 / 离线校验 / 图片 / 埋点 / 结果 csv |
@@ -116,6 +118,11 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 
 ## 硬约定（违反了一定出事，都是踩出来的）
 
+0. **往 form yaml 加新顶层键，回 `src/formcfg.py` 的 `BY_MODE` 登记一下。**
+   不登记 `tools\check_mode.py` 会提示「不认识这个键」—— 那是它该干的事，
+   别关提示。打错一个字母是完全静默的（`strategy_groups` → `strategy_group`，
+   yaml 照样解析、策略字段从 24 悄悄变 6），这张词汇表就是为了防它。
+   纯 YAML 锚点用 `_` 开头，一律放行。
 1. **不写死 `sleep(n)`。** 一律 `wait_until(cond)` + `settings.timeout` 上限。
 2. **不用编译哈希类名**（`tw-xxxxxx` / `css-1a75fj6` / emotion 类）。发版即失效。
    定位一律 **label 文字 → 字段块 → 块内按选项文字**。

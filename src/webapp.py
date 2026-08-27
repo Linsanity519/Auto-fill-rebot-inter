@@ -28,7 +28,7 @@ from pathlib import Path
 import webview
 import yaml
 
-from . import chrome, notify, registry, update, usage
+from . import chrome, formcfg, notify, registry, update, usage
 from . import settings as settings_defaults
 from .paths import app_dir, resource, user_path
 from .ui import BaseUI, Stopped
@@ -286,16 +286,11 @@ class Api:
 
     def list_forms(self) -> list:
         out = []
-        for p in sorted(FORMS_DIR.glob("*.yaml")):
-            try:
-                cfg = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-            except Exception:
-                log.warning("配置读取失败：%s", p, exc_info=True)
-                continue
+        for name, cfg in formcfg.load_all():
             nav = cfg.get("nav") or {}
             caps = self._caps(cfg)
             out.append({
-                "name": p.stem,
+                "name": name,
                 # ⚠ mode 仍然发出去，但前端只拿它做日志/埋点，不许拿它判断界面长什么样。
                 #   要判断长什么样，看下面的 caps。
                 "mode": cfg.get("mode"),
@@ -413,7 +408,7 @@ class Api:
             return {}
 
     def _form_cfg(self, form_name: str) -> dict:
-        return yaml.safe_load((FORMS_DIR / f"{form_name}.yaml").read_text(encoding="utf-8"))
+        return formcfg.load(form_name)
 
     # ---------------- 浏览器 ----------------
     def browser_status(self) -> bool:

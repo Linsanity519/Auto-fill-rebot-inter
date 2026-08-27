@@ -38,10 +38,20 @@ def load_form(name: str | None) -> dict:
             choice = input("序号或名称：").strip()
             name = available[int(choice) - 1] if choice.isdigit() else choice
 
-    path = FORMS_DIR / f"{name}.yaml"
-    if not path.exists():
-        raise SystemExit(f"找不到配置「{name}」。可选：{available}")
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not (FORMS_DIR / f"{name}.yaml").exists():
+        raise SystemExit(f"找不到配置「{name}」，可选：{available}")
+
+    from src import formcfg
+    cfg = formcfg.load(name)
+    # 命令行下顺手把 yaml 的问题说出来 —— 界面版有「载入并检查」，命令行没有
+    errs, warns = formcfg.validate(cfg, name)
+    for m in errs:
+        print("✗ " + m)
+    for m in warns:
+        print("⚠ " + m)
+    if errs:
+        raise SystemExit(f"配置有问题，先修好再跑（详细自检：python tools\\check_mode.py {name}）")
+    return cfg
 
 
 def main():

@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import yaml
 
-from . import chrome, notify, registry, theme
+from . import chrome, formcfg, notify, registry, theme
 from . import settings as settings_defaults
 from .paths import app_dir, resource, user_path
 from .theme import (BG, BORDER, CARD, CONSOLE_BG, CONSOLE_FG, DANGER, PINK,
@@ -504,7 +504,7 @@ class App:
         self._sync_data_row(registry.scopes_for(self._form_cfg()))
 
     def _form_cfg(self):
-        return yaml.safe_load((FORMS_DIR / f"{self.form_var.get()}.yaml").read_text(encoding="utf-8"))
+        return formcfg.load(self.form_var.get())
 
     def _make_runner(self, settings, cfg, ui):
         """按 profile 的 mode 选执行器。

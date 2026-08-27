@@ -75,23 +75,17 @@ def _template_ab(name: str) -> str:
 
 
 def _template_ad(name: str) -> str:
-    import yaml
-
     from . import ad_template
-    from .paths import user_path
+    from . import formcfg
 
-    cfg = yaml.safe_load(user_path("config", "forms", f"{name}.yaml").read_text(encoding="utf-8"))
-    return ad_template.build(cfg)
+    return ad_template.build(formcfg.load(name))
 
 
 def _template_price_panel(name: str) -> str:
-    import yaml
-
+    from . import formcfg
     from . import pp_template
-    from .paths import user_path
 
-    cfg = yaml.safe_load(user_path("config", "forms", f"{name}.yaml").read_text(encoding="utf-8"))
-    return pp_template.build(cfg)
+    return pp_template.build(formcfg.load(name))
 
 
 def _template_default(name: str) -> str:

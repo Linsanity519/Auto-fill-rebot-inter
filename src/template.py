@@ -6,13 +6,13 @@
 ⚠ 必须是可直接 import 调用的函数：打包成 exe 后 sys.executable 就是 exe 本身，
   用 subprocess 去跑脚本只会再开一个界面。
 """
-import yaml
 from openpyxl import Workbook
 from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from . import formcfg
 from .datasource import header_field_names, item_field_names
 from . import xlsx_kit as X
 from .paths import user_path
@@ -53,8 +53,7 @@ def collect_meta(form_cfg: dict) -> dict:
 
 def build(form_name: str) -> str:
     """生成模板，返回文件路径。"""
-    path = user_path("config", "forms", f"{form_name}.yaml")
-    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    cfg = formcfg.load(form_name)
 
     meta = collect_meta(cfg)
     # 「分组」只在有明细行（list）时才有意义——它的作用就是把多行并成一条配置。
