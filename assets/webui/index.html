@@ -37,22 +37,25 @@
     </div>
 
     <div class="sidebar-footer">
-      <button class="btn btn-ghost" style="justify-content:flex-start" id="btnOpenOutput">打开结果目录</button>
-      <button class="btn btn-ghost" style="justify-content:flex-start" id="btnClearState">清除断点记录</button>
-      <!-- 未配置发布地址时会被 JS 隐藏；有新版时显示下载并重启按钮。 -->
+      <!-- 平时就下面那一行；只有真有新版本时 JS 才 un-hide 这个框 -->
       <div class="update-box hidden" id="updateBox">
         <span id="updateLabel"></span>
         <div class="update-actions">
-          <button class="btn btn-sm" id="btnCheckUpdate">检查更新</button>
           <button class="btn btn-sm btn-primary hidden" id="btnInstallUpdate">更新并重启</button>
         </div>
       </div>
-      <div class="theme-row">
-        <div class="toggle" id="themeToggle"><div class="knob"></div></div>
-        <span>深色模式</span>
+      <!-- 版本号常驻：同事报问题第一句就问「你那儿显示的是几」。检查更新收成文字链接，
+           深色模式收成一个小图标 —— 都是低频，不占常驻的整行位置。
+           打开结果目录 / 清除断点 挪去了「执行」页（用得到它们的地方）。 -->
+      <div class="footer-line">
+        <span class="sidebar-version" id="appVersion"></span>
       </div>
-      <!-- 版本号常驻：同事报问题时第一句就能问「你那儿显示的是几」 -->
-      <div class="sidebar-version" id="appVersion"></div>
+      <div class="footer-line">
+        <button class="footer-link" id="btnCheckUpdate">检查更新</button>
+        <span class="footer-dot">·</span>
+        <button class="footer-link" id="btnFeedback">反馈</button>
+        <button class="theme-icon" id="themeToggle" title="切换深色模式" aria-label="切换深色模式">☾</button>
+      </div>
     </div>
   </aside>
 
@@ -299,6 +302,8 @@
               <input type="checkbox" id="skipDoneCheck" checked style="accent-color:var(--pink)">
               跳过已成功的
             </label>
+            <button class="btn btn-sm btn-ghost" id="btnClearState"
+                    title="清掉「哪几条已成功」的记录，重跑当成全新一批（已提交的不会撤销）">清除断点</button>
             <span class="row" style="margin-left:auto;gap:8px">
               <button class="btn" id="btnPause" disabled>暂停</button>
               <button class="btn" id="btnStop" disabled>停止</button>
@@ -309,6 +314,7 @@
           <div class="row" style="gap:12px">
             <span class="pbar"><i id="runProgressBar"></i></span>
             <span style="color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap" id="runStat">未开始</span>
+            <button class="btn btn-sm" style="margin-left:auto" id="btnOpenOutput">打开结果目录</button>
           </div>
 
           <div class="col hidden" id="failedSection" style="gap:8px">
@@ -364,6 +370,7 @@
         <span style="color:var(--sub)">运行日志</span>
         <span class="pill" id="logCountPill">0</span>
         <span class="pill bad hidden" id="logErrorPill">0 报错</span>
+        <button class="pill" id="btnFeedbackLog" style="border:0;cursor:pointer">反馈这段日志</button>
         <span class="toggle-hint" id="logToggleHint">展开 ⌄</span>
       </div>
       <div class="log-body">

@@ -156,6 +156,7 @@
     if (name === "meeting_meta") return Promise.resolve(STUB_MEETING);
     if (name === "meeting_save") return Promise.resolve({ ok: true, tasks: args[1] || [], issues: [] });
     if (name === "pt_ledger_view") return Promise.resolve({ ok: true, strategies: [], recent: [], path: "" });
+    if (name === "submit_feedback") return Promise.resolve({ ok: true });
     if (name === "prep_save") return Promise.resolve({ ok: true, values: {}, issues: [] });
     if (name === "strategy_get") return Promise.resolve({ ok: true, path: "config/strategies/…json", doc: STUB_STRATEGY });
     // ⚠ 统计的样子货只在网址带 ?demo 时给。别的样子货最多让界面长得不对，
@@ -308,7 +309,8 @@
   // ---------------- 主题 ----------------
   function applyTheme(dark) {
     document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-    $("#themeToggle").classList.toggle("on", dark);
+    const t = $("#themeToggle");
+    if (t) t.textContent = dark ? "☀" : "☾";   // 点了切到浅色显示☀，反之☾
     try { localStorage.setItem("formbot.theme", dark ? "dark" : "light"); } catch (e) { /* 忽略 */ }
   }
 
@@ -331,33 +333,49 @@
     return big ? `（完整安装包 ${size}，用时较久）` : `（${size}）`;
   }
 
+  // 平时 footer 只有一行「版本 X · 检查更新」。只有真有新版本，才把那个带
+  // 「更新并重启」的框展开出来；没更新时给文字链接一个短暂的「已是最新」反馈。
+  function setCheckLink(text, dim) {
+    const link = $("#btnCheckUpdate");
+    if (!link) return;
+    link.disabled = false;
+    link.textContent = text;
+    link.classList.toggle("dim", !!dim);
+  }
+
   function renderUpdate(info) {
     const box = $("#updateBox");
     const label = $("#updateLabel");
     const install = $("#btnInstallUpdate");
-    const check = $("#btnCheckUpdate");
-    if (!info || info.state === "disabled") {
-      box.classList.add("hidden");
-      return;
-    }
-    box.classList.remove("hidden");
-    check.disabled = false;
-    check.textContent = "检查更新";
-    install.classList.add("hidden");
-    if (info.state === "available") {
-      // 下载量差着两个数量级（代码包 ~300KB vs 完整安装包 ~45MB），而 GitHub 在
-      // 内网只有几十 KB/s —— 不写清楚的话，点下去要等 40 分钟的人会以为卡死了。
-      // ⚠ 侧栏只报「有新版本 + 多大」，改动说明一个字都不放。
-      //   这里是**一行**，而 notes 是多行的更新日志（见 CHANGELOG.md）：整段塞进来
-      //   换行会被压成空格糊成一长条（1.0.11 的客户端就是这样，实测很难看）；
-      //   只取第一行也还是和紧接着弹出来的那个弹窗重复一遍。说明只留在弹窗里。
-      label.textContent = `发现新版本 ${info.version}${fmtSize(info)}`;
+    const link = $("#btnCheckUpdate");
+
+    if (info && info.state === "available") {
+      box.classList.remove("hidden");
       install.classList.remove("hidden");
-      maybeAnnounceUpdate(info);
-    } else if (info.state === "current") {
-      label.textContent = "当前已是最新版本";
+      link.classList.add("has-update");
+      setCheckLink("有新版");
     } else {
-      label.textContent = info.message || "检查更新失败，可稍后重试";
+      box.classList.add("hidden");
+      install.classList.add("hidden");
+      link.classList.remove("has-update");
+      link.classList.toggle("hidden", !!(info && info.state === "disabled"));
+      if (info && info.state === "current") {
+        setCheckLink("已是最新", true);
+        setTimeout(() => { const l = $("#btnCheckUpdate");
+          if (l && !l.classList.contains("has-update")) setCheckLink("检查更新"); }, 2500);
+      } else if (info && info.state === "error") {
+        setCheckLink("检查失败", true);
+        setTimeout(() => { const l = $("#btnCheckUpdate");
+          if (l && !l.classList.contains("has-update")) setCheckLink("检查更新"); }, 2500);
+      } else {
+        setCheckLink("检查更新");
+      }
+    }
+    if (info && info.state === "available") {
+      // ⚠ 侧栏那个框只报「有新版本 + 多大」，改动说明一个字都不放 —— notes 是多行的
+      //   更新日志，塞进这一行会被压成一长条（1.0.11 实测很难看），也和紧接着的弹窗重复。
+      label.textContent = `发现新版本 ${info.version}${fmtSize(info)}`;
+      maybeAnnounceUpdate(info);
     }
   }
 
@@ -393,18 +411,83 @@
   }
 
   function checkForUpdate(force) {
-    const box = $("#updateBox");
-    const label = $("#updateLabel");
     if (force) {
-      box.classList.remove("hidden");
-      label.textContent = "正在检查更新…";
-      $("#btnCheckUpdate").disabled = true;
-    }
-    if (force) {
+      const link = $("#btnCheckUpdate");
+      if (link) { link.textContent = "检查中…"; link.disabled = true; }
       // 手动点检查 = 明确想看结果，把「这版已提醒过」的记录清掉
       try { localStorage.removeItem(UPDATE_SEEN_KEY); } catch (e) {}
     }
     return callApi("check_update", !!force).then(renderUpdate);
+  }
+
+  // ---------------- 反馈 ----------------
+  function logTail(n) {
+    return [...$("#logConsole").querySelectorAll(".line")]
+      .slice(-n).map((l) => l.textContent.replace(/\s+/g, " ").trim()).join("\n");
+  }
+
+  const FB_COPY = {
+    issue: {
+      desc: "遇到的问题写下面，勾上日志能帮我们更快定位。",
+      ph: "哪个配置类型、点了什么、期望怎样、实际怎样 —— 越具体越好",
+    },
+    idea: {
+      desc: "想要的功能写下面，说清用在什么场景、现在只能怎么绕。",
+      ph: "想要什么功能、解决什么场景、现在是怎么手动做的",
+    },
+  };
+
+  function openFeedback(kind) {
+    kind = kind === "idea" ? "idea" : "issue";
+    showModal({
+      title: "反馈",
+      desc: FB_COPY[kind].desc,
+      extraHtml:
+        '<div style="padding:12px;display:flex;flex-direction:column;gap:10px">' +
+        '<div class="segmented" id="fbKindSeg">' +
+        `<div class="seg-item${kind === "issue" ? " active" : ""}" data-k="issue">报告问题</div>` +
+        `<div class="seg-item${kind === "idea" ? " active" : ""}" data-k="idea">功能建议</div>` +
+        "</div>" +
+        '<textarea id="fbText" rows="5" class="field" style="resize:vertical;font-family:inherit"></textarea>' +
+        '<label class="row" id="fbLogRow" style="gap:6px;color:var(--sub);font-size:12px;cursor:pointer">' +
+        '<input type="checkbox" id="fbLog" checked> 附上最近的运行日志（会一起发出去）</label>' +
+        "</div>",
+      buttons: [
+        { label: "发送", primary: true, onClick: sendFeedback },
+        { label: "取消" },
+      ],
+    });
+    const seg = $("#fbKindSeg");
+    const syncKind = () => {
+      const active = seg.querySelector(".seg-item.active");
+      const k = active && active.dataset.k === "idea" ? "idea" : "issue";
+      $("#modalDesc").textContent = FB_COPY[k].desc;
+      $("#fbText").placeholder = FB_COPY[k].ph;
+      $("#fbLogRow").style.display = k === "issue" ? "" : "none";
+    };
+    seg.querySelectorAll(".seg-item").forEach((it) => {
+      it.onclick = () => {
+        seg.querySelectorAll(".seg-item").forEach((n) => n.classList.remove("active"));
+        it.classList.add("active");
+        syncKind();
+      };
+    });
+    syncKind();
+    $("#fbText").focus();
+  }
+
+  function sendFeedback() {
+    // showModal 的按钮回调里 overlay 已 hide，但 #modalExtra 的 DOM 还在，能读到值
+    const active = $("#fbKindSeg .seg-item.active");
+    const kind = active && active.dataset.k === "idea" ? "idea" : "issue";
+    const text = ($("#fbText") && $("#fbText").value || "").trim();
+    if (!text) { appendLog("反馈内容是空的，没发送", "warn"); return; }
+    const withLog = kind === "issue" && $("#fbLog") && $("#fbLog").checked;
+    appendLog("正在发送反馈…", "info");
+    callApi("submit_feedback", { kind, text, log: withLog ? logTail(60) : "" }).then((r) => {
+      if (r && r.ok) appendLog("反馈已发送，谢谢 🙏", "ok");
+      else appendLog(`反馈没发出去：${r ? r.error : "无法连接后端"}`, "error");
+    });
   }
 
   function downloadAndInstallUpdate() {
@@ -3312,6 +3395,8 @@
 
   function initLogDrawer() {
     $("#logHead").addEventListener("click", () => setLogOpen(!state.logOpen));
+    $("#btnFeedbackLog").addEventListener("click", (e) => { e.stopPropagation(); openFeedback("issue"); });
+    $("#btnFeedback").addEventListener("click", () => openFeedback("idea"));
     $("#btnDetailClose").addEventListener("click", () => $("#detailModal").classList.add("hidden"));
   }
 
@@ -3353,7 +3438,10 @@
 
     onFinished(title, body, ok) {
       appendLog(`${title}：${String(body).replace(/\n+/g, " ")}`, ok ? "ok" : "error");
-      showModal({ title, desc: body, buttons: [{ label: "知道了", primary: true }] });
+      showModal({ title, desc: body, buttons: [
+        { label: "打开结果目录", onClick: () => callApi("open_output_dir") },
+        { label: "知道了", primary: true },
+      ] });
     },
 
     onRunDone(summary) {

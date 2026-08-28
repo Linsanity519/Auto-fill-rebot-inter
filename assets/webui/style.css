@@ -318,9 +318,19 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
   font-size: 9px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--bd); color: var(--mu);
 }
 
-.sidebar-footer { margin-top: auto; padding: 10px 8px; border-top: 1px solid var(--bd); display: flex; flex-direction: column; gap: 2px; flex: none; }
-.sidebar-footer .theme-row { display: flex; align-items: center; gap: 8px; color: var(--sub); font-size: 11px; padding: 8px 8px 6px; }
-.sidebar-version { font-size: 10px; color: var(--mu); padding: 2px 8px 4px; font-variant-numeric: tabular-nums; }
+.sidebar-footer { margin-top: auto; padding: 8px; border-top: 1px solid var(--bd); display: flex; flex-direction: column; gap: 2px; flex: none; }
+.sidebar-version { font-size: 10px; color: var(--mu); padding: 0; font-variant-numeric: tabular-nums; }
+
+/* footer 两行：版本号一行、检查更新/反馈/深色图标一行 */
+.footer-line { display: flex; align-items: center; gap: 6px; padding: 2px 6px; font-size: 11px; }
+.footer-line:first-of-type { padding-top: 6px; }
+.footer-dot { color: var(--mu); }
+.footer-link { border: 0; background: none; padding: 0; margin: 0; font: inherit; color: var(--sub); cursor: pointer; }
+.footer-link:hover { color: var(--pink); }
+.footer-link.has-update { color: var(--pink); font-weight: 700; }
+.footer-link.dim { color: var(--mu); cursor: default; }
+.theme-icon { margin-left: auto; border: 0; background: none; padding: 2px 5px; border-radius: 6px; color: var(--sub); font-size: 13px; line-height: 1; cursor: pointer; }
+.theme-icon:hover { background: var(--pink-light); color: var(--pink); }
 .update-box { margin: 5px 0 3px; padding: 8px; border: 1px solid var(--pink); border-radius: 8px; background: var(--pink-light); display: flex; flex-direction: column; gap: 6px; }
 .update-box > span { color: var(--pink-text-on-light); font-size: 11px; font-weight: 700; line-height: 1.35; }
 .update-actions { display: flex; gap: 6px; }

@@ -122,6 +122,43 @@ def send_line(settings: dict, text: str) -> bool:
         return False
 
 
+def feedback_webhook_url(settings: dict) -> str:
+    """用户反馈发到哪儿。
+
+    优先级：settings.yaml 的 usage.feedback_webhook_url → config/feedback_webhook.txt
+    → 兜底并到统计群（webhook_url）。想让反馈单独进一个群，配前两者之一即可。
+    """
+    explicit = (((settings or {}).get("usage") or {}).get("feedback_webhook_url") or "").strip()
+    if explicit:
+        return explicit
+    p = user_path("config", "feedback_webhook.txt")
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
+    except OSError:
+        pass
+    return webhook_url(settings)
+
+
+def send_feedback(settings: dict, text: str) -> bool:
+    """发一条用户反馈。企微 text 上限 2048 字节，超了先砍日志、再砍正文。"""
+    url = feedback_webhook_url(settings)
+    if not url:
+        return False
+    if len(text.encode("utf-8")) > 2000:
+        # 用两个「——」分隔的最后一段一般是日志，先砍它
+        head, sep, _ = text.rpartition("\n——\n")
+        text = (head if sep else text[:600]) + "\n——\n（内容过长，已截断）"
+        text = text.encode("utf-8")[:2000].decode("utf-8", "ignore")
+    try:
+        return _post(url, text)
+    except Exception:
+        log.warning("反馈发送失败（不影响运行）", exc_info=True)
+        return False
+
+
 def push(settings: dict, form_names, nickname: str = "") -> dict:
     """把「还没成功发出去的那几周」发一遍，返回 {sent, failed, error}。
 

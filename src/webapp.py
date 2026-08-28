@@ -751,6 +751,36 @@ class Api:
             log.exception("清除断点失败")
             return {"ok": False, "error": str(e)}
 
+    def submit_feedback(self, payload: dict | None) -> dict:
+        """用户反馈：报告问题（可附最近日志）/ 功能建议。发到企微群。
+
+        ⚠ 内容是用户自己写、自己点发的，不是埋点 —— 但日志段可能带业务字样，
+          所以界面上那个「附上运行日志」的勾选默认给用户看得见、可关掉。
+        """
+        try:
+            from . import report, usage
+            p = payload or {}
+            kind = "报告问题" if str(p.get("kind")) == "issue" else "功能建议"
+            text = str(p.get("text", "")).strip()
+            if not text:
+                return {"ok": False, "error": "反馈内容是空的"}
+            tail = str(p.get("log", "")).strip()
+
+            lines = [f"【配置助手 · {kind}】",
+                     f"版本 {usage._app_version()}　指纹 {usage._uid()}"]
+            if self.form_name:
+                lines.append(f"配置类型 {self.form_name}")
+            lines += ["——", text[:800]]
+            if tail:
+                lines += ["——", "最近日志：", tail[:1200]]
+
+            ok = report.send_feedback(self.settings, "\n".join(lines))
+            return {"ok": True} if ok else {
+                "ok": False, "error": "没发出去 —— 检查网络，或稍后再试"}
+        except Exception as e:
+            log.exception("提交反馈失败")
+            return {"ok": False, "error": str(e)}
+
     def open_output_dir(self) -> bool:
         p = ROOT / "output"
         p.mkdir(parents=True, exist_ok=True)
