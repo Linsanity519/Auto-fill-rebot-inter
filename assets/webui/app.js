@@ -193,6 +193,7 @@
     reviewFilter: "all",    // all | bad | done
     flow: null,             // 当前选中的自制工作流（flow_get 的结果）
     flowTrial: false,       // 正在「本地试跑」——临时放行 核对/执行 两步
+    flowIssues: [],         // 上一次 flow_save/get 回的硬伤清单（编辑时本地沿用）
     browserConnected: false,
     running: false,
 
@@ -858,8 +859,9 @@
     meta.appendChild(el("span", null, `共 ${flat.length} 步`));
     if (nCol) meta.appendChild(el("span", null, `· ${nCol} 处按表格取值`));
     if (nWarn) {
-      const w = el("span", null, `· ${nWarn} 步认不准`);
-      w.style.color = "var(--bad)";
+      const w = el("span", null, `· ${nWarn} 步位置脆弱`);
+      w.style.color = "var(--mu)";
+      w.title = "只找到一个不稳的 css 位置。能跑，但页面改版后这几步可能要重录。";
       meta.appendChild(w);
       meta.appendChild(linkSpan("勾选这些", () => {
         flowSel = new Set(flat.filter((it) => stepTarget(it.s).warn).map((it) => it.ref));
@@ -870,12 +872,23 @@
 
     $("#btnFlowDelSel").style.display = flowSel.size ? "" : "none";
     $("#btnFlowDelSel").textContent = `删除勾选（${flowSel.size}）`;
+
+    // issues = 硬伤（挡运行）；warnings = 提醒（不挡）。脆弱选择器属于提醒。
+    state.flowIssues = issues;
+    const hasSubmit = flat.some((it) => it.s.op === "click" && it.s.submit);
+    const hasConfirm = flat.some((it) => it.s.op === "confirm");
+    const warns = [];
+    if (nWarn) warns.push(`${nWarn} 步只找到脆弱的位置 —— 能跑，页面改版后这几步可能要重录`);
+    if (hasSubmit && !hasConfirm) warns.push("全程没有「停下核对」——真正跑时不会给确认机会，建议在提交动作前插一个");
+
     $("#btnFlowSubmit").disabled = issues.length > 0 || !real;
     $("#btnFlowTrial").disabled = issues.length > 0 || !real;
 
-    $("#flowIssues").innerHTML = issues.length
-      ? issues.map((x) => "· " + escapeHtml(x)).join("<br>")
-      : (real ? '<span style="color:var(--ok)">看着能跑，点「本地试跑」走一遍</span>' : "");
+    const parts = [];
+    if (issues.length) parts.push('<span style="color:var(--bad)">' + issues.map((x) => "· " + escapeHtml(x)).join("<br>") + "</span>");
+    if (warns.length) parts.push('<span style="color:var(--mu)">⚠ ' + warns.map(escapeHtml).join("<br>⚠ ") + "</span>");
+    if (!parts.length && real) parts.push('<span style="color:var(--ok)">看着能跑，点「本地试跑」走一遍</span>');
+    $("#flowIssues").innerHTML = parts.join("<br>");
 
     const gate = $("#flowGate");
     gate.textContent = !real
@@ -900,8 +913,8 @@
     return a;
   }
 
-  // 编辑步骤后：本地立刻重画（跟手）+ 静默存盘（回填 issues）
-  function repaint() { paintFlow({ flow: state.flow, issues: [] }); flowSave(true); }
+  // 编辑步骤后：本地立刻重画（跟手，沿用上次的硬伤清单）+ 静默存盘（回填最新 issues）
+  function repaint() { paintFlow({ flow: state.flow, issues: state.flowIssues || [] }); flowSave(true); }
 
   function iconBtn(txt, title, onClick) {
     const b = el("button", "btn btn-sm btn-ghost", txt);
@@ -955,9 +968,9 @@
     // 操作对象
     const tgt = stepTarget(s);
     if (tgt.warn) {
-      const w = el("span", null, "⚠ 认不准" + (tgt.text ? "：" + tgt.text : ""));
-      w.style.cssText = "color:var(--bad);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:40px";
-      w.title = "只抓到一个脆弱的 css 位置，页面一改版就失效。建议删掉、或回录制页重录这一步。";
+      const w = el("span", null, "⚠ 位置脆弱" + (tgt.text ? "：" + tgt.text : ""));
+      w.style.cssText = "color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:40px";
+      w.title = "只抓到一个不稳的 css 位置。这步照样会跑，但页面改版后可能定位不到、需要重录。勾「显示选择器细节」看具体位置。";
       row.appendChild(w);
     } else if (tgt.text) {
       const t = el("span", null, tgt.text);

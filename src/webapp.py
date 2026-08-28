@@ -929,7 +929,7 @@ class Api:
         try:
             f = FD.load(name)
             return _json_safe({"ok": True, "flow": f, "issues": FD.validate(f),
-                               "columns": FD.columns(f)})
+                               "warnings": FD.warnings(f), "columns": FD.columns(f)})
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -958,7 +958,7 @@ class Api:
             path = FD.save(d)
             f = FD.load(name)
             return _json_safe({"ok": True, "path": path, "issues": FD.validate(f),
-                               "columns": FD.columns(f)})
+                               "warnings": FD.warnings(f), "columns": FD.columns(f)})
         except Exception as e:
             log.exception("存自制工作流失败")
             return {"ok": False, "error": str(e)}
@@ -1023,8 +1023,9 @@ class Api:
             if not f.get("source_url") and steps and steps[0].get("op") == "goto":
                 f["source_url"] = steps[0]["url"]
             FD.save(f)
-            out = {"ok": True, "flow": FD.load(name),
-                   "issues": FD.validate(FD.load(name)), "lost": sess.lost}
+            fl = FD.load(name)
+            out = {"ok": True, "flow": fl, "issues": FD.validate(fl),
+                   "warnings": FD.warnings(fl), "lost": sess.lost}
             if sess.error:
                 out["warn"] = f"录制中途出过错：{sess.error}"
             return _json_safe(out)

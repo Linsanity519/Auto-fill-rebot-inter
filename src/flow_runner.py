@@ -102,6 +102,8 @@ class FlowRunner(StateMixin):
                 else "（试跑：填但不提交）" if dry else "")
         self.ui.log(f"「{self.flow['name']}」自制工作流，{FD.describe(self.flow)}"
                     + (f"，共 {total} 行" if looped else "") + tail)
+        for w in FD.warnings(self.flow):
+            self.ui.log(f"  提醒：{w}", "warn")
         self.ui.progress(0, total, stats)
 
         try:

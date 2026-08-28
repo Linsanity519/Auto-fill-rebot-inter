@@ -194,16 +194,20 @@ def columns(doc: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------- 校验（离线）
+#
+# 两档，别混：
+#   validate() —— **硬伤**：结构上跑不起来（没选择器 / 没值 / 没 url / 循环空 …）。
+#                 非空就不给「本地试跑」「送审」。
+#   warnings() —— **提醒**：能跑，但脆或不够稳（某步只有 css 兜底 / 全程没 confirm）。
+#                 只提示，绝不挡运行 —— 录下来的流程本来就该能复原、能重复，
+#                 「改版可能失效」是所有前端自动化的通病，不是这条流程的结构问题。
 def validate(doc: dict, rows: list[dict] | None = None) -> list[str]:
-    """返回人话问题清单。空 = 这份工作流至少结构上能跑。"""
+    """结构硬伤清单。空 = 至少能跑起来。"""
     doc = _defaults(doc)
     issues: list[str] = []
     steps = doc.get("steps") or []
     if not isinstance(steps, list) or not steps:
         return ["这个工作流一步都没有"]
-
-    n_confirm = [0]
-    n_submit = [0]
 
     def check(steps, path=""):
         for i, s in enumerate(steps, 1):
@@ -212,27 +216,12 @@ def validate(doc: dict, rows: list[dict] | None = None) -> list[str]:
             if op not in OPS:
                 issues.append(f"{where}：不认识的动作「{op}」")
                 continue
-            if op == "confirm":
-                n_confirm[0] += 1
-            if op == "click" and s.get("submit"):
-                n_submit[0] += 1
             if op in ("click", "fill", "select", "wait_for"):
                 pick = s.get("pick") or []
                 if not isinstance(pick, list) or not pick:
                     issues.append(f"{where}：{op} 没有选择器（pick）")
-                else:
-                    kinds = []
-                    anchored = False
-                    for c in pick:
-                        got = [k for k in c if k in PICK_KEYS]
-                        if not got:
-                            issues.append(f"{where}：有个选择器候选空的 / 不认识")
-                        kinds += got
-                        if "css" in c and c.get("anchored"):
-                            anchored = True      # css 挂在了稳定祖先（id/data-testid）上，不算脆
-                    if kinds and set(kinds) <= {"css"} and not anchored:
-                        issues.append(f"{where}：只有 css 兜底、且没挂在稳定位置上，页面一改版就失效 —— "
-                                      f"删掉这步、或回录制页重录，让它带上文字 / label")
+                elif not any([k for k in c if k in PICK_KEYS] for c in pick):
+                    issues.append(f"{where}：选择器候选都是空的 / 不认识")
             if op in ("fill", "select") and not str(s.get("value", "")):
                 issues.append(f"{where}：{op} 没有要填的值")
             if op == "goto" and not str(s.get("url", "")):
@@ -249,28 +238,55 @@ def validate(doc: dict, rows: list[dict] | None = None) -> list[str]:
 
     check(steps)
 
-    refs = all_refs(doc)
-    biz_refs = {r for r in refs if r != "source_url"}
+    biz_refs = {r for r in all_refs(doc) if r != "source_url"}
     cols = set((doc.get("data") or {}).get("columns") or []) or set(columns(doc))
     missing = biz_refs - cols
     if missing:
-        issues.append(f"用到了 Excel 列 {sorted(missing)}，但「数据列」里没有 —— "
-                      f"在整理页把列名补上，或改掉这几处 {{{{}}}}")
+        issues.append(f"用到了列 {sorted(missing)}，但没在某一步标成「按表格」")
     if biz_refs and not has_loop(doc):
-        issues.append("用到了 {{列名}} 但没有「按 Excel 行循环」—— 给用到列的那段套一个 loop_rows")
+        issues.append("有格子标了「按表格」，但没勾「用 Excel 一行一遍地跑」")
     if doc["data"]["source"] == "none" and biz_refs:
-        issues.append("绑了 Excel 列，但「数据来源」是「无」—— 改成「Excel」")
-
+        issues.append("绑了 Excel 列，但「数据来源」是「无」")
     if rows is not None and has_loop(doc):
         have = set(rows[0].keys()) if rows else set()
         lack = cols - have
         if lack:
             issues.append(f"Excel 里缺这几列：{sorted(lack)}")
-
-    if n_confirm[0] == 0 and n_submit[0] > 0:
-        issues.append("整个流程没有一次「停下确认」，跑起来不会给你核对的机会 —— "
-                      "建议在提交前插一个 confirm")
     return issues
+
+
+def warnings(doc: dict) -> list[str]:
+    """提醒清单。**不挡运行** —— 只是让人知道哪里脆、哪里可能想补一手。"""
+    doc = _defaults(doc)
+    out: list[str] = []
+    n_confirm = n_submit = 0
+
+    def walk(steps, path=""):
+        nonlocal n_confirm, n_submit
+        for i, s in enumerate(steps, 1):
+            where = f"{path}第 {i} 步"
+            op = s.get("op")
+            if op == "confirm":
+                n_confirm += 1
+            if op == "click" and s.get("submit"):
+                n_submit += 1
+            if op in ("click", "fill", "select", "wait_for"):
+                pick = s.get("pick") or []
+                kinds, anchored = [], False
+                for c in pick:
+                    kinds += [k for k in c if k in PICK_KEYS]
+                    if "css" in c and c.get("anchored"):
+                        anchored = True
+                if kinds and set(kinds) <= {"css"} and not anchored:
+                    out.append(f"{where}：只找到一个脆弱的位置，改版后这步可能要重录")
+            if op == "loop_rows":
+                walk(s.get("body") or [], f"{where} 里 ")
+
+    walk(doc.get("steps") or [])
+    if n_confirm == 0 and n_submit > 0:
+        out.append("全程没有「停下核对」——真正跑（非试跑）时不会给你确认的机会，"
+                   "建议在提交动作前插一个「停下让人核对」")
+    return out
 
 
 def describe(doc: dict) -> str:

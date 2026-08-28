@@ -83,25 +83,29 @@ def test_validate_catches():
 
     ok("空流程", FD.validate({"name": "x", "steps": []}) == ["这个工作流一步都没有"])
 
+    # 脆弱选择器：不是硬伤（不进 validate），是提醒（进 warnings）——
+    # 录下来的流程本来就该能复原、能重复，改版会失效是所有前端自动化的通病
     css_only = {"name": "x", "data": {"source": "none"}, "steps": [
         {"op": "click", "pick": [{"css": "div > input"}]}]}
-    ok("只有 css 兜底 → 标黄", has(FD.validate(css_only), "只有 css"))
+    ok("只有 css 兜底 → 不算硬伤", FD.validate(css_only) == [], FD.validate(css_only))
+    ok("只有 css 兜底 → 进 warnings", has(FD.warnings(css_only), "脆弱"))
 
     anchored = {"name": "x", "data": {"source": "none"}, "steps": [
         {"op": "click", "pick": [{"css": "#bar > button:nth-of-type(2)", "anchored": True}]}]}
-    ok("css 挂在稳定祖先（anchored）→ 不标黄", FD.validate(anchored) == [], FD.validate(anchored))
+    ok("css 挂在稳定祖先（anchored）→ 连提醒都没有", FD.warnings(anchored) == [], FD.warnings(anchored))
 
     unbound = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
         {"op": "loop_rows", "body": [{"op": "fill", "pick": [{"label": "x"}], "value": "{{乙}}"}]}]}
-    ok("用了没声明的列", has(FD.validate(unbound), "但「数据列」里没有"))
+    ok("用了没声明的列", has(FD.validate(unbound), "没在某一步标成「按表格」"))
 
     noloop = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
         {"op": "fill", "pick": [{"label": "x"}], "value": "{{甲}}"}]}
-    ok("用了 {{}} 但没 loop_rows", has(FD.validate(noloop), "没有「按 Excel 行循环」"))
+    ok("用了 {{}} 但没 loop_rows", has(FD.validate(noloop), "没勾"))
 
     nocfm = {"name": "x", "data": {"source": "none"}, "steps": [
         {"op": "click", "pick": [{"text": "a"}], "submit": True}]}
-    ok("有提交但没 confirm → 提醒", has(FD.validate(nocfm), "没有一次「停下确认」"))
+    ok("有提交但没 confirm → 硬伤里没有", FD.validate(nocfm) == [], FD.validate(nocfm))
+    ok("有提交但没 confirm → 进 warnings", has(FD.warnings(nocfm), "停下核对"))
 
     badop = {"name": "x", "steps": [{"op": "teleport"}]}
     ok("不认识的动作", has(FD.validate(badop), "不认识的动作"))
