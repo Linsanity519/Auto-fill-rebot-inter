@@ -84,6 +84,9 @@ class FlowFiller:
         js = r"""
         (labelText) => {
           const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+          // ⚠ 先把上一步留下的标记全清掉 —— 不清的话它会越攒越多，
+          //   [data-flow-hit='1'] 就同时命中好几个（就是日志里「label 匹配到 3 个」的成因）。
+          document.querySelectorAll("[data-flow-hit]").forEach(e => e.removeAttribute('data-flow-hit'));
           const nodes = [...document.querySelectorAll('label, .ant-form-item-label, span, div, p')];
           for (const lb of nodes) {
             if (clean(lb.textContent) !== labelText) continue;
@@ -95,7 +98,7 @@ class FlowFiller:
                 "[role='combobox'],[role='textbox'],[role='switch']");
               if (ctl) {
                 ctl.setAttribute('data-flow-hit', '1');
-                return true;
+                return true;   // 只标第一个匹配的 label 下的第一个控件
               }
               scope = scope.parentElement;
             }

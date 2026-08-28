@@ -84,41 +84,58 @@ _INJECT = r"""
     }
     return '';
   }
-  const stableAttr = n => {
-    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-id', 'data-key', 'data-name']){
+  // —— 参照 Automa 用的 @medv/finder / Chrome Recorder：生成一个**当场验证过唯一**
+  //    的 css，而不是从 body 一路 nth-of-type 猜。做法：从叶子往根，每加一层就
+  //    querySelectorAll 数一下，命中 1 个就停；一层内自己不唯一才补 :nth-child。
+  const BAD_CLASS = /^(is-|has-|js-|ng-|v-|el-|van-|ant-|arco-|active$|selected$|open$|show$|hide$|hidden$|current$|disabled$|focus|hover|checked$)/;
+  function goodClass(c){
+    return c && c.length <= 24 && !/[0-9a-f]{6,}|[0-9]{3,}|--|__/.test(c)
+      && !/(^| )(css-|tw-|sc-|jsx-|emotion-|_)/.test(c) && !BAD_CLASS.test(c);
+  }
+  function uniqCount(sel){ try { return document.querySelectorAll(sel).length; } catch(e){ return 99; } }
+  function segFor(n){
+    if (n.id && !looksAuto(n.id)) return { s: '#' + CSS.escape(n.id), strong: true };
+    const tag = n.tagName.toLowerCase();
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-id', 'name', 'role', 'type', 'placeholder', 'aria-label']){
       const v = n.getAttribute && n.getAttribute(a);
-      if (v && /^[\w -]{1,40}$/.test(v) && !looksAuto(v)) return a + '=' + v;
+      if (v && v.length <= 40 && !looksAuto(v) && /^[\w :.\/#-]+$/.test(v))
+        return { s: tag + '[' + a + '="' + v + '"]', strong: a.indexOf('data-') === 0 || a === 'name' };
     }
-    if (n.id && !looksAuto(n.id)) return 'id=' + n.id;
-    return '';
-  };
-  function cssPath(el){
-    // 尽量挂到一个稳定的祖先（id / data-testid / role），后面只跟一小段，
-    // 而不是从 body 一路 nth-of-type —— 那种改版必失效。
-    const parts = []; let n = el; let anchored = false;
-    while (n && n.nodeType === 1 && parts.length < 6){
-      const sa = stableAttr(n);
-      if (sa){
-        const [k, v] = sa.split('=');
-        parts.unshift(k === 'id' ? '#' + CSS.escape(v) : '[' + k + "='" + v + "']");
-        anchored = true;
-        break;
-      }
-      const role = n.getAttribute && n.getAttribute('role');
-      let sel = n.tagName.toLowerCase();
-      if (role && !parts.length){ sel += "[role='" + role + "']"; }
+    const cls = [...(n.classList || [])].filter(goodClass).slice(0, 3);
+    if (cls.length) return { s: tag + '.' + cls.map(c => CSS.escape(c)).join('.'), strong: false };
+    return { s: tag, strong: false };
+  }
+  function nthChild(n){
+    const p = n.parentElement; if (!p) return '';
+    return ':nth-child(' + ([...p.children].indexOf(n) + 1) + ')';
+  }
+  function finder(el){
+    let n = el, parts = [], guard = 0, leafStrong = false;
+    while (n && n.nodeType === 1 && guard++ < 8){
+      const seg = segFor(n);
+      let piece = seg.s;
       const p = n.parentElement;
       if (p){
-        const same = [...p.children].filter(c => c.tagName === n.tagName);
-        if (same.length > 1) sel += ':nth-of-type(' + (same.indexOf(n) + 1) + ')';
+        let same = 2;
+        try { same = [...p.children].filter(c => c.matches(piece)).length; } catch(e){}
+        if (same !== 1) piece += nthChild(n);
       }
-      parts.unshift(sel);
+      if (guard === 1) leafStrong = seg.strong;
+      parts.unshift(piece);
+      const sel = parts.join(' > ');
+      if (uniqCount(sel) === 1) return { css: sel, anchored: leafStrong || parts.length <= 3 };
+      if (piece[0] === '#') return { css: sel, anchored: true };
       n = p;
     }
-    return { path: parts.join(' > '), anchored: anchored };
+    const sel = parts.join(' > ') || el.tagName.toLowerCase();
+    return { css: sel, anchored: uniqCount(sel) === 1 };
   }
   function pickFor(el){
     const out = [];
+    // 1) 主选择器：当场验证唯一的 css
+    const uq = finder(el);
+    out.push({ css: uq.css, anchored: !!uq.anchored });
+    // 2) 人可读的辅助 + DOM 改了之后的兜底
     const txt = visibleText(el);
     if (txt) out.push({ text: txt });
     const role = el.getAttribute('role') || ({ BUTTON: 'button', A: 'link' })[el.tagName];
@@ -133,13 +150,8 @@ _INJECT = r"""
       if (v && /^[\w /:.-]{1,50}$/.test(v)) out.push({ attr: a + '=' + v });
     }
     if (el.id && !looksAuto(el.id)) out.push({ attr: 'id=' + el.id });
-    // 图标按钮：拿图标名当锚
     const icon = iconToken(el);
     if (icon) out.push({ attr: 'class~=' + icon });
-    // 稳定祖先的兜底
-    const sa = el.closest && (() => { let n = el; for (let i = 0; i < 6 && n; i++){ const s = stableAttr(n); if (s && n !== el) return s; n = n.parentElement; } return ''; })();
-    const c = cssPath(el);
-    out.push({ css: c.path, anchored: !!c.anchored || !!sa });
     const seen = new Set();
     return out.filter(x => { const k = JSON.stringify(x); if (seen.has(k)) return false; seen.add(k); return true; });
   }

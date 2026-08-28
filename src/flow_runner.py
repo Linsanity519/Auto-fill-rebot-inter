@@ -129,6 +129,7 @@ class FlowRunner(StateMixin):
                         status, err = "failed", str(e)
                     return status, err, trace
 
+                top_fail = []          # 顶层（非循环）步骤失败记这里 —— 别再当没发生
                 for si, step in enumerate(self.flow.get("steps") or []):
                     if self._stop:
                         break
@@ -153,14 +154,19 @@ class FlowRunner(StateMixin):
                         # 顶层非循环步骤：跑一次
                         status, err, trace = run_body([step], {}, "[setup]", -1)
                         if status == "failed":
+                            top_fail.append(f"第 {si + 1} 步：{err}")
                             self.ui.log(f"[setup] 第 {si + 1} 步失败：{err}", "error")
+                            # 试跑 / 逐步：失败就停，别硬着头皮往下走还报「跑通了」
+                            if dry or self._step_mode:
+                                break
                             if not self.ui.ask_continue(err):
                                 break
 
                 if not looped:
-                    # 整份步骤当一条（上面的 for 已经逐步跑过了顶层，这里补记一条结果）
-                    ok = stats["failed"] == 0
-                    results.append(self._result(0, {}, "ok" if ok else "failed", "", []))
+                    # 整份步骤当一条。顶层任何一步失败 = 这条没跑通。
+                    ok = stats["failed"] == 0 and not top_fail
+                    err = "；".join(top_fail[:3])
+                    results.append(self._result(0, {}, "ok" if ok else "failed", err, []))
                     stats["ok" if ok else "failed"] += 1
                     self.ui.progress(1, 1, stats)
 
