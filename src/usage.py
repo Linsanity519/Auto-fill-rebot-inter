@@ -626,39 +626,54 @@ def save_reported(marks: dict):
         log.warning("上报记录写不进去（下次会重报一遍，不丢数据）", exc_info=True)
 
 
-# 签名要排掉的列（下标按 REPORT_FIXED）。「上报时间」是最后一列，另外单独切。
-_SIGN_SKIP = (REPORT_FIXED.index("花名"), REPORT_FIXED.index("版本"))
-SIGN_TAG = "v2"          # 签名格式代号，load_reported 靠它认出老记账并迁过来
+SIGN_TAG = "v3"          # 签名格式代号，load_reported 靠它认出老记账并迁过来
+_FIXED_N = len(REPORT_FIXED)          # 前 8 列是固定列，之后是每个配置类型一列，再之后是 REPORT_TAIL
 
 
 def _row_sign(row) -> str:
     """一行的指纹，用来判断「这一周的数字变了没有」。
 
-    ⚠ 不含最后那列「上报时间」——那列每次都变，含进去就永远是「变了」。
-    ⚠ 也不含「版本」和「花名」。这是修掉的一个真 bug：版本号原来在签名里，
-      于是**每升一次级、全部历史周的签名同时变化**，report_rows 判定「都变了」，
-      把几十周前的旧数据原样重发一遍。实测 1.0.19 升级当天统计群里刷出了
-      08-17、08-24 两条早就发过的周。
-      签名要回答的是「数字变了没有」——版本号变了不是数字变了。
+    只取真正会随「又跑了几条」而变的数：周 / 指纹 / 运行次数 / 成功 / 失败 /
+    机器代劳秒 / 最后活跃。
+
+    ⚠ 明确排掉、并且每一条都是踩出来的：
+      · 「上报时间」——每次都变，含进去就永远是「变了」。
+      · 「版本」——升级不是数字变了。原来在签名里，每升一次级全部历史周同时失配、
+        旧数据重发一遍（1.0.19 升级当天群里刷出 08-17、08-24）。
+      · 「花名」——改花名不是数字变了。
+      · **每个配置类型那一列**——加一个新配置类型，这一段整体右移，所有历史周的
+        签名一起失配、旧数据又重发一遍（1.0.21 加「价格策略批量开关」当天，群里
+        刷出 08-21、08-25）。这一段本来也不需要进签名：每周的总数（次数/成功/
+        失败/秒）已经在里面，事件只增不改，分类型明细变了总数必然跟着变。
     """
-    row = list(row)[:-1]
-    return "|".join([SIGN_TAG]
-                    + [str(v) for i, v in enumerate(row) if i not in _SIGN_SKIP])
+    row = list(row)
+    fixed = [row[i] for i in range(min(_FIXED_N, len(row)))
+             if REPORT_FIXED[i] not in ("花名", "版本")]
+    last_active = row[-2] if len(row) >= 2 else ""      # REPORT_TAIL = [最后活跃, 上报时间]
+    return "|".join([SIGN_TAG] + [str(v) for v in fixed] + [str(last_active)])
 
 
 def _migrate_sign(sign: str) -> str:
-    """老格式（含花名/版本）的签名 → 新格式。
+    """老格式的签名 → 新格式（v3）。v1 无 tag、含花名/版本/分类型；v2 有 tag、含分类型。
 
-    ⚠ 为什么必须迁、不能让它自然失配一次：不迁的话「修掉重发」这个改动**自己**
-      会让所有老记账对不上，升级当天再刷一遍全历史 —— 正好就是这次要修掉的
-      那个毛病。迁完这一次就彻底安静了。
-    ⚠ 老花名里真有个「|」会迁歪，代价是那一周多发一条，仅此而已。
+    ⚠ 为什么必须迁、不能让它自然失配一次：不迁的话「改签名口径」这个动作**自己**
+      就会让所有老记账对不上，升级当天再刷一遍全历史 —— 正好是要修掉的那个毛病。
+      迁完这一次就彻底安静了。
+    ⚠ 迁的是「记账」不是数据，迁歪最多让某一周多发一条，不丢任何东西。
     """
     if not sign or sign.startswith(SIGN_TAG + "|"):
         return sign
     parts = sign.split("|")
-    return "|".join([SIGN_TAG]
-                    + [p for i, p in enumerate(parts) if i not in _SIGN_SKIP])
+    if parts and parts[0] == "v2":
+        # v2 | 周 | 指纹 | 次数 | 成功 | 失败 | 秒 | <每个配置类型…> | 最后活跃
+        core = parts[1:7]
+    elif len(parts) >= 8:
+        # v1（无 tag）: 周 | 指纹 | 花名 | 版本 | 次数 | 成功 | 失败 | 秒 | <配置类型…> | 最后活跃
+        core = [parts[0], parts[1]] + parts[4:8]
+    else:
+        core = parts[:6]
+    last_active = parts[-1] if len(parts) >= 2 else ""
+    return "|".join([SIGN_TAG] + core + [last_active])
 
 
 def weekly_buckets(settings: dict) -> dict:

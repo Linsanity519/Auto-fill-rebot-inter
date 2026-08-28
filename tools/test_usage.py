@@ -360,15 +360,31 @@ def test_report_roundtrip():
         renamed = usage.report_rows({}, FORMS, nickname="换了个花名")
         check("改花名也不重发历史", renamed == [], f"又报了 {[r[0] for r in renamed]}")
 
-        # 老格式的记账（含花名/版本那两段）要能迁过来 —— 不然「修掉重发」这个
-        # 改动**自己**会让所有老记账失配，升级当天再刷一遍全历史
+        # ⚠ 加一个新配置类型：每周那一段「分类型列」会整体右移，签名不能因此失配
+        #   （1.0.21 加「价格策略批量开关」当天，统计群里刷出 08-21、08-25 —— 就是这个）
+        more = usage.report_rows({}, FORMS + ["价格策略批量开关"], nickname="子凡")
+        check("加一个新配置类型也不重发历史", more == [],
+              f"又报了 {[r[0] for r in more]}")
+
+        # 老格式的记账要能迁过来 —— 不然「改签名口径」这个动作**自己**就会让所有
+        # 老记账失配，升级当天再刷一遍全历史
         every = usage.report_rows({}, FORMS, nickname="子凡", only_changed=False)
-        usage.reported_path().write_text(
-            json.dumps({r[0]: "|".join(str(v) for v in list(r)[:-1]) for r in every},
-                       ensure_ascii=False), encoding="utf-8")
-        migrated = usage.report_rows({}, FORMS, nickname="子凡")
-        check("老格式的上报记账能迁过来（升级当天不刷屏）", migrated == [],
-              f"又报了 {[r[0] for r in migrated]}")
+
+        def _v1(r):     # 1.0.19 之前：周|指纹|花名|版本|次数|成功|失败|秒|<分类型…>|最后活跃
+            return "|".join(str(v) for v in list(r)[:-1])
+
+        def _v2(r):     # 1.0.20 / 1.0.21：v2|周|指纹|次数|成功|失败|秒|<分类型…>|最后活跃
+            r = list(r)[:-1]
+            keep = [v for i, v in enumerate(r) if usage.REPORT_FIXED[i:i + 1] not in (["花名"], ["版本"])]
+            return "|".join(["v2"] + [str(v) for v in keep])
+
+        for tag, fn, forms in (("v1（含花名/版本）", _v1, FORMS),
+                               ("v2（含分类型列）+ 之后又加了配置类型", _v2, FORMS + ["价格策略批量开关"])):
+            usage.reported_path().write_text(
+                json.dumps({r[0]: fn(r) for r in every}, ensure_ascii=False), encoding="utf-8")
+            left = usage.report_rows({}, forms, nickname="子凡")
+            check(f"{tag} 的老记账能迁过来（升级当天不刷屏）", left == [],
+                  f"又报了 {[r[0] for r in left]}")
     finally:
         usage.reported_path = orig_mark
         shutil.rmtree(tmp, ignore_errors=True)
