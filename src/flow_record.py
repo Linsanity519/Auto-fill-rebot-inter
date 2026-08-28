@@ -48,11 +48,27 @@ _INJECT = r"""
   const looksAuto = id => !id || /[0-9a-f]{6,}|^[a-z]+-\d+$|(^| )(css-|tw-|sc-|jsx-|emotion-)/.test(id);
 
   function visibleText(el){
-    let n = el;
-    for (let i = 0; i < 3 && n; i++){
+    // 元素自己的短文本最准；再往上找不含表单控件的短文本容器
+    const own = clean(el.textContent || '');
+    if (own && own.length <= 40 && !(el.querySelector && el.querySelector('input,textarea,select'))) return own;
+    let n = el.parentElement;
+    for (let i = 0; i < 4 && n; i++){
       const t = clean(n.textContent);
-      if (t && t.length <= 24 && !n.querySelector('input,textarea,select')) return t;
+      if (t && t.length <= 32 && !n.querySelector('input,textarea,select')) return t;
       n = n.parentElement;
+    }
+    return '';
+  }
+  // 图标按钮：从 class / <use href> 里抠出语义词（anticon-edit / icon-delete / #icon-search）
+  function iconToken(el){
+    const scan = [el].concat([...(el.querySelectorAll ? el.querySelectorAll('[class],use,svg') : [])].slice(0, 4));
+    for (const n of scan){
+      const cls = (n.getAttribute && (n.getAttribute('class') || '')) || '';
+      let m = cls.match(/(?:antcon-|anticon-|icon-|iconfont-|van-icon-|el-icon-)([a-z][a-z0-9-]{1,20})/i);
+      if (m) return m[0];
+      const href = (n.getAttribute && (n.getAttribute('href') || n.getAttribute('xlink:href') || '')) || '';
+      m = href.match(/#(?:icon-)?([a-z][a-z0-9-]{1,20})/i);
+      if (m) return 'icon-' + m[1];
     }
     return '';
   }
@@ -68,11 +84,29 @@ _INJECT = r"""
     }
     return '';
   }
+  const stableAttr = n => {
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-id', 'data-key', 'data-name']){
+      const v = n.getAttribute && n.getAttribute(a);
+      if (v && /^[\w -]{1,40}$/.test(v) && !looksAuto(v)) return a + '=' + v;
+    }
+    if (n.id && !looksAuto(n.id)) return 'id=' + n.id;
+    return '';
+  };
   function cssPath(el){
-    const parts = []; let n = el;
-    while (n && n.nodeType === 1 && parts.length < 5){
-      if (n.id && !looksAuto(n.id)){ parts.unshift('#' + CSS.escape(n.id)); break; }
+    // 尽量挂到一个稳定的祖先（id / data-testid / role），后面只跟一小段，
+    // 而不是从 body 一路 nth-of-type —— 那种改版必失效。
+    const parts = []; let n = el; let anchored = false;
+    while (n && n.nodeType === 1 && parts.length < 6){
+      const sa = stableAttr(n);
+      if (sa){
+        const [k, v] = sa.split('=');
+        parts.unshift(k === 'id' ? '#' + CSS.escape(v) : '[' + k + "='" + v + "']");
+        anchored = true;
+        break;
+      }
+      const role = n.getAttribute && n.getAttribute('role');
       let sel = n.tagName.toLowerCase();
+      if (role && !parts.length){ sel += "[role='" + role + "']"; }
       const p = n.parentElement;
       if (p){
         const same = [...p.children].filter(c => c.tagName === n.tagName);
@@ -81,33 +115,39 @@ _INJECT = r"""
       parts.unshift(sel);
       n = p;
     }
-    return parts.join(' > ');
+    return { path: parts.join(' > '), anchored: anchored };
   }
   function pickFor(el){
     const out = [];
     const txt = visibleText(el);
     if (txt) out.push({ text: txt });
     const role = el.getAttribute('role') || ({ BUTTON: 'button', A: 'link' })[el.tagName];
-    const aria = el.getAttribute('aria-label');
+    const aria = el.getAttribute('aria-label') || el.getAttribute('title');
     if (role && (aria || txt)) out.push({ role: role, name: aria || txt });
     if (el.matches && el.matches("input,select,textarea,[contenteditable='true']")){
       const lab = labelFor(el);
       if (lab) out.push({ label: lab });
     }
-    for (const a of ['data-testid', 'name', 'aria-label']){
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'name', 'aria-label', 'title', 'alt', 'placeholder']){
       const v = el.getAttribute && el.getAttribute(a);
-      if (v) out.push({ attr: a + '=' + v });
+      if (v && /^[\w /:.-]{1,50}$/.test(v)) out.push({ attr: a + '=' + v });
     }
     if (el.id && !looksAuto(el.id)) out.push({ attr: 'id=' + el.id });
-    out.push({ css: cssPath(el) });
+    // 图标按钮：拿图标名当锚
+    const icon = iconToken(el);
+    if (icon) out.push({ attr: 'class~=' + icon });
+    // 稳定祖先的兜底
+    const sa = el.closest && (() => { let n = el; for (let i = 0; i < 6 && n; i++){ const s = stableAttr(n); if (s && n !== el) return s; n = n.parentElement; } return ''; })();
+    const c = cssPath(el);
+    out.push({ css: c.path, anchored: !!c.anchored || !!sa });
     const seen = new Set();
-    return out.filter(c => { const k = JSON.stringify(c); if (seen.has(k)) return false; seen.add(k); return true; });
+    return out.filter(x => { const k = JSON.stringify(x); if (seen.has(k)) return false; seen.add(k); return true; });
   }
   function emit(kind, el, extra){
     try {
       window.__flowRec(Object.assign({
         kind: kind, pick: pickFor(el),
-        seen: visibleText(el) || clean((el.getAttribute && el.getAttribute('placeholder')) || '')
+        seen: visibleText(el) || clean((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder'))) || '')
       }, extra || {}));
     } catch (e){}
   }

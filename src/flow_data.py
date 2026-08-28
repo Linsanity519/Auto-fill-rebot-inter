@@ -222,14 +222,17 @@ def validate(doc: dict, rows: list[dict] | None = None) -> list[str]:
                     issues.append(f"{where}：{op} 没有选择器（pick）")
                 else:
                     kinds = []
+                    anchored = False
                     for c in pick:
                         got = [k for k in c if k in PICK_KEYS]
                         if not got:
                             issues.append(f"{where}：有个选择器候选空的 / 不认识")
                         kinds += got
-                    if kinds and set(kinds) <= {"css"}:
-                        issues.append(f"{where}：只有 css 选择器兜底，页面一变就会失效 —— "
-                                      f"回录制页重录这一步，让它带上文字 / label")
+                        if "css" in c and c.get("anchored"):
+                            anchored = True      # css 挂在了稳定祖先（id/data-testid）上，不算脆
+                    if kinds and set(kinds) <= {"css"} and not anchored:
+                        issues.append(f"{where}：只有 css 兜底、且没挂在稳定位置上，页面一改版就失效 —— "
+                                      f"删掉这步、或回录制页重录，让它带上文字 / label")
             if op in ("fill", "select") and not str(s.get("value", "")):
                 issues.append(f"{where}：{op} 没有要填的值")
             if op == "goto" and not str(s.get("url", "")):

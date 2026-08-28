@@ -639,6 +639,13 @@
         item.dataset.name = f.name;
         item.appendChild(el("span", null, f.label || f.name));
         item.appendChild(el("span", "badge", ""));
+        // 自制配置类型：给个删除入口，不然试录几个就堆一堆
+        if (f.mode === "flow") {
+          const del = el("span", "flow-del", "×");
+          del.title = "删掉这个自制配置类型";
+          del.addEventListener("click", (e) => { e.stopPropagation(); deleteFlow(f.name); });
+          item.appendChild(del);
+        }
         item.addEventListener("click", () => selectForm(f.name));
         items.appendChild(item);
       });
@@ -800,16 +807,27 @@
     if (s.op === "press") return { text: "键 " + (s.key || "Enter"), raw: "", warn: false };
     if (s.op === "screenshot") return { text: "存到结果目录", raw: "", warn: false };
     const pick = s.pick || [];
-    const kinds = pick.map((p) => Object.keys(p)[0]);
-    const cssOnly = pick.length > 0 && kinds.every((k) => k === "css");
-    // 优先「录制时你看到的字」，再退到 text / label / role
+    // 「认不准」= 一个像样的锚都没有：没有文字/label/role/属性候选，
+    //   而且那条 css 也没挂在稳定祖先上（anchored）。
+    const hasAnchor = pick.some((p) => p.text || p.label || (p.role && p.name)
+      || p.attr || (p.css && p.anchored));
+    const warn = pick.length > 0 && !hasAnchor;
+    // 优先「录制时你看到的字」，再退到 text / label / role / 属性 / 图标名
     let text = (s.seen || "").trim();
     if (!text) {
       const c = pick.find((p) => p.text || p.label || (p.role && p.name)) || {};
       text = c.text || c.label || c.name || "";
     }
+    if (!text) {
+      const a = pick.find((p) => p.attr);
+      if (a) {
+        const m = /^([\w~-]+)=(.+)$/.exec(a.attr) || [];
+        text = /class~/.test(m[1] || "") ? "图标 " + String(m[2]).replace(/^(anticon-|icon-|iconfont-)/, "")
+          : m[2] || a.attr;
+      }
+    }
     const raw = pick.map((p) => { const k = Object.keys(p)[0]; return `${k}=${p[k]}`; }).join("  |  ");
-    return { text: text || (cssOnly ? "" : "（这一步没抓到明显特征）"), raw, warn: cssOnly };
+    return { text: text || (warn ? "" : "（没抓到明显特征，但位置还算稳）"), raw, warn };
   }
 
   // fill/select 的值是不是绑了 Excel 列（{{列名}}）
@@ -1090,6 +1108,26 @@
       state.loaded = false; state.previewRows = []; renderReviewTable(); updateNextButtonState();
       paintFlow({ flow: f, issues: r.issues || [] });
       return r;
+    });
+  }
+
+  function deleteFlow(name) {
+    showModal({
+      title: "删掉「" + name + "」",
+      desc: "这个自制配置类型（录下来的步骤）会从本地删掉，不影响已经跑过的配置。确定？",
+      buttons: [
+        {
+          label: "删掉", primary: true, onClick: () => {
+            callApi("flow_delete", name).then((r) => {
+              if (!r || !r.ok) { appendLog(`删不掉：${r ? r.error : "无法连接后端"}`, "error"); return; }
+              appendLog(`已删掉「${name}」`, "ok");
+              if (state.activeForm === name) { state.activeForm = null; state.flow = null; showHome(); }
+              callApi("list_forms").then((fs) => { state.forms = fs || []; renderSidebar(); });
+            });
+          },
+        },
+        { label: "留着" },
+      ],
     });
   }
 

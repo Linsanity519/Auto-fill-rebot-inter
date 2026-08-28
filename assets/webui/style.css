@@ -314,6 +314,9 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .sidebar-item:hover { background: var(--pink-light); }
 .sidebar-item.active { background: var(--pink-light); color: var(--pink-text-on-light); font-weight: 700; }
 .sidebar-item .badge { margin-left: auto; font-size: 10px; color: inherit; font-variant-numeric: tabular-nums; }
+.sidebar-item .flow-del { font-size: 14px; line-height: 1; color: var(--mu); padding: 0 3px; border-radius: 4px; opacity: 0; transition: opacity .1s; }
+.sidebar-item:hover .flow-del { opacity: 1; }
+.sidebar-item .flow-del:hover { color: #fff; background: var(--pink); }
 .sidebar-item .tag {
   font-size: 9px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--bd); color: var(--mu);
 }

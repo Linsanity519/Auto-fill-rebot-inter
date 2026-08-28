@@ -87,6 +87,10 @@ def test_validate_catches():
         {"op": "click", "pick": [{"css": "div > input"}]}]}
     ok("只有 css 兜底 → 标黄", has(FD.validate(css_only), "只有 css"))
 
+    anchored = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "click", "pick": [{"css": "#bar > button:nth-of-type(2)", "anchored": True}]}]}
+    ok("css 挂在稳定祖先（anchored）→ 不标黄", FD.validate(anchored) == [], FD.validate(anchored))
+
     unbound = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
         {"op": "loop_rows", "body": [{"op": "fill", "pick": [{"label": "x"}], "value": "{{乙}}"}]}]}
     ok("用了没声明的列", has(FD.validate(unbound), "但「数据列」里没有"))
