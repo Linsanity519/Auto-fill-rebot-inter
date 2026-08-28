@@ -189,28 +189,32 @@
           </div>
         </div>
 
-        <!-- 自制配置类型（录制生成的工作流）专用：步骤 + 数据列 + 送审 -->
-        <div class="card col hidden" id="flowCard" style="padding:16px 18px;gap:12px;margin-bottom:12px">
-          <div class="sect"><span class="bar"></span><b>录下来的步骤</b>
+        <!-- 自制配置类型（录制生成的工作流）：一条一条录下来的操作，可读、可删、可试跑 -->
+        <div class="card col hidden" id="flowCard" style="padding:16px 18px;gap:10px;margin-bottom:12px">
+          <div class="sect"><span class="bar"></span><b id="flowName">录下来的操作</b>
             <span id="flowStatus"></span></div>
-          <div id="flowSteps" style="display:flex;flex-direction:column;gap:6px;max-height:280px;overflow:auto"></div>
-          <div class="row" style="gap:10px;align-items:flex-start">
-            <span style="color:var(--sub);width:72px;flex:none;padding-top:6px">数据列</span>
-            <div class="col" style="flex:1;gap:4px;min-width:0">
-              <input class="field" id="flowCols" placeholder="逗号分隔。步骤里用 {{列名}} 绑这几列；不吃 Excel 就留空">
-              <label class="row" style="gap:6px;color:var(--sub);font-size:12px;cursor:pointer">
-                <input type="checkbox" id="flowLoop"> 按 Excel 每行跑一遍（把 goto 之后的步骤套进循环）
-              </label>
-            </div>
-          </div>
-          <div style="color:var(--mu);font-size:11px" id="flowIssues"></div>
-          <div class="row" style="gap:8px;flex-wrap:wrap">
+
+          <!-- 操作条常驻在顶上，步骤再多也不会把它挤走 -->
+          <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="btn btn-sm btn-primary" id="btnFlowTrial">▶ 本地试跑</button>
             <button class="btn btn-sm" id="btnFlowReRecord">重新录制</button>
-            <button class="btn btn-sm" id="btnFlowSave">保存</button>
+            <button class="btn btn-sm" id="btnFlowAddStep">＋ 加一步</button>
+            <button class="btn btn-sm btn-ghost" id="btnFlowDelSel" style="display:none">删除勾选</button>
+            <span style="flex:1"></span>
+            <label class="row" style="gap:5px;color:var(--sub);font-size:11px;cursor:pointer">
+              <input type="checkbox" id="flowRaw"> 显示选择器细节
+            </label>
             <button class="btn btn-sm" id="btnFlowTemplate">生成 Excel 模板</button>
-            <button class="btn btn-sm" id="btnFlowTrial">本地试跑（逐步）</button>
-            <button class="btn btn-sm btn-primary" style="margin-left:auto" id="btnFlowSubmit">跑通了 · 收下并送审</button>
+            <button class="btn btn-sm" id="btnFlowSubmit">跑通了 · 送审</button>
           </div>
+
+          <div class="row" style="gap:8px;color:var(--mu);font-size:11px" id="flowMeta"></div>
+          <div id="flowSteps" style="display:flex;flex-direction:column;gap:3px;max-height:46vh;overflow:auto;padding-right:4px"></div>
+
+          <label class="row" style="gap:6px;color:var(--sub);font-size:12px;cursor:pointer" id="flowLoopRow">
+            <input type="checkbox" id="flowLoop"> 用 Excel 一行一遍地跑（下面标了「按表格」的格子每行换一个值）
+          </label>
+          <div style="color:var(--mu);font-size:11px" id="flowIssues"></div>
           <div style="color:var(--mu);font-size:11px" id="flowGate"></div>
         </div>
 

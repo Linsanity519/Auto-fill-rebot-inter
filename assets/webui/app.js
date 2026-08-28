@@ -738,9 +738,12 @@
   }
 
   // ---------------- 自制配置类型（mode: flow）----------------
+  let flowSel = new Set();       // 勾选待删的步骤对象（按对象引用，横跨 loop 内外）
+
   function renderFlowCard() {
     const on = hasFlow();
     $("#flowCard").classList.toggle("hidden", !on);
+    flowSel.clear();
     if (!on) { state.flow = null; state.flowTrial = false; return; }
     $("#btnMakeTemplate").classList.add("hidden");   // flow 有自己的「生成模板」按钮
     callApi("flow_get", state.activeForm).then((r) => {
@@ -754,16 +757,21 @@
     draft: ["草稿", "var(--mu)"], tested: ["本地已跑通 · 待审核", "var(--pink)"],
     submitted: ["已提交审核", "var(--ok)"], adopted: ["已采纳到正式配置", "var(--ok)"],
   };
-  // 插步菜单：录制器吐不出来、得手动加的那几种
+  // 大白话动词。录到的 op 是英文，界面上一律显示这个
+  const FLOW_VERB = {
+    goto: "打开页面", click: "点击", fill: "填写", select: "选择", press: "按键",
+    wait_for: "等元素", wait_text: "等文字", assert: "校验", screenshot: "截图",
+    confirm: "停下核对", loop_rows: "按表格逐行",
+  };
+  // 「＋加一步」能加的：录制器吐不出来、得手动补的那几种
   const FLOW_INSERT = [
-    ["confirm", "停一下核对", () => ({ op: "confirm", note: "核对一眼再继续" })],
-    ["wait_text", "等文字出现", () => ({ op: "wait_text", text: "" })],
-    ["assert", "校验文字在", () => ({ op: "assert", text: "" })],
+    ["confirm", "停下让人核对", () => ({ op: "confirm", note: "核对一眼再继续" })],
+    ["wait_text", "等某段文字出现", () => ({ op: "wait_text", text: "" })],
+    ["assert", "校验某段文字在", () => ({ op: "assert", text: "" })],
     ["screenshot", "截一张图", () => ({ op: "screenshot" })],
     ["press", "按一个键", () => ({ op: "press", key: "Enter" })],
   ];
 
-  // 有没有「实际操作」——只有 goto/confirm/截图 这类的流程等于没录到东西
   function flowHasRealSteps(f) {
     let yes = false;
     flattenSteps((f && f.steps) || []).forEach((it) => {
@@ -772,48 +780,9 @@
     return yes;
   }
 
-  function paintFlow(r) {
-    const f = r.flow;
-    const issues = r.issues || [];
-    const [txt, col] = FLOW_STATUS[f.status] || FLOW_STATUS.draft;
-    $("#flowStatus").textContent = txt;
-    $("#flowStatus").style.color = col;
-    $("#flowCols").value = (f.data && f.data.columns || []).join("、");
-    $("#flowLoop").checked = (f.steps || []).some((s) => s.op === "loop_rows");
-    $("#flowIssues").innerHTML = issues.length
-      ? issues.map((x) => "· " + escapeHtml(x)).join("<br>")
-      : '<span style="color:var(--ok)">结构没问题，去「本地试跑」走一遍</span>';
-
-    const real = flowHasRealSteps(f);
-    const tested = f.status && f.status !== "draft";
-    $("#btnFlowSubmit").disabled = issues.length > 0 || !real;
-    $("#btnFlowTrial").disabled = issues.length > 0 || !real;
-    // 没跑通之前，核对 / 执行 两步先锁上 —— 免得拿一个还没验证的流程去当正式配置用
-    const gate = $("#flowGate");
-    if (!real) {
-      gate.textContent = "这个流程还没录到实际操作（点击 / 输入 / 选择）——「重新录制」去浏览器里走一遍。";
-    } else if (!tested) {
-      gate.textContent = "「核对」「执行」两步等本地试跑通过后再开。先点「本地试跑（逐步）」。";
-    } else {
-      gate.textContent = "";
-    }
-    // flow 自己不吃 Excel 时，下面那张「配置来源」卡是空的，藏掉
-    $("#dataSourceCard").classList.toggle("hidden", hasFlow() && !needsExcel());
-
-    const box = $("#flowSteps");
-    box.innerHTML = "";
-    const rows = flattenSteps(f.steps || []);
-    if (!rows.length) {
-      box.innerHTML = '<div style="color:var(--mu);font-size:12px">还没录 —— 点「重新录制」去浏览器里操作一遍</div>';
-    } else {
-      rows.forEach((it) => box.appendChild(flowStepRow(it)));
-    }
-    box.appendChild(insertBar(state.flow.steps, (state.flow.steps || []).length, 0, "＋ 在末尾插一步"));
-  }
-
-  // 把 loop_rows 摊平成带缩进的一列；带上所在数组 + 下标，方便重排 / 插步
+  // 把 loop_rows 摊平；带上所在数组 + 下标，方便重排 / 删 / 插
   function flattenSteps(steps, depth, out, parent) {
-    out = out || []; depth = depth || 0; parent = parent || steps;
+    out = out || []; depth = depth || 0;
     steps.forEach((s, i) => {
       out.push({ s, depth, ref: s, parent: steps, idx: i });
       if (s.op === "loop_rows") flattenSteps(s.body || [], depth + 1, out, s.body);
@@ -821,152 +790,282 @@
     return out;
   }
 
-  function pickSummary(pick) {
-    if (!pick || !pick.length) return { text: "（无选择器）", warn: true };
-    const c = pick[0];
-    const kind = Object.keys(c)[0];
+  // 这一步「操作的是什么」——给人看的一句话，永远不显示裸 css
+  function stepTarget(s) {
+    if (s.op === "goto") {
+      const u = String(s.url || "");
+      const seg = u.split(/[/?#]/).filter(Boolean).pop() || u;
+      return { text: seg, raw: u, warn: false };
+    }
+    if (s.op === "press") return { text: "键 " + (s.key || "Enter"), raw: "", warn: false };
+    if (s.op === "screenshot") return { text: "存到结果目录", raw: "", warn: false };
+    const pick = s.pick || [];
     const kinds = pick.map((p) => Object.keys(p)[0]);
-    const cssOnly = kinds.every((k) => k === "css");
-    const label = { text: "文字", role: "角色", label: "label", attr: "属性", css: "css" }[kind] || kind;
-    return { text: `${label}：${c[kind]}`, warn: cssOnly };
+    const cssOnly = pick.length > 0 && kinds.every((k) => k === "css");
+    // 优先「录制时你看到的字」，再退到 text / label / role
+    let text = (s.seen || "").trim();
+    if (!text) {
+      const c = pick.find((p) => p.text || p.label || (p.role && p.name)) || {};
+      text = c.text || c.label || c.name || "";
+    }
+    const raw = pick.map((p) => { const k = Object.keys(p)[0]; return `${k}=${p[k]}`; }).join("  |  ");
+    return { text: text || (cssOnly ? "" : "（这一步没抓到明显特征）"), raw, warn: cssOnly };
   }
 
-  // 编辑步骤后：立刻本地重画（跟手），再静默存盘（回填 issues）
+  // fill/select 的值是不是绑了 Excel 列（{{列名}}）
+  const COL_RE = /^\s*\{\{\s*([^}]+?)\s*\}\}\s*$/;
+  function stepCol(s) { const m = COL_RE.exec(s.value || ""); return m ? m[1] : ""; }
+
+  function paintFlow(r) {
+    const f = r.flow;
+    const issues = r.issues || [];
+    const [txt, col] = FLOW_STATUS[f.status] || FLOW_STATUS.draft;
+    $("#flowName").textContent = f.name || "录下来的操作";
+    $("#flowStatus").textContent = "· " + txt;
+    $("#flowStatus").style.color = col;
+
+    const flat = flattenSteps(f.steps || []);
+    const real = flowHasRealSteps(f);
+    const tested = f.status && f.status !== "draft";
+    const nWarn = flat.filter((it) => stepTarget(it.s).warn).length;
+    const nCol = flat.filter((it) => stepCol(it.s)).length;
+
+    // loop 勾选：有绑列就默认按行跑
+    $("#flowLoop").checked = (f.steps || []).some((s) => s.op === "loop_rows") || nCol > 0;
+    $("#flowLoopRow").style.display = (nCol > 0 || $("#flowLoop").checked) ? "" : "none";
+
+    // 顶部一行小字：共几步、几步认不准、几个格子按表格
+    const meta = $("#flowMeta");
+    meta.innerHTML = "";
+    meta.appendChild(el("span", null, `共 ${flat.length} 步`));
+    if (nCol) meta.appendChild(el("span", null, `· ${nCol} 处按表格取值`));
+    if (nWarn) {
+      const w = el("span", null, `· ${nWarn} 步认不准`);
+      w.style.color = "var(--bad)";
+      meta.appendChild(w);
+      meta.appendChild(linkSpan("勾选这些", () => {
+        flowSel = new Set(flat.filter((it) => stepTarget(it.s).warn).map((it) => it.ref));
+        paintFlow({ flow: state.flow, issues });
+      }));
+    }
+    if (flowSel.size) meta.appendChild(linkSpan("清空勾选", () => { flowSel.clear(); paintFlow({ flow: state.flow, issues }); }));
+
+    $("#btnFlowDelSel").style.display = flowSel.size ? "" : "none";
+    $("#btnFlowDelSel").textContent = `删除勾选（${flowSel.size}）`;
+    $("#btnFlowSubmit").disabled = issues.length > 0 || !real;
+    $("#btnFlowTrial").disabled = issues.length > 0 || !real;
+
+    $("#flowIssues").innerHTML = issues.length
+      ? issues.map((x) => "· " + escapeHtml(x)).join("<br>")
+      : (real ? '<span style="color:var(--ok)">看着能跑，点「本地试跑」走一遍</span>' : "");
+
+    const gate = $("#flowGate");
+    gate.textContent = !real
+      ? "还没录到实际操作（点击 / 输入 / 选择）—— 点「重新录制」去浏览器里走一遍。"
+      : !tested ? "「核对」「执行」两步在本地试跑通过后自动打开。"
+      : "";
+    $("#dataSourceCard").classList.toggle("hidden", hasFlow() && !needsExcel());
+
+    const box = $("#flowSteps");
+    box.innerHTML = "";
+    if (!flat.length) {
+      box.innerHTML = '<div style="color:var(--mu);font-size:12px;padding:8px">还没录 —— 点上面「重新录制」</div>';
+      return;
+    }
+    flat.forEach((it, n) => box.appendChild(flowStepRow(it, n)));
+  }
+
+  function linkSpan(text, onClick) {
+    const a = el("span", null, text);
+    a.style.cssText = "color:var(--pink);cursor:pointer;text-decoration:underline";
+    a.addEventListener("click", onClick);
+    return a;
+  }
+
+  // 编辑步骤后：本地立刻重画（跟手）+ 静默存盘（回填 issues）
   function repaint() { paintFlow({ flow: state.flow, issues: [] }); flowSave(true); }
 
-  // 一行小图标按钮
   function iconBtn(txt, title, onClick) {
     const b = el("button", "btn btn-sm btn-ghost", txt);
-    b.style.cssText = "flex:none;padding:0 6px;min-width:0";
+    b.style.cssText = "flex:none;padding:0 5px;min-width:0;font-size:12px";
     b.title = title;
     b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
     return b;
   }
 
-  // 步骤之间的「＋ 插一步」条
-  function insertBar(parent, idx, depth, label) {
-    const wrap = el("div", "row");
-    wrap.style.cssText = `gap:6px;margin-left:${depth * 16}px;padding:1px 0`;
-    const add = el("button", "btn btn-sm btn-ghost", label || "＋");
-    add.style.cssText = "padding:0 8px;color:var(--mu);font-size:11px";
-    add.addEventListener("click", () => {
-      showModal({
-        title: "插一步",
-        desc: "选一种加在这里：",
-        extraHtml: '<div style="padding:12px;display:flex;flex-wrap:wrap;gap:8px">'
-          + FLOW_INSERT.map(([op, txt]) =>
-            `<button class="btn btn-sm" data-op="${op}">${txt}</button>`).join("")
-          + "</div>",
-        buttons: [{ label: "取消" }],
-      });
-      $("#modalExtra").querySelectorAll("button[data-op]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const mk = (FLOW_INSERT.find((x) => x[0] === btn.dataset.op) || [])[2];
-          if (mk) { parent.splice(idx, 0, mk()); repaint(); }
-          hideModal();
-        });
-      });
-    });
-    wrap.appendChild(add);
-    return wrap;
-  }
-
-  function flowStepRow(it) {
+  // 一行 = 一步。紧凑单行：勾选 · 序号 · 动词 · 对象 · 值/取值方式 · ↑↓×
+  function flowStepRow(it, n) {
     const s = it.s;
-    const wrap = el("div", "col");
-    wrap.style.cssText = "gap:2px";
+    const sib = it.parent;
     const row = el("div", "row");
-    row.style.cssText = `gap:8px;align-items:center;font-size:12px;padding:5px 8px;border:1px solid var(--bd);border-radius:8px;margin-left:${it.depth * 16}px`;
+    row.style.cssText = `gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;padding:4px 6px;border:1px solid var(--bd);`
+      + `border-radius:7px;margin-left:${it.depth * 18}px;`
+      + (flowSel.has(it.ref) ? "background:var(--pink-light);border-color:var(--pink)" : "");
 
-    // op 徽标；click 上点一下切换「·提交」标记
-    const op = el("span", null, s.op + (s.submit ? " ·提交" : ""));
-    op.style.cssText = "font-family:monospace;font-size:11px;color:var(--pink-text-on-light);background:var(--pink-light);border-radius:5px;padding:1px 6px;flex:none"
+    if (s.op !== "loop_rows") {
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = flowSel.has(it.ref);
+      cb.style.cssText = "flex:none;margin:0";
+      cb.addEventListener("change", () => {
+        cb.checked ? flowSel.add(it.ref) : flowSel.delete(it.ref);
+        paintFlow({ flow: state.flow, issues: [] });
+      });
+      row.appendChild(cb);
+    }
+
+    const num = el("span", null, String(n + 1));
+    num.style.cssText = "flex:none;color:var(--mu);font-variant-numeric:tabular-nums;min-width:22px;text-align:right";
+    row.appendChild(num);
+
+    // 动词徽标。click 上点一下切换「·提交」
+    const verb = el("span", null, (FLOW_VERB[s.op] || s.op) + (s.submit ? " ·提交" : ""));
+    verb.style.cssText = "flex:none;font-size:11px;border-radius:5px;padding:1px 6px;"
+      + (s.submit ? "color:#fff;background:var(--pink)" : "color:var(--pink-text-on-light);background:var(--pink-light)")
       + (s.op === "click" ? ";cursor:pointer" : "");
     if (s.op === "click") {
-      op.title = "点一下切换「提交动作」标记（提交动作在空跑 / 逐步试跑时会跳过）";
-      op.addEventListener("click", () => { it.ref.submit = !it.ref.submit; repaint(); });
+      verb.title = "点一下：标记 / 取消「提交动作」（提交动作在试跑时会跳过）";
+      verb.addEventListener("click", () => { it.ref.submit = !it.ref.submit; repaint(); });
     }
-    row.appendChild(op);
+    row.appendChild(verb);
 
     if (s.op === "loop_rows") {
-      row.appendChild(el("span", null, `按 Excel 行循环（${(s.body || []).length} 步）`));
-      wrap.appendChild(row);
-      return wrap;
+      row.appendChild(el("span", null, `以下 ${(s.body || []).length} 步，Excel 每行跑一遍`));
+      return row;
     }
 
-    if (["click", "fill", "select", "wait_for"].includes(s.op)) {
-      const ps = pickSummary(s.pick);
-      const tag = el("span", null, ps.text);
-      tag.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px";
-      tag.style.color = ps.warn ? "var(--bad)" : "var(--sub)";
-      tag.title = ps.warn ? "只有 css 兜底，页面一变就会失效 —— 回录制页重录这步" : (s.seen || "");
-      row.appendChild(tag);
+    // 操作对象
+    const tgt = stepTarget(s);
+    if (tgt.warn) {
+      const w = el("span", null, "⚠ 认不准" + (tgt.text ? "：" + tgt.text : ""));
+      w.style.cssText = "color:var(--bad);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:40px";
+      w.title = "只抓到一个脆弱的 css 位置，页面一改版就失效。建议删掉、或回录制页重录这一步。";
+      row.appendChild(w);
+    } else if (tgt.text) {
+      const t = el("span", null, tgt.text);
+      t.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:40px;color:var(--tx)";
+      t.title = tgt.raw || "";
+      row.appendChild(t);
+    } else {
+      row.appendChild(el("span", null, "")).style.flex = "1";
     }
 
-    const bindText = (field, ph, wide) => {
+    const bindText = (field, ph) => {
       const inp = el("input", "field");
-      inp.value = s[field] || "";
-      inp.placeholder = ph || "";
-      inp.style.cssText = `height:24px;${wide ? "flex:1;" : ""}min-width:60px;font-size:12px`;
+      inp.value = s[field] || ""; inp.placeholder = ph || "";
+      inp.style.cssText = "height:22px;flex:1;min-width:60px;font-size:12px";
       inp.addEventListener("change", () => { it.ref[field] = inp.value; flowSave(true); });
       row.appendChild(inp);
-      return inp;
     };
     if (["fill", "select"].includes(s.op)) {
-      const inp = bindText("value", "值；可写 {{列名}} 绑 Excel", true);
-      inp.title = "可改成 {{列名}} 绑 Excel";
+      // 固定值 / 按表格取值 两态切换
+      const colName = stepCol(s);
+      const seg = el("span", null, colName ? "按表格" : "固定值");
+      seg.style.cssText = "flex:none;font-size:11px;border-radius:5px;padding:1px 6px;cursor:pointer;"
+        + (colName ? "color:#fff;background:var(--pink)" : "color:var(--sub);background:var(--bd)");
+      seg.title = colName ? "点一下改回「固定值」" : "点一下改成「按表格每行取一个值」";
+      seg.addEventListener("click", () => {
+        it.ref.value = colName ? "" : "{{" + (s.seen || tgt.text || "列名").trim() + "}}";
+        repaint();
+      });
+      row.appendChild(seg);
+      const inp = el("input", "field");
+      inp.style.cssText = "height:22px;flex:1;min-width:70px;font-size:12px"
+        + (colName ? ";color:var(--pink)" : "");
+      inp.value = colName || (s.value || "");
+      inp.placeholder = colName ? "表格里这一列叫什么" : "要填的固定值";
+      inp.addEventListener("change", () => {
+        it.ref.value = colName ? "{{" + inp.value.trim() + "}}" : inp.value;
+        flowSave(true);
+      });
+      row.appendChild(inp);
     } else if (s.op === "wait_text" || s.op === "assert") {
-      bindText("text", s.op === "assert" ? "要校验在页面上的文字" : "要等出现的文字", true);
+      bindText("text", s.op === "assert" ? "要出现的文字" : "要等的文字");
     } else if (s.op === "confirm") {
-      bindText("note", "停下来让人核对什么", true);
+      bindText("note", "让人核对什么");
     } else if (s.op === "press") {
-      bindText("key", "Enter / Escape / Tab");
-    } else if (s.op === "goto") {
-      const u = el("span", null, s.url || "");
-      u.style.cssText = "color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1";
-      row.appendChild(u);
-    } else if (s.op === "screenshot") {
-      row.appendChild(el("span", null, "截图进结果目录"));
+      const inp = el("input", "field");
+      inp.value = s.key || "Enter"; inp.style.cssText = "height:22px;width:90px;font-size:12px;flex:none";
+      inp.addEventListener("change", () => { it.ref.key = inp.value; flowSave(true); });
+      row.appendChild(inp);
     }
 
-    // 右侧操作区：合并为下拉 / 上移 / 下移 / 删
+    // 右侧：合并 / 上移 / 下移 / 删
     const tools = el("span", "row");
-    tools.style.cssText = "margin-left:auto;gap:2px;flex:none";
-    const sib = it.parent;
-    // click 紧跟着又一个 click：多半是「点开下拉 + 点选项」，能并成一个 select
+    tools.style.cssText = "margin-left:auto;gap:1px;flex:none";
     if (s.op === "click" && sib[it.idx + 1] && sib[it.idx + 1].op === "click") {
-      tools.appendChild(iconBtn("合并", "把这步和下一步合并成一个「选下拉」", () => {
+      tools.appendChild(iconBtn("合并", "和下一步合并成一个「选择下拉」", () => {
         const nxt = sib[it.idx + 1];
-        sib.splice(it.idx, 2, {
-          op: "select", pick: s.pick,
-          value: nxt.seen || "", seen: nxt.seen || "",
-        });
+        sib.splice(it.idx, 2, { op: "select", pick: s.pick, value: nxt.seen || "", seen: nxt.seen || "" });
         repaint();
       }));
     }
     tools.appendChild(iconBtn("↑", "上移", () => {
-      if (it.idx > 0) { const a = sib; [a[it.idx - 1], a[it.idx]] = [a[it.idx], a[it.idx - 1]]; repaint(); }
+      if (it.idx > 0) { [sib[it.idx - 1], sib[it.idx]] = [sib[it.idx], sib[it.idx - 1]]; repaint(); }
     }));
     tools.appendChild(iconBtn("↓", "下移", () => {
-      const a = sib;
-      if (it.idx < a.length - 1) { [a[it.idx + 1], a[it.idx]] = [a[it.idx], a[it.idx + 1]]; repaint(); }
+      if (it.idx < sib.length - 1) { [sib[it.idx + 1], sib[it.idx]] = [sib[it.idx], sib[it.idx + 1]]; repaint(); }
     }));
-    const del = iconBtn("×", "删掉这步", () => { sib.splice(it.idx, 1); repaint(); });
-    tools.appendChild(del);
+    tools.appendChild(iconBtn("×", "删掉这步", () => { flowSel.delete(it.ref); sib.splice(it.idx, 1); repaint(); }));
     row.appendChild(tools);
 
-    wrap.appendChild(row);
-    wrap.appendChild(insertBar(it.parent, it.idx + 1, it.depth));
-    return wrap;
+    if ($("#flowRaw").checked && tgt.raw) {
+      const raw = el("div", null, tgt.raw);
+      raw.style.cssText = "width:100%;color:var(--mu);font-family:monospace;font-size:10px;"
+        + "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:28px";
+      row.appendChild(raw);
+    }
+    return row;
+  }
+
+  // 勾选批量删（可能横跨 loop 内外，按对象引用删）
+  function flowDeleteSelected() {
+    if (!flowSel.size || !state.flow) return;
+    const kill = (arr) => {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (flowSel.has(arr[i])) arr.splice(i, 1);
+        else if (arr[i].op === "loop_rows") kill(arr[i].body || []);
+      }
+    };
+    kill(state.flow.steps || []);
+    flowSel.clear();
+    repaint();
+  }
+
+  function flowAddStep() {
+    showModal({
+      title: "加一步（加在末尾）",
+      desc: "点击 / 输入这类要靠录制；这里能补的是流程控制：",
+      extraHtml: '<div style="padding:12px;display:flex;flex-direction:column;gap:8px">'
+        + FLOW_INSERT.map(([op, txt]) => `<button class="btn btn-sm" data-op="${op}" style="text-align:left">${txt}</button>`).join("")
+        + "</div>",
+      buttons: [{ label: "取消" }],
+    });
+    $("#modalExtra").querySelectorAll("button[data-op]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mk = (FLOW_INSERT.find((x) => x[0] === btn.dataset.op) || [])[2];
+        if (mk) {
+          const steps = state.flow.steps || (state.flow.steps = []);
+          const loop = steps.find((s) => s.op === "loop_rows");
+          (loop ? loop.body : steps).push(mk());
+          repaint();
+        }
+        hideModal();
+      });
+    });
   }
 
   function collectFlow() {
     const f = JSON.parse(JSON.stringify(state.flow || {}));
-    const cols = ($("#flowCols").value || "").split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
+    // 数据列 = 步骤里所有 {{列名}} 的并集（用户在每步上切「按表格」时写进去的）
+    const cols = [];
+    flattenSteps(f.steps || []).forEach((it) => {
+      const c = stepCol(it.s);
+      if (c && !cols.includes(c)) cols.push(c);
+    });
     f.data = f.data || {};
     f.data.columns = cols;
     f.data.source = (cols.length || $("#flowLoop").checked) ? "excel" : "none";
-    // loop 开关：把 goto 之后的步骤包进 / 解出 loop_rows
     const want = $("#flowLoop").checked;
     const has = (f.steps || []).some((s) => s.op === "loop_rows");
     if (want && !has) {
@@ -1086,9 +1185,12 @@
   }
 
   function initFlowCard() {
-    $("#btnFlowSave").addEventListener("click", () => flowSave(false));
     $("#btnFlowReRecord").addEventListener("click", () => openFlowRecord(state.activeForm));
     $("#btnFlowTrial").addEventListener("click", flowTrialRun);
+    $("#btnFlowAddStep").addEventListener("click", flowAddStep);
+    $("#btnFlowDelSel").addEventListener("click", flowDeleteSelected);
+    $("#flowRaw").addEventListener("change", () => paintFlow({ flow: state.flow, issues: [] }));
+    $("#flowLoop").addEventListener("change", () => flowSave(true));
     $("#btnFlowTemplate").addEventListener("click", () => {
       flowSave().then((r) => {
         if (r && r.ok) callApi("make_template", state.activeForm, null).then(handleTemplateResult);

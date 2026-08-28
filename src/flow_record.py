@@ -112,13 +112,24 @@ _INJECT = r"""
     } catch (e){}
   }
 
+  const CLICKABLE = "a,button,[role='button'],[role='tab'],[role='menuitem'],[role='option'],"
+    + "[role='switch'],[role='checkbox'],[role='radio'],label,summary,"
+    + "input[type='checkbox'],input[type='radio'],input[type='button'],input[type='submit'],[onclick],[tabindex]";
+  function interactive(el){
+    if (!el || !el.closest) return null;
+    const hit = el.closest(CLICKABLE);
+    if (hit) return hit;
+    // 没落在任何可交互元素上：多半是点空白 / 滚动条 / 拖选，别记
+    return null;
+  }
   document.addEventListener('click', e => {
     if (window.__flowRecPaused) return;
     let el = e.target;
     if (el.closest && el.closest('#__flowToolbar')) return;
-    el = (el.closest && el.closest("a,button,[role='button'],[role='tab'],[role='menuitem'],[role='option'],label,input[type='checkbox'],input[type='radio']")) || el;
-    if (el.getAttribute && el.getAttribute('role') === 'option') emit('select', el, { value: visibleText(el) });
-    else emit('click', el);
+    const it = interactive(el);
+    if (!it) return;                       // 只记真的点在可交互元素上的
+    if (it.getAttribute && it.getAttribute('role') === 'option') emit('select', it, { value: visibleText(it) });
+    else emit('click', it);
   }, true);
 
   document.addEventListener('change', e => {
@@ -136,11 +147,12 @@ _INJECT = r"""
 
   document.addEventListener('keydown', e => {
     if (window.__flowRecPaused) return;
-    if (e.key === 'Enter' || e.key === 'Escape'){
-      const el = e.target;
-      if (el && el.closest && el.closest('#__flowToolbar')) return;
-      emit('press', el || document.body, { key: e.key });
-    }
+    if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    const el = e.target;
+    if (el && el.closest && el.closest('#__flowToolbar')) return;
+    // 只在输入框里按 Enter/Esc 才算一步（页面上到处按不该记）
+    if (!el || !(el.matches && el.matches("input,textarea,[contenteditable='true']"))) return;
+    emit('press', el, { key: e.key });
   }, true);
 
   function ctl(action, arg){
@@ -229,11 +241,16 @@ _INJECT = r"""
     [dot, stat, btnPause, btnConfirm, noteWrap, btnDone].forEach(n => bar.appendChild(n));
     document.body.appendChild(bar);
   }
+  // 只负责「浮条在不在」，不碰监听器（重复挂监听器会让每个操作记两遍）。
+  // Python 侧录制循环每隔一两秒也会 evaluate 一次这个函数兜底。
+  window.__flowEnsureBar = toolbar;
   toolbar();
   try {
     new MutationObserver(() => { if (!document.getElementById('__flowToolbar')) toolbar(); })
       .observe(document.documentElement, { childList: true, subtree: true });
   } catch (e){}
+  // SPA 整片重渲染时 MutationObserver 偶尔跟不上，再加一个定时兜底
+  try { setInterval(() => { if (!window.__flowRecDone && !document.getElementById('__flowToolbar')) toolbar(); }, 1000); } catch (e){}
 })();
 """
 
@@ -314,15 +331,20 @@ class FlowRecorder:
         seen = str(ev.get("seen") or "")
         now = time.monotonic()
         fp = json.dumps([kind, pick, ev.get("value"), ev.get("key")], ensure_ascii=False)
-        if fp == self._last[0] and now - self._last[1] < 0.45:
-            return                         # 同一动作 0.45s 内重复，丢
+        if fp == self._last[0] and now - self._last[1] < 0.8:
+            return                         # 同一动作 0.8s 内重复，丢（双击 / 冒泡多次）
         self._last = (fp, now)
 
         if kind == "click":
             step = {"op": "click", "pick": pick, "seen": seen}
             if _SUBMIT_WORDS.search(seen):
                 step["submit"] = True
-            self.steps.append(step)
+            # 和上一条 click 落在同一个元素上（pick 一样）→ 覆盖，不叠一堆
+            if self.steps and self.steps[-1].get("op") == "click" \
+                    and self.steps[-1].get("pick") == pick:
+                self.steps[-1] = step
+            else:
+                self.steps.append(step)
         elif kind == "fill":
             step = {"op": "fill", "pick": pick, "value": str(ev.get("value", "")), "seen": seen}
             # 同一个字段连续 fill → 覆盖上一条

@@ -252,7 +252,7 @@ class _FlowRecSession:
 
     def _run(self):
         from .browser import Browser
-        from .flow_record import FlowRecorder
+        from .flow_record import FlowRecorder, _INJECT
         try:
             with Browser(self.cdp_url, self.timeout) as b:
                 b.front()
@@ -282,6 +282,16 @@ class _FlowRecSession:
                         self.done = True
                         break
                     ticks += 1
+                    # 每 ~1.4s 兜一次浮条：SPA 整片重渲染时页面内的 observer 偶尔跟不上。
+                    # __flowEnsureBar 只重建浮条、不重挂监听器；整个脚本没了才重注入。
+                    if ticks % 7 == 0:
+                        try:
+                            has = b.page.evaluate(
+                                "() => { if (window.__flowEnsureBar){ window.__flowEnsureBar(); return 1 } return 0 }")
+                            if not has:
+                                b.page.evaluate(_INJECT)
+                        except Exception:
+                            pass
                     if ticks % 10 == 0 and not chrome.is_connected(self.cdp_url):
                         self.lost = True
                         break
