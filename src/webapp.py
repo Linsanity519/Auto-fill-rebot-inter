@@ -758,9 +758,29 @@ class Api:
         return True
 
     # ---------------- 执行 ----------------
+    def _update_block(self) -> str:
+        """版本低于 manifest 的 min_supported 时，返回一句拦截语；否则空串。
+
+        走 UpdateService.check() 的 12 小时缓存，不额外发网络请求（前端启动时
+        已经检查过一次、缓存是热的）。检查本身出任何岔子都放行 —— 更新机制
+        绝不能把人挡在自己的工具外面。
+        """
+        try:
+            st = self._updater.check()
+            if st.get("blocked"):
+                return (f"当前版本 {self._updater.current_version} 过旧，必须先更新到 "
+                        f"{st.get('min_supported') or '新版'} 或更高才能继续 —— "
+                        f"点左下角「更新并重启」。")
+        except Exception:
+            log.warning("开跑前查强制升级门槛失败（放行）", exc_info=True)
+        return ""
+
     def start_run(self, mode: str, skip_done: bool) -> dict:
         if not self.runner or not self.preview_rows:
             return {"ok": False, "error": "还没有载入数据，请先在「准备」页载入并检查"}
+        blocked = self._update_block()
+        if blocked:
+            return {"ok": False, "error": blocked}
         if not chrome.is_connected(self.settings["cdp_url"]):
             return {"ok": False, "error": "浏览器没连上，请先启动浏览器并登录"}
 
@@ -774,6 +794,9 @@ class Api:
         """只重跑「失败清单」里选中的那几条，复用同一个 runner 实例。"""
         if not self.runner:
             return {"ok": False, "error": "还没有载入数据，请先在「准备」页载入并检查"}
+        blocked = self._update_block()
+        if blocked:
+            return {"ok": False, "error": blocked}
         if not chrome.is_connected(self.settings["cdp_url"]):
             return {"ok": False, "error": "浏览器没连上，请先启动浏览器并登录"}
         wanted = set(indices or [])

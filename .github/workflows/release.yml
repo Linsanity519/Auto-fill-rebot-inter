@@ -111,13 +111,20 @@ jobs:
           }
           $bases += "--base-url"
           $bases += $gh
+          # 仓库变量 MIN_SUPPORTED_VERSION 设了，就把「低于它的客户端强制引导升级」
+          # 写进 manifest。想解除强制就把这个变量清空。见 src/update.py 的 min_supported。
+          $gate = @()
+          if ("${{ vars.MIN_SUPPORTED_VERSION }}") {
+            $gate += "--min-supported"
+            $gate += "${{ vars.MIN_SUPPORTED_VERSION }}"
+          }
           python tools/make_update_manifest.py `
             --version $version `
             --runtime $runtime `
             --payload "dist/ConfigAssistant-$version.zip" `
             --installer "dist/ConfigAssistant-Setup-$version.exe" `
             --notes-file "$env:RUNNER_TEMP/notes.txt" `
-            @bases
+            @bases @gate
 
       - name: Create GitHub Release
         shell: pwsh

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -67,8 +68,14 @@ def main() -> int:
     #   迟早会被截断或者拼歪 —— 走文件最稳，CI 就是这么传的。
     ap.add_argument("--notes-file", default="", dest="notes_file",
                     help="从文件读 notes（UTF-8）。给了就以它为准，覆盖 --notes")
+    ap.add_argument("--min-supported", default="", dest="min_supported",
+                    help="低于这个版本的客户端会被强制引导升级（进不去主流程）。"
+                         "留空 = 不强制。设了要用一个大家都能升上去的版本号")
     ap.add_argument("--output", default="dist/latest.json")
     args = ap.parse_args()
+
+    if args.min_supported and not re.fullmatch(r"\d+\.\d+\.\d+", args.min_supported):
+        raise SystemExit(f"--min-supported 要是 X.Y.Z：{args.min_supported}")
 
     if not args.payload and not args.installer:
         raise SystemExit("--payload 和 --installer 至少要给一个")
@@ -92,6 +99,8 @@ def main() -> int:
         "notes": notes,
         "mandatory": False,
     }
+    if args.min_supported:
+        doc["min_supported"] = args.min_supported
 
     if args.payload:
         p = Path(args.payload).resolve()
