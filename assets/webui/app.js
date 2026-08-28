@@ -29,14 +29,15 @@
   //   加了配置类型或改了 _caps 之后，重新生成一遍：
   //     python tools\gen_stub_forms.py
   const STUB_FORMS = [
-    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
-    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
-    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
-    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
-    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill"}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
-    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
-    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill"}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
-    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab"}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
+    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
+    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
+    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
+    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
+    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
+    {"name": "价格策略批量开关", "mode": "pt_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"}, "group": "价格", "group_order": 3, "label": "价格策略批量开关", "order": 3, "desc": "策略中心 - 把「价格配置」表里已配好的行批量开启 / 关闭（界面上切方向）", "scopes": [["按名称关键词", "keyword"], ["本工具配置过的", "ledger"], ["按清单", "list"]]},
+    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
+    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
+    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
   ];
 
   // 没有后端时的假抢占任务数据：只够看清任务行的排版，真实楼栋清单来自
@@ -154,6 +155,7 @@
     if (name === "ad_meta") return Promise.resolve(STUB_AD);
     if (name === "meeting_meta") return Promise.resolve(STUB_MEETING);
     if (name === "meeting_save") return Promise.resolve({ ok: true, tasks: args[1] || [], issues: [] });
+    if (name === "pt_ledger_view") return Promise.resolve({ ok: true, strategies: [], recent: [], path: "" });
     if (name === "prep_save") return Promise.resolve({ ok: true, values: {}, issues: [] });
     if (name === "strategy_get") return Promise.resolve({ ok: true, path: "config/strategies/…json", doc: STUB_STRATEGY });
     // ⚠ 统计的样子货只在网址带 ?demo 时给。别的样子货最多让界面长得不对，
@@ -175,6 +177,9 @@
     logErrors: 0,
     runMode: "confirm",
     scopeValue: null,
+    toggleDir: "on",       // 价格策略批量开关：on=开启 / off=关闭
+    tgScope: "keyword",    // 选哪些行：keyword / ledger / list
+    tgStrategyMode: "current",  // 策略范围：current=当前页 / list=指定策略
     dataFile: "",
     loaded: false,          // 当前配置类型是否已经成功载入过一次
     previewRows: [],        // load_and_check 返回的行摘要（不含 payload）
@@ -231,6 +236,8 @@
   function hasTaskList() { return !!caps().task_list; }
   // 吃不吃 Excel 数据文件
   function needsExcel() { return caps().excel !== false; }
+  // 「批量开关」类型（价格策略批量开启/关闭）：藏数据文件行，露「名称关键词」文本框
+  function hasToggle() { return !!caps().toggle; }
   // 跑法：grab=抢占（只找不订／开抢），fill=填表（空跑／逐条确认／全自动）
   function isGrabRun() { return uiText().run_kind === "grab"; }
 
@@ -620,6 +627,7 @@
     renderWizardCard();
     renderAdCard();
     renderMeetingCard();
+    renderToggleCard();
     syncModeSegmented();
     renderReviewTable();
     goToStep("prepare");
@@ -1375,6 +1383,106 @@
     $("#btnSaveMeeting").onclick = saveMeetingTasks;
   }
 
+  // 「价格策略批量开关」专用：方向 + 名称关键词 + 策略 三个控件。
+  // ⚠ 判据是 caps.toggle（yaml 里 toggle: true），不看 mode 名。
+  //   数据文件那一行由 renderMeetingCard 里那句 needsExcel() 统一藏掉（这类 data_source: none）。
+  //   结构对齐最初的设计稿：方向 / 选哪些行（keyword·ledger·list）/ 策略范围。
+  function tgInvalidate() {
+    state.loaded = false;
+    state.previewRows = [];
+    renderReviewTable();
+    updateNextButtonState();
+  }
+
+  function tgWireSeg(sel, key, active, onPick) {
+    const seg = $(sel);
+    seg.querySelectorAll(".seg-item").forEach((it) => {
+      it.classList.toggle("active", it.dataset[key] === active);
+      it.onclick = () => {
+        seg.querySelectorAll(".seg-item").forEach((n) => n.classList.remove("active"));
+        it.classList.add("active");
+        onPick(it.dataset[key]);
+      };
+    });
+  }
+
+  function renderToggleCard() {
+    const on = hasToggle();
+    $("#toggleParamRow").classList.toggle("hidden", !on);
+    $("#btnMakeTemplate").classList.toggle("hidden", on);
+    if (on) $("#scopeRow").classList.add("hidden");   // 这类不用共用的「延期范围」那一行
+    if (!on) return;
+
+    $("#dataSourceTitle").textContent = "批量开关";
+    $("#dataSourceHint").textContent = "把「价格配置」表里已配好的行，批量开 / 关";
+    $("#tgHint").textContent = uiText().toggle_hint || "";
+
+    tgWireSeg("#tgDirSeg", "dir", state.toggleDir, (v) => {
+      state.toggleDir = v; tgRefreshDirHint(); tgInvalidate();
+    });
+    tgRefreshDirHint();
+
+    tgWireSeg("#tgScopeSeg", "scope", state.tgScope, (v) => {
+      state.tgScope = v; state.scopeValue = v; tgSyncBody(); tgInvalidate();
+    });
+    tgWireSeg("#tgStrategyModeSeg", "sm", state.tgStrategyMode, (v) => {
+      state.tgStrategyMode = v; tgSyncBody(); tgInvalidate();
+    });
+
+    state.scopeValue = state.tgScope;   // 后端按它走（keyword / ledger / list）
+    ["#tgKeywordInput", "#tgListInput", "#tgStrategyInput", "#tgLedgerFrom", "#tgLedgerTo"]
+      .forEach((s) => { $(s).oninput = tgInvalidate; });
+    $("#tgLedgerStrategy").onchange = tgInvalidate;
+    tgSyncBody();
+  }
+
+  function tgRefreshDirHint() {
+    $("#tgDirHint").textContent = state.toggleDir === "on"
+      ? "把还没开的行开起来" : "把已开启的行关掉";
+  }
+
+  function tgSyncBody() {
+    const sc = state.tgScope;
+    $("#tgKeyword").classList.toggle("hidden", sc !== "keyword");
+    $("#tgLedger").classList.toggle("hidden", sc !== "ledger");
+    $("#tgList").classList.toggle("hidden", sc !== "list");
+    // ledger 用它自己的「策略」下拉；keyword / list 才用上面的「策略范围」
+    $("#tgStrategyScopeRow").classList.toggle("hidden", sc === "ledger");
+    $("#tgStrategyInput").classList.toggle("hidden", state.tgStrategyMode !== "list");
+    if (sc === "ledger") tgLoadLedger();
+  }
+
+  function tgLoadLedger() {
+    const box = $("#tgLedgerRecords");
+    const sel = $("#tgLedgerStrategy");
+    box.innerHTML = '<div style="padding:8px;color:var(--mu)">读取中…</div>';
+    callApi("pt_ledger_view", state.activeForm).then((r) => {
+      if (!r || !r.ok) {
+        box.innerHTML = '<div style="padding:8px;color:var(--mu)">读不到台账</div>';
+        return;
+      }
+      const prev = sel.value;
+      sel.innerHTML = '<option value="">全部策略</option>' +
+        (r.strategies || []).map((s) =>
+          `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name || ("策略" + s.id))}（${s.batches}批）</option>`
+        ).join("");
+      sel.value = prev;
+      if (!(r.recent || []).length) {
+        box.innerHTML =
+          '<div style="padding:10px;color:var(--mu)">还没有记录 —— 用「价格策略配置」跑过一轮后，' +
+          '这里会列出它配了哪些人群、在哪条策略下</div>';
+        return;
+      }
+      box.innerHTML = r.recent.map((b) =>
+        `<div style="padding:6px 10px;border-bottom:1px solid var(--bd)">` +
+        `<span style="color:var(--sub)">${escapeHtml(b.at)}</span> · ` +
+        `<b>${escapeHtml(b.strategy)}</b> · ${b.count} 条` +
+        `<div style="color:var(--mu);margin-top:2px">${(b.names || []).map(escapeHtml).join("、")}` +
+        `${b.count > (b.names || []).length ? " …" : ""}</div></div>`
+      ).join("");
+    });
+  }
+
   /** 「运行模式」三选一按 mode 调整。
    *
    * ⚠ 抢会议室没有「逐条确认」这一档：窗口开的那一瞬间没有等人点确认的余地
@@ -1869,6 +1977,8 @@
   }
 
   function updateScopeHint(value) {
+    // 批量开关自己有一套控件（见 renderToggleCard），共用的「延期范围」行是藏着的
+    if (hasToggle()) return;
     const needsExcel = value === "id_list";
     $("#scopeHint").textContent = needsExcel
       ? "这个范围要 Excel 清单：先点「生成 Excel 模板」，填好后用「浏览…」选它"
@@ -2096,7 +2206,22 @@
     const btn = $("#btnLoadCheck");
     btn.disabled = true;
     appendLog("正在载入并检查…", "info");
-    callApi("load_and_check", state.activeForm, state.dataFile, state.scopeValue, wizardOptions())
+    const opts = wizardOptions() || {};
+    if (hasToggle()) {
+      const sc = state.tgScope;
+      opts.toggle_direction = state.toggleDir;
+      opts.toggle_params = sc === "list" ? $("#tgListInput").value
+        : sc === "keyword" ? $("#tgKeywordInput").value : "";
+      if (sc === "ledger") {
+        opts.toggle_date_from = $("#tgLedgerFrom").value || "";
+        opts.toggle_date_to = $("#tgLedgerTo").value || "";
+        opts.toggle_strategies = $("#tgLedgerStrategy").value || "";
+      } else {
+        opts.toggle_strategies = state.tgStrategyMode === "list" ? $("#tgStrategyInput").value : "";
+      }
+    }
+    callApi("load_and_check", state.activeForm, state.dataFile, state.scopeValue,
+            Object.keys(opts).length ? opts : null)
       .then((res) => {
         btn.disabled = false;
         if (!res || !res.ok) {

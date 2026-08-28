@@ -35,6 +35,11 @@ sku_types: &sku_types [
 form_url: null
 reset_between_rows: false
 
+# 每轮跑完，把这一批成功配好的人群名称 + 所在策略记进台账
+# （output/价格策略开关台账.json）。「价格策略批量开启/关闭」的「本工具配置过的」
+# 范围读的就是它。见 src/pt_ledger.py。
+ledger: 价格策略开关
+
 # ---- 以下四个选择器已在真实页面上验证过（2026-08-07）----
 # 「新建」按钮的结构是 <button><span>新建</span></button>。
 # ⚠ 不能用 :text-is("新建") —— 它只看元素自己的直接文本、不看子元素，

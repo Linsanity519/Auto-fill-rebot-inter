@@ -57,6 +57,8 @@ CORE = {
 BY_MODE = {
     "_default": {
         "antd_prefix", "cancel_selector", "fields", "list", "open_dialog", "open_steps",
+        # ledger：写了就在每轮跑完往 src/pt_ledger.py 的台账记一批（价格配置在用）
+        "ledger",
         "reset_between_rows", "sku_types", "submit_selector", "success_selector",
     },
     "ab_extension": {
@@ -94,6 +96,9 @@ BY_MODE = {
     },
     "meeting_reserve": {
         "buildings", "data_source", "grab",
+    },
+    "pt_toggle": {
+        "data_source", "direction", "ledger", "scopes", "toggle", "ui",
     },
     "price_panel": {
         "activity", "creative", "direct_drops", "excel_from_unit", "next_button",

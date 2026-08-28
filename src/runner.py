@@ -54,6 +54,7 @@ class Runner(StateMixin):
         dry = self.s.get("dry_run")
         stats = {"ok": 0, "failed": 0, "skipped": 0, "dry": 0}
         results = []
+        ok_names = []          # 本轮成功提交的记录名，跑完写进 ledger（见 _flush_ledger）
 
         self.ui.log(f"表单「{self.f['name']}」，共 {total} 条配置" + ("（空跑，不提交）" if dry else ""))
         self.ui.progress(0, total, stats)
@@ -99,6 +100,7 @@ class Runner(StateMixin):
                                 self.state.mark_done(i)
                                 stats["ok"] += 1
                                 results.append(self._result(i, rec, "ok", ""))
+                                ok_names.append(name)
                                 self.ui.log(f"{label} 提交成功", "ok")
 
                     except Stopped:
@@ -118,6 +120,8 @@ class Runner(StateMixin):
 
                     self.ui.progress(i + 1, total, stats)
 
+                self._flush_ledger(b.page, ok_names)
+
         except Stopped:
             self.ui.log("已停止", "warn")
         finally:
@@ -125,6 +129,31 @@ class Runner(StateMixin):
             self._report(results, total, stats)
 
         return results
+
+    def _flush_ledger(self, page, ok_names: list):
+        """把本轮成功配好的记录名记进 ledger 台账（yaml 里写了 `ledger:` 才做）。
+
+        「价格策略批量开启/关闭」的「本工具配置过的」范围读的就是它。
+        ⚠ 台账只是方便事后批量开关，写失败绝不能影响本轮结果 —— 整段吞掉异常。
+        """
+        name = self.f.get("ledger")
+        if not name or not ok_names:
+            return
+        try:
+            from . import pt_ledger
+            meta = {}
+            try:
+                meta = page.evaluate(
+                    "() => { const m = location.href.match(/\\/edit\\/(\\d+)/);"
+                    " return { id: m ? m[1] : '', url: location.href }; }") or {}
+            except Exception:
+                pass
+            pt_ledger.append(
+                name, strategy_id=meta.get("id", ""), strategy_name="",
+                strategy_url=meta.get("url", ""), run_id="", names=ok_names)
+            self.ui.log(f"已记入台账：{len(ok_names)} 条（供「价格策略批量开启/关闭」调用）")
+        except Exception:
+            log.warning("写 ledger 台账失败（不影响本轮）", exc_info=True)
 
     # ---------- 步骤 ----------
     def _open_form(self, page):

@@ -59,6 +59,11 @@ def _runner_price_panel(settings, cfg, ui):
     return PriceRunner(settings, cfg, ui)
 
 
+def _runner_pt(settings, cfg, ui):
+    from .pt_runner import PtToggleRunner
+    return PtToggleRunner(settings, cfg, ui)
+
+
 def _runner_default(settings, cfg, ui):
     from .runner import Runner
     return Runner(settings, cfg, ui)
@@ -132,6 +137,15 @@ MODES: dict[str, ModeSpec] = {
     "price_panel": ModeSpec(
         make_runner=_runner_price_panel,
         build_template=_template_price_panel,
+    ),
+    # 价格策略批量开启 / 关闭：翻转策略编辑页底部「价格配置」表里已有行的开关。
+    # 不吃 Excel，也没有「延期范围」的默认表（选项写在两份 yaml 的 scopes: 里）。
+    "pt_toggle": ModeSpec(
+        make_runner=_runner_pt,
+        no_template_hint=("「批量开启/关闭」不用 Excel 模板。\n\n"
+                          "选好「范围」（按名称关键词 / 本工具配置过的 / 整页全部），"
+                          "填上关键词，点「载入并检查」。"),
+        no_template_hint_cli="「批量开启/关闭」不用 Excel 模板，用 --scope 选范围",
     ),
     "ab_extension": ModeSpec(
         make_runner=_runner_ab,

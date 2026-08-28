@@ -206,6 +206,63 @@
             <div style="color:var(--mu);font-size:11px;padding-left:74px" id="scopeHint"></div>
           </div>
 
+          <!-- 「价格策略批量开关」专用（yaml toggle: true 才显示）。结构：方向 / 选哪些行 / 策略范围 -->
+          <div class="col hidden" id="toggleParamRow" style="gap:14px">
+
+            <div class="row" style="gap:10px;align-items:center">
+              <span style="color:var(--sub);width:72px;flex:none">方向</span>
+              <div class="segmented" id="tgDirSeg">
+                <div class="seg-item active" data-dir="on">开启</div>
+                <div class="seg-item" data-dir="off">关闭</div>
+              </div>
+              <span style="color:var(--mu);font-size:11px" id="tgDirHint"></span>
+            </div>
+
+            <div class="row" style="gap:10px;align-items:flex-start">
+              <span style="color:var(--sub);width:72px;flex:none;padding-top:6px">选哪些行</span>
+              <div class="col" style="flex:1;gap:8px;min-width:0">
+                <div class="segmented" id="tgScopeSeg">
+                  <div class="seg-item active" data-scope="keyword">按名称关键词</div>
+                  <div class="seg-item" data-scope="ledger">本工具配置过的</div>
+                  <div class="seg-item" data-scope="list">按清单</div>
+                </div>
+
+                <div class="col hidden" id="tgKeyword" style="gap:4px">
+                  <input class="field" id="tgKeywordInput" placeholder="逗号分隔，子串命中人群名称；留空 = 整页所有行">
+                </div>
+
+                <div class="col hidden" id="tgLedger" style="gap:8px">
+                  <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+                    <span style="color:var(--sub);font-size:12px">日期</span>
+                    <input class="field" id="tgLedgerFrom" type="date" style="width:150px;flex:none">
+                    <span style="color:var(--mu)">~</span>
+                    <input class="field" id="tgLedgerTo" type="date" style="width:150px;flex:none">
+                    <span style="color:var(--sub);font-size:12px;margin-left:8px">策略</span>
+                    <select class="field" id="tgLedgerStrategy" style="width:220px;flex:none"></select>
+                  </div>
+                  <div id="tgLedgerRecords" style="font-size:11px;border:1px solid var(--bd);border-radius:8px;max-height:190px;overflow:auto"></div>
+                </div>
+
+                <div class="col hidden" id="tgList" style="gap:4px">
+                  <textarea class="field" id="tgListInput" rows="4" placeholder="一行一个人群名称，从别处粘过来即可" style="resize:vertical;font-family:inherit"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="row hidden" id="tgStrategyScopeRow" style="gap:10px;align-items:flex-start">
+              <span style="color:var(--sub);width:72px;flex:none;padding-top:6px">策略范围</span>
+              <div class="col" style="flex:1;gap:8px;min-width:0">
+                <div class="segmented" id="tgStrategyModeSeg">
+                  <div class="seg-item active" data-sm="current">当前打开的策略页</div>
+                  <div class="seg-item" data-sm="list">指定策略</div>
+                </div>
+                <textarea class="field hidden" id="tgStrategyInput" rows="3" placeholder="一行一个：编辑页URL / 路由ID / 业务ID" style="resize:vertical;font-family:inherit"></textarea>
+              </div>
+            </div>
+
+            <div style="color:var(--mu);font-size:11px;padding-left:82px" id="tgHint"></div>
+          </div>
+
           <div class="row">
             <button class="btn btn-blue" style="margin-left:auto" id="btnLoadCheck">载入并检查</button>
           </div>

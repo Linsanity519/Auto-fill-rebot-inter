@@ -265,6 +265,8 @@ class Api:
             "task_list": bool(cfg.get("grab")),
             # 吃不吃 Excel 数据文件。不吃的在 yaml 里写 data_source: none
             "excel": cfg.get("data_source", "excel") != "none",
+            # 「批量开关」类型：藏掉数据文件行，露出一个「名称关键词」文本框
+            "toggle": bool(cfg.get("toggle")),
         }
 
     # 界面上跟着配置类型变的那几句话。yaml 里 ui: 段可以覆盖，
@@ -282,6 +284,14 @@ class Api:
             "配在这里的字段，模板里就不用逐个单元填了",
             # 跑法：fill=填表（空跑/逐条确认/全自动），grab=抢占（只找不订/开抢）
             "run_kind": ui.get("run_kind") or ("grab" if caps["task_list"] else "fill"),
+            # 「批量开关」那几个控件的文案（yaml 的 ui: 段可覆盖）
+            "params_label": ui.get("params_label") or "名称关键词",
+            "params_placeholder": ui.get("params_placeholder")
+            or "一行一个关键词，命中即算。留空 = 整页所有行",
+            "strategy_label": ui.get("strategy_label") or "策略",
+            "strategy_placeholder": ui.get("strategy_placeholder")
+            or "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID",
+            "toggle_hint": ui.get("toggle_hint") or "",
         }
 
     def list_forms(self) -> list:
@@ -636,6 +646,14 @@ class Api:
             s["resume"] = True     # 「跳过已成功的」由前端勾选框在开跑时决定，这里始终读断点
             s["dmp_scope"] = scope
             s["ab_scope"] = scope
+            # 价格策略批量开关：方向 + 选哪些行（keyword/ledger/list）+ 日期区间 + 策略
+            s["pt_scope"] = scope
+            _o = options or {}
+            s["toggle_direction"] = "off" if _o.get("toggle_direction") == "off" else "on"
+            s["toggle_params"] = str(_o.get("toggle_params", "") or "")
+            s["toggle_strategies"] = str(_o.get("toggle_strategies", "") or "")
+            s["toggle_date_from"] = str(_o.get("toggle_date_from", "") or "")
+            s["toggle_date_to"] = str(_o.get("toggle_date_to", "") or "")
             # 活动挂哪儿、按哪套策略跑。资源位投放和价格面板配置共用这两个键
             # （界面上就是同一行控件）；别的 mode 用不到。
             if cfg.get("mode") in ("wizard", "price_panel"):
@@ -693,6 +711,35 @@ class Api:
             "index": row.index, "name": row.name, "issues": row.issues,
             "header": rec.get("header", {}), "items": items or [],
         })
+
+    def pt_ledger_view(self, form_name: str) -> dict:
+        """「价格策略批量开关」卡里那份台账：本工具「价格策略配置」配过哪些。
+
+        strategies：出现过的策略（新→旧），给「策略」下拉当选项。
+        recent：最近几批，给人看一眼「都记了些啥」。
+        """
+        try:
+            cfg = self._form_cfg(form_name)
+            name = cfg.get("ledger")
+            if not name:
+                return {"ok": True, "strategies": [], "recent": [], "path": ""}
+            from . import pt_ledger as PL
+            recent = [{
+                "at": b.get("at", ""),
+                "strategy": b.get("strategy_name") or b.get("strategy_id", ""),
+                "strategy_id": b.get("strategy_id", ""),
+                "count": len(b.get("names") or []),
+                "names": (b.get("names") or [])[:8],
+            } for b in PL.load(name)[:12]]
+            return _json_safe({
+                "ok": True,
+                "strategies": PL.strategies(name),
+                "recent": recent,
+                "path": PL.path(name),
+            })
+        except Exception as e:
+            log.exception("读台账失败")
+            return {"ok": False, "error": str(e)}
 
     def clear_state(self, form_name: str) -> dict:
         try:
