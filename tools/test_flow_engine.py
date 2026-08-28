@@ -1,0 +1,149 @@
+"""src/flow_data.py 的离线测试（不联网、不开浏览器）。
+
+    python tools\\test_flow_engine.py
+"""
+import logging
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+if sys.stdout:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+logging.disable(logging.CRITICAL)
+
+from src import flow_data as FD          # noqa: E402
+from src import registry                 # noqa: E402
+
+PASS, FAIL = [], []
+
+
+def ok(name, cond, detail=""):
+    (PASS if cond else FAIL).append(name)
+    print(("  ✓ " if cond else "  ✗ ") + name + (("　" + str(detail)) if detail and not cond else ""))
+
+
+LOOP = {
+    "name": "加时", "data": {"source": "excel", "columns": ["单元名", "加时天数"]},
+    "source_url": "http://host/edit",
+    "steps": [
+        {"op": "goto", "url": "{{source_url}}"},
+        {"op": "loop_rows", "body": [
+            {"op": "click", "pick": [{"text": "新建"}, {"role": "button", "name": "新建"}]},
+            {"op": "fill", "pick": [{"label": "单元名称"}], "value": "{{单元名}}"},
+            {"op": "fill", "pick": [{"label": "加时天数"}], "value": "{{加时天数}}"},
+            {"op": "wait_text", "text": "校验通过"},
+            {"op": "confirm", "note": "核对"},
+            {"op": "click", "pick": [{"text": "确 定"}], "submit": True},
+            {"op": "assert", "gone": {"text": "确 定"}},
+        ]},
+    ],
+}
+
+
+def test_render():
+    print("\n[变量替换]")
+    ok("{{列名}} 换成行里的值",
+       FD.render("天 {{加时天数}}", {"加时天数": "7"}) == "天 7")
+    ok("{{source_url}} 是特殊变量",
+       FD.render("{{source_url}}", {}, "http://x") == "http://x")
+    ok("列不存在时原样留着（好让 validate 抓到）",
+       FD.render("{{没有}}", {"a": "1"}) == "{{没有}}")
+    ok("没有变量的文本原样",
+       FD.render("确 定", {"确": "x"}) == "确 定")
+
+
+def test_columns():
+    print("\n[要哪几列]")
+    ok("显式 data.columns 优先", FD.columns(LOOP) == ["单元名", "加时天数"])
+    scanned = {"name": "t", "data": {"source": "excel"}, "steps": [
+        {"op": "loop_rows", "body": [{"op": "fill", "pick": [{"label": "x"}], "value": "{{甲}}{{乙}}"}]}]}
+    ok("没写 columns 就从 {{}} 扫", FD.columns(scanned) == ["乙", "甲"], FD.columns(scanned))
+
+
+def test_validate_ok():
+    print("\n[校验：好的]")
+    ok("结构完整的 loop 流程没问题", FD.validate(LOOP) == [], FD.validate(LOOP))
+    single = {"name": "s", "data": {"source": "none"}, "steps": [
+        {"op": "goto", "url": "http://x"},
+        {"op": "click", "pick": [{"text": "开始"}]},
+        {"op": "wait_text", "text": "完成"},
+    ]}
+    ok("不吃 Excel 的单段流程也行", FD.validate(single) == [], FD.validate(single))
+
+
+def test_validate_catches():
+    print("\n[校验：该抓到的]")
+
+    def has(issues, frag):
+        return any(frag in x for x in issues)
+
+    ok("空流程", FD.validate({"name": "x", "steps": []}) == ["这个工作流一步都没有"])
+
+    css_only = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "click", "pick": [{"css": "div > input"}]}]}
+    ok("只有 css 兜底 → 标黄", has(FD.validate(css_only), "只有 css"))
+
+    unbound = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
+        {"op": "loop_rows", "body": [{"op": "fill", "pick": [{"label": "x"}], "value": "{{乙}}"}]}]}
+    ok("用了没声明的列", has(FD.validate(unbound), "但「数据列」里没有"))
+
+    noloop = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
+        {"op": "fill", "pick": [{"label": "x"}], "value": "{{甲}}"}]}
+    ok("用了 {{}} 但没 loop_rows", has(FD.validate(noloop), "没有「按 Excel 行循环」"))
+
+    nocfm = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "click", "pick": [{"text": "a"}], "submit": True}]}
+    ok("有提交但没 confirm → 提醒", has(FD.validate(nocfm), "没有一次「停下确认」"))
+
+    badop = {"name": "x", "steps": [{"op": "teleport"}]}
+    ok("不认识的动作", has(FD.validate(badop), "不认识的动作"))
+
+    emptypick = {"name": "x", "data": {"source": "none"}, "steps": [{"op": "click", "pick": []}]}
+    ok("click 没 pick", has(FD.validate(emptypick), "没有选择器"))
+
+    noval = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "fill", "pick": [{"text": "x"}]}]}
+    ok("fill 没 value", has(FD.validate(noval), "没有要填的值"))
+
+    missing_col = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
+        {"op": "loop_rows", "body": [{"op": "fill", "pick": [{"label": "x"}], "value": "{{甲}}"}]}]}
+    ok("Excel 里缺列", has(FD.validate(missing_col, rows=[{"乙": "1"}]), "Excel 里缺这几列"))
+
+
+def test_synthetic_and_registry():
+    print("\n[接线]")
+    cfg = FD.synthetic_cfg(LOOP)
+    ok("mode 恒为 flow", cfg["mode"] == "flow")
+    ok("有 loop → 吃 Excel", cfg["data_source"] == "excel")
+    ok("归到《自制配置类型》组", cfg["nav"]["group"] == FD.GROUP)
+    ok("原件挂在 _flow 上", cfg["_flow"]["name"] == "加时")
+    single = FD.synthetic_cfg({"name": "s", "data": {"source": "none"}, "steps": [{"op": "goto", "url": "x"}]})
+    ok("没 loop → 不吃 Excel", single["data_source"] == "none")
+
+    spec = registry.spec_for("flow")
+    r = spec.make_runner({"screenshot_dir": ".", "state_file": "x.json", "resume": False,
+                          "cdp_url": "", "timeout": 1, "result_file": "r.csv"}, cfg, None)
+    ok("registry 造得出 FlowRunner", type(r).__name__ == "FlowRunner")
+    ok("有 clear_state（webapp 无条件调）", callable(getattr(r, "clear_state", None)))
+
+
+def main():
+    print("=" * 56)
+    print("flow 引擎 离线测试")
+    print("=" * 56)
+    for fn in (test_render, test_columns, test_validate_ok, test_validate_catches,
+               test_synthetic_and_registry):
+        fn()
+    print("\n" + "=" * 56)
+    print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
+    for f in FAIL:
+        print("  ✗ " + f)
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

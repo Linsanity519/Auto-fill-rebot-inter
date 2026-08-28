@@ -64,6 +64,11 @@ def _runner_pt(settings, cfg, ui):
     return PtToggleRunner(settings, cfg, ui)
 
 
+def _runner_flow(settings, cfg, ui):
+    from .flow_runner import FlowRunner
+    return FlowRunner(settings, cfg, ui)
+
+
 def _runner_default(settings, cfg, ui):
     from .runner import Runner
     return Runner(settings, cfg, ui)
@@ -146,6 +151,11 @@ MODES: dict[str, ModeSpec] = {
                           "选好「范围」（按名称关键词 / 本工具配置过的 / 整页全部），"
                           "填上关键词，点「载入并检查」。"),
         no_template_hint_cli="「批量开启/关闭」不用 Excel 模板，用 --scope 选范围",
+    ),
+    # 自制配置类型：录一遍操作生成的步骤图，定义在 config/flows/<名>.json。
+    # 模板不走 *_template.py —— 按 flow 的 data.columns 直接出一张空表（见 webapp.make_template）。
+    "flow": ModeSpec(
+        make_runner=_runner_flow,
     ),
     "ab_extension": ModeSpec(
         make_runner=_runner_ab,

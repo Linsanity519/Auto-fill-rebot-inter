@@ -100,6 +100,11 @@ BY_MODE = {
     "pt_toggle": {
         "data_source", "direction", "ledger", "scopes", "toggle", "ui",
     },
+    # 自制配置类型的 cfg 是 flow_data.synthetic_cfg 拼出来的，不是手写的 yaml，
+    # 但走同一套校验 —— _flow 是那份 config/flows/*.json 的原件。
+    "flow": {
+        "data_source", "ui", "_flow",
+    },
     "price_panel": {
         "activity", "creative", "direct_drops", "excel_from_unit", "next_button",
         "pid_platform_alias", "pid_sheet", "position", "position_ready_selector",
