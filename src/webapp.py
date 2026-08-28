@@ -227,6 +227,8 @@ class Api:
         self.last_run_id = None
         self._syncing = False       # 正在往企微表格写，别并发开第二趟
         self._sync_error = ""       # 上一次上报失败的原因，首页要显示出来
+        self._flow_rec = None       # 录制中的 FlowRecorder
+        self._flow_browser = None   # 录制期间那个长开的 Browser（不走 with）
         from . import __version__
         self._updater = update.UpdateService(settings, __version__)
 
@@ -267,6 +269,8 @@ class Api:
             "excel": cfg.get("data_source", "excel") != "none",
             # 「批量开关」类型：藏掉数据文件行，露出一个「名称关键词」文本框
             "toggle": bool(cfg.get("toggle")),
+            # 自制配置类型（录制生成的工作流）：准备页显示步骤卡
+            "flow": bool(cfg.get("flow")),
         }
 
     # 界面上跟着配置类型变的那几句话。yaml 里 ui: 段可以覆盖，
@@ -295,8 +299,9 @@ class Api:
         }
 
     def list_forms(self) -> list:
+        from . import flow_data as FD
         out = []
-        for name, cfg in formcfg.load_all():
+        for name, cfg in list(formcfg.load_all()) + FD.list_all():
             nav = cfg.get("nav") or {}
             caps = self._caps(cfg)
             out.append({
@@ -311,7 +316,7 @@ class Api:
                 # 名字就用文件名 —— 界面照样能显示，不至于漏掉一整项。
                 "group": nav.get("group") or "其他",
                 "group_order": nav.get("group_order", 99),
-                "label": nav.get("label") or p.stem,
+                "label": nav.get("label") or name,
                 "order": nav.get("order", 99),
                 # 首页没数据时当功能导航用：一句话说清这个配置类型是干嘛的
                 "desc": cfg.get("description") or "",
@@ -418,6 +423,10 @@ class Api:
             return {}
 
     def _form_cfg(self, form_name: str) -> dict:
+        # 自制配置类型：定义在 config/flows/<名>.json，包成 synthetic cfg 走同一套
+        from . import flow_data as FD
+        if FD.exists(form_name):
+            return FD.synthetic_cfg(FD.load(form_name))
         return formcfg.load(form_name)
 
     # ---------------- 浏览器 ----------------
@@ -594,6 +603,15 @@ class Api:
                       options: dict | None = None) -> dict:
         try:
             cfg = self._form_cfg(form_name)
+            if cfg.get("mode") == "flow":
+                # 自制配置类型：按 flow 的 data.columns 出一张空表
+                from . import flow_data as FD
+                cols = FD.columns(cfg.get("_flow") or {})
+                if not cols:
+                    return {"ok": False, "error": "这个工作流没有绑任何 Excel 列，不用模板"}
+                path = self._flow_template(form_name, cols)
+                usage.record(self.settings, "template_made", form=form_name, entry="webui")
+                return {"ok": True, "path": str(path)}
             if cfg.get("mode") == "ad_native":
                 from . import ad_template as AT
                 path = AT.build(cfg)
@@ -786,6 +804,187 @@ class Api:
         p.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(["explorer", str(p)])
         return True
+
+    # ---------------- 自制配置类型（mode: flow）----------------
+    def flow_list(self) -> list:
+        """《自制配置类型》分组里那些，加上状态。"""
+        from . import flow_data as FD
+        out = []
+        for name, cfg in FD.list_all():
+            f = cfg["_flow"]
+            out.append(_json_safe({
+                "name": name, "status": f.get("status", "draft"),
+                "steps": len(f.get("steps") or []), "created_at": f.get("created_at", ""),
+                "source_url": f.get("source_url", ""), "loop": FD.has_loop(f),
+                "columns": FD.columns(f),
+            }))
+        return out
+
+    def flow_get(self, name: str) -> dict:
+        from . import flow_data as FD
+        try:
+            f = FD.load(name)
+            return _json_safe({"ok": True, "flow": f, "issues": FD.validate(f),
+                               "columns": FD.columns(f)})
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def flow_new(self, name: str, url: str) -> dict:
+        from . import flow_data as FD
+        name = str(name or "").strip()
+        if not name:
+            return {"ok": False, "error": "先起个名字"}
+        if FD.exists(name) or formcfg.path_for(name).exists():
+            return {"ok": False, "error": f"「{name}」这个名字已经有了，换一个"}
+        try:
+            from . import usage
+            FD.save({"name": name, "source_url": str(url or "").strip(), "status": "draft",
+                     "created_by": usage._uid(),
+                     "data": {"source": "none", "columns": []}, "steps": []})
+            return {"ok": True}
+        except Exception as e:
+            log.exception("新建自制工作流失败")
+            return {"ok": False, "error": str(e)}
+
+    def flow_save(self, name: str, doc: dict) -> dict:
+        from . import flow_data as FD
+        try:
+            d = dict(doc or {})
+            d["name"] = name
+            path = FD.save(d)
+            f = FD.load(name)
+            return _json_safe({"ok": True, "path": path, "issues": FD.validate(f),
+                               "columns": FD.columns(f)})
+        except Exception as e:
+            log.exception("存自制工作流失败")
+            return {"ok": False, "error": str(e)}
+
+    def flow_delete(self, name: str) -> dict:
+        from . import flow_data as FD
+        try:
+            p = FD.path_for(name)
+            if p.exists():
+                p.unlink()
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ---- 录制 ----
+    def flow_start_record(self, name: str) -> dict:
+        from . import flow_data as FD
+        from .browser import Browser
+        from .flow_record import FlowRecorder
+        if self._flow_rec:
+            return {"ok": False, "error": "已经在录了，先点「完成」或「停止录制」"}
+        if not chrome.is_connected(self.settings["cdp_url"]):
+            return {"ok": False, "error": "浏览器没连上，先启动浏览器并登录"}
+        try:
+            f = FD.load(name)
+            b = Browser(self.settings["cdp_url"], self.settings["timeout"])
+            b.__enter__()
+            if f.get("source_url"):
+                try:
+                    b.page.goto(f["source_url"], wait_until="domcontentloaded")
+                except Exception:
+                    pass
+            b.front()
+            rec = FlowRecorder(b.page, self.settings["timeout"])
+            rec.start()
+            self._flow_browser, self._flow_rec = b, rec
+            return {"ok": True}
+        except Exception as e:
+            log.exception("开始录制失败")
+            self._flow_cleanup()
+            return {"ok": False, "error": str(e)}
+
+    def flow_record_status(self) -> dict:
+        rec = self._flow_rec
+        if not rec:
+            return {"running": False, "done": False, "steps": 0}
+        try:
+            return {"running": True, "done": bool(rec.done), "steps": len(rec.steps)}
+        except Exception:
+            return {"running": True, "done": False, "steps": 0}
+
+    def flow_stop_record(self, name: str) -> dict:
+        from . import flow_data as FD
+        rec = self._flow_rec
+        if not rec:
+            return {"ok": False, "error": "没有在录"}
+        try:
+            steps = rec.stop()
+        except Exception as e:
+            log.exception("停止录制出错")
+            steps = getattr(rec, "steps", [])
+        finally:
+            self._flow_cleanup()
+        try:
+            f = FD.load(name)
+            f["steps"] = steps
+            if not f.get("source_url") and steps and steps[0].get("op") == "goto":
+                f["source_url"] = steps[0]["url"]
+            FD.save(f)
+            return _json_safe({"ok": True, "flow": FD.load(name),
+                               "issues": FD.validate(FD.load(name))})
+        except Exception as e:
+            log.exception("录制结果存盘失败")
+            return {"ok": False, "error": str(e)}
+
+    def _flow_cleanup(self):
+        b = self._flow_browser
+        self._flow_browser = self._flow_rec = None
+        if b:
+            try:
+                b.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    # ---- 送审 ----
+    def flow_submit(self, name: str) -> dict:
+        from . import flow_data as FD, flow_review
+        try:
+            f = FD.load(name)
+            issues = FD.validate(f)
+            if issues:
+                return {"ok": False, "error": "还有问题没解决：" + "；".join(issues[:3])}
+            csv_text = ""
+            try:
+                csv_text = Path(self.settings["result_file"]).read_text(encoding="utf-8-sig")
+            except OSError:
+                pass
+            res = flow_review.submit(self.settings, f, csv_text)
+            if res.get("ok"):
+                f["status"] = "submitted"
+                FD.save(f)
+            return _json_safe(res)
+        except Exception as e:
+            log.exception("送审失败")
+            return {"ok": False, "error": str(e)}
+
+    def flow_mark_tested(self, name: str) -> dict:
+        from . import flow_data as FD
+        try:
+            f = FD.load(name)
+            if f.get("status") == "draft":
+                f["status"] = "tested"
+                FD.save(f)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    @staticmethod
+    def _flow_template(name: str, columns: list) -> str:
+        from openpyxl import Workbook
+        from .paths import user_path
+        wb = Workbook()
+        ws = wb.active
+        ws.append(list(columns))
+        for c in range(1, len(columns) + 1):
+            ws.cell(row=1, column=c).font = ws.cell(row=1, column=c).font.copy(bold=True)
+        p = user_path("data", f"{name}_数据.xlsx")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(p)
+        return str(p)
 
     # ---------------- 执行 ----------------
     def start_run(self, mode: str, skip_done: bool) -> dict:

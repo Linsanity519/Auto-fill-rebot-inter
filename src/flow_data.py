@@ -145,6 +145,7 @@ def synthetic_cfg(doc: dict) -> dict:
     return {
         "name": doc["name"],
         "mode": "flow",
+        "flow": True,               # 界面按这个（而不是 mode 名）显示自制配置那张卡
         "description": f"自己录的助手 {tail}".strip(),
         "data_source": "excel" if eats_excel else "none",
         "nav": {"group": GROUP, "group_order": 90,

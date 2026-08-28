@@ -29,15 +29,15 @@
   //   加了配置类型或改了 _caps 之后，重新生成一遍：
   //     python tools\gen_stub_forms.py
   const STUB_FORMS = [
-    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
-    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
-    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
-    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
-    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
-    {"name": "价格策略批量开关", "mode": "pt_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"}, "group": "价格", "group_order": 3, "label": "价格策略批量开关", "order": 3, "desc": "策略中心 - 把「价格配置」表里已配好的行批量开启 / 关闭（界面上切方向）", "scopes": [["按名称关键词", "keyword"], ["本工具配置过的", "ledger"], ["按清单", "list"]]},
-    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
-    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
-    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
+    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
+    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
+    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
+    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
+    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
+    {"name": "价格策略批量开关", "mode": "pt_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"}, "group": "价格", "group_order": 3, "label": "价格策略批量开关", "order": 3, "desc": "策略中心 - 把「价格配置」表里已配好的行批量开启 / 关闭（界面上切方向）", "scopes": [["按名称关键词", "keyword"], ["本工具配置过的", "ledger"], ["按清单", "list"]]},
+    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
+    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
+    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
   ];
 
   // 没有后端时的假抢占任务数据：只够看清任务行的排版，真实楼栋清单来自
@@ -157,6 +157,12 @@
     if (name === "meeting_save") return Promise.resolve({ ok: true, tasks: args[1] || [], issues: [] });
     if (name === "pt_ledger_view") return Promise.resolve({ ok: true, strategies: [], recent: [], path: "" });
     if (name === "submit_feedback") return Promise.resolve({ ok: true });
+    if (name === "flow_list") return Promise.resolve([]);
+    if (name === "flow_get") return Promise.resolve({ ok: true, flow: { name: args[0], status: "draft", steps: [], data: { source: "none", columns: [] } }, issues: [], columns: [] });
+    if (name === "flow_new" || name === "flow_save" || name === "flow_mark_tested" || name === "flow_delete") return Promise.resolve({ ok: true, issues: [], columns: [] });
+    if (name === "flow_start_record" || name === "flow_stop_record") return Promise.resolve({ ok: true, flow: { name: args[0], status: "draft", steps: [], data: {} }, issues: [] });
+    if (name === "flow_record_status") return Promise.resolve({ running: false, done: true, steps: 0 });
+    if (name === "flow_submit") return Promise.resolve({ ok: true, where: "wecom", url: "" });
     if (name === "prep_save") return Promise.resolve({ ok: true, values: {}, issues: [] });
     if (name === "strategy_get") return Promise.resolve({ ok: true, path: "config/strategies/…json", doc: STUB_STRATEGY });
     // ⚠ 统计的样子货只在网址带 ?demo 时给。别的样子货最多让界面长得不对，
@@ -185,6 +191,7 @@
     loaded: false,          // 当前配置类型是否已经成功载入过一次
     previewRows: [],        // load_and_check 返回的行摘要（不含 payload）
     reviewFilter: "all",    // all | bad | done
+    flow: null,             // 当前选中的自制工作流（flow_get 的结果）
     browserConnected: false,
     running: false,
 
@@ -239,6 +246,8 @@
   function needsExcel() { return caps().excel !== false; }
   // 「批量开关」类型（价格策略批量开启/关闭）：藏数据文件行，露「名称关键词」文本框
   function hasToggle() { return !!caps().toggle; }
+  // 自制配置类型（录制生成的工作流）：准备页显示步骤卡
+  function hasFlow() { return !!caps().flow; }
   // 跑法：grab=抢占（只找不订／开抢），fill=填表（空跑／逐条确认／全自动）
   function isGrabRun() { return uiText().run_kind === "grab"; }
 
@@ -635,6 +644,16 @@
       box.appendChild(items);
       list.appendChild(box);
     });
+
+    // 常驻：录一个自己的助手
+    const make = el("div", "sidebar-item");
+    make.style.marginTop = "6px";
+    make.style.color = "var(--pink)";
+    make.appendChild(el("span", null, "＋ 自己录一个助手"));
+    make.appendChild(el("span", "badge", ""));   // updateSidebarActive 每个 .sidebar-item 都读 .badge
+    make.addEventListener("click", () => openFlowRecord(null));
+    list.appendChild(make);
+
     updateSidebarActive();
   }
 
@@ -711,9 +730,252 @@
     renderAdCard();
     renderMeetingCard();
     renderToggleCard();
+    renderFlowCard();
     syncModeSegmented();
     renderReviewTable();
     goToStep("prepare");
+  }
+
+  // ---------------- 自制配置类型（mode: flow）----------------
+  function renderFlowCard() {
+    const on = hasFlow();
+    $("#flowCard").classList.toggle("hidden", !on);
+    if (!on) { state.flow = null; return; }
+    $("#btnMakeTemplate").classList.add("hidden");   // flow 有自己的「生成模板」按钮
+    callApi("flow_get", state.activeForm).then((r) => {
+      if (!r || !r.ok) { $("#flowSteps").textContent = "读不到这个工作流"; return; }
+      state.flow = r.flow;
+      paintFlow(r);
+    });
+  }
+
+  const FLOW_STATUS = {
+    draft: ["草稿", "var(--mu)"], tested: ["本地已跑通 · 待审核", "var(--pink)"],
+    submitted: ["已提交审核", "var(--ok)"], adopted: ["已采纳到正式配置", "var(--ok)"],
+  };
+
+  function paintFlow(r) {
+    const f = r.flow;
+    const [txt, col] = FLOW_STATUS[f.status] || FLOW_STATUS.draft;
+    $("#flowStatus").textContent = txt;
+    $("#flowStatus").style.color = col;
+    $("#flowCols").value = (f.data && f.data.columns || []).join("、");
+    $("#flowLoop").checked = (f.steps || []).some((s) => s.op === "loop_rows");
+    $("#flowIssues").innerHTML = (r.issues && r.issues.length)
+      ? r.issues.map((x) => "· " + escapeHtml(x)).join("<br>")
+      : '<span style="color:var(--ok)">结构没问题，可以本地跑一遍了</span>';
+    $("#btnFlowSubmit").disabled = !!(r.issues && r.issues.length);
+
+    const box = $("#flowSteps");
+    box.innerHTML = "";
+    const rows = flattenSteps(f.steps || []);
+    if (!rows.length) {
+      box.innerHTML = '<div style="color:var(--mu);font-size:12px">还没录 —— 点「重新录制」去浏览器里操作一遍</div>';
+      return;
+    }
+    rows.forEach((it) => box.appendChild(flowStepRow(it)));
+  }
+
+  // 把 loop_rows 摊平成带缩进的一列，方便展示
+  function flattenSteps(steps, depth, out) {
+    out = out || []; depth = depth || 0;
+    steps.forEach((s, i) => {
+      out.push({ s, depth, ref: s });
+      if (s.op === "loop_rows") flattenSteps(s.body || [], depth + 1, out);
+    });
+    return out;
+  }
+
+  function pickSummary(pick) {
+    if (!pick || !pick.length) return { text: "（无选择器）", warn: true };
+    const c = pick[0];
+    const kind = Object.keys(c)[0];
+    const kinds = pick.map((p) => Object.keys(p)[0]);
+    const cssOnly = kinds.every((k) => k === "css");
+    const label = { text: "文字", role: "角色", label: "label", attr: "属性", css: "css" }[kind] || kind;
+    return { text: `${label}：${c[kind]}`, warn: cssOnly };
+  }
+
+  function flowStepRow(it) {
+    const s = it.s;
+    const row = el("div", "row");
+    row.style.cssText = `gap:8px;align-items:center;font-size:12px;padding:5px 8px;border:1px solid var(--bd);border-radius:8px;margin-left:${it.depth * 16}px`;
+    const op = el("span", null, s.op + (s.submit ? " ·提交" : ""));
+    op.style.cssText = "font-family:monospace;font-size:11px;color:var(--pink-text-on-light);background:var(--pink-light);border-radius:5px;padding:1px 6px;flex:none";
+    row.appendChild(op);
+
+    if (s.op === "loop_rows") {
+      row.appendChild(el("span", null, `按 Excel 行循环（${(s.body || []).length} 步）`));
+      return row;
+    }
+    if (["click", "fill", "select", "wait_for"].includes(s.op)) {
+      const ps = pickSummary(s.pick);
+      const tag = el("span", null, ps.text);
+      tag.style.color = ps.warn ? "var(--bad)" : "var(--sub)";
+      tag.title = ps.warn ? "只有 css 兜底，页面一变就会失效" : (s.seen || "");
+      row.appendChild(tag);
+    }
+    if (["fill", "select"].includes(s.op)) {
+      const inp = el("input", "field");
+      inp.value = s.value || "";
+      inp.style.cssText = "height:24px;flex:1;min-width:60px;font-size:12px";
+      inp.title = "可改成 {{列名}} 绑 Excel";
+      inp.addEventListener("change", () => { it.ref.value = inp.value; });
+      row.appendChild(inp);
+    } else if (s.op === "wait_text" || s.op === "assert") {
+      row.appendChild(el("span", null, s.text || JSON.stringify(s.gone || s.url_matches || "")));
+    } else if (s.op === "goto") {
+      const u = el("span", null, s.url || "");
+      u.style.cssText = "color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1";
+      row.appendChild(u);
+    } else if (s.op === "confirm") {
+      row.appendChild(el("span", null, s.note || "核对一眼"));
+    } else if (s.op === "press") {
+      row.appendChild(el("span", null, "按 " + (s.key || "Enter")));
+    }
+
+    const del = el("button", "btn btn-sm btn-ghost", "×");
+    del.style.cssText = "margin-left:auto;flex:none;padding:0 8px";
+    del.title = "删掉这步";
+    del.addEventListener("click", () => { removeStep(state.flow.steps, it.ref); paintFlow({ flow: state.flow, issues: [] }); });
+    row.appendChild(del);
+    return row;
+  }
+
+  function removeStep(steps, ref) {
+    for (let i = 0; i < steps.length; i++) {
+      if (steps[i] === ref) { steps.splice(i, 1); return true; }
+      if (steps[i].op === "loop_rows" && removeStep(steps[i].body || [], ref)) return true;
+    }
+    return false;
+  }
+
+  function collectFlow() {
+    const f = JSON.parse(JSON.stringify(state.flow || {}));
+    const cols = ($("#flowCols").value || "").split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
+    f.data = f.data || {};
+    f.data.columns = cols;
+    f.data.source = (cols.length || $("#flowLoop").checked) ? "excel" : "none";
+    // loop 开关：把 goto 之后的步骤包进 / 解出 loop_rows
+    const want = $("#flowLoop").checked;
+    const has = (f.steps || []).some((s) => s.op === "loop_rows");
+    if (want && !has) {
+      const lead = [], body = [];
+      (f.steps || []).forEach((s) => (s.op === "goto" && !body.length ? lead : body).push(s));
+      f.steps = lead.concat(body.length ? [{ op: "loop_rows", body }] : []);
+    } else if (!want && has) {
+      const flat = [];
+      (f.steps || []).forEach((s) => s.op === "loop_rows" ? flat.push(...(s.body || [])) : flat.push(s));
+      f.steps = flat;
+    }
+    return f;
+  }
+
+  function flowSave() {
+    const f = collectFlow();
+    return callApi("flow_save", state.activeForm, f).then((r) => {
+      if (!r || !r.ok) { appendLog(`保存失败：${r ? r.error : "无法连接后端"}`, "error"); return r; }
+      appendLog("已保存", "ok");
+      state.flow = f;
+      state.loaded = false; state.previewRows = []; renderReviewTable();
+      paintFlow({ flow: f, issues: r.issues || [] });
+      return r;
+    });
+  }
+
+  function openFlowRecord(existingName) {
+    const isNew = !existingName;
+    showModal({
+      title: isNew ? "录一个自己的助手" : "重新录制",
+      desc: isNew ? "起个名字、填要操作的页面网址。点开始后去浏览器里正常操作，"
+        + "完了点浮条上的「完成」。" : "重新录一遍会覆盖现在的步骤。",
+      extraHtml: isNew
+        ? '<div style="padding:12px;display:flex;flex-direction:column;gap:10px">'
+        + '<input class="field" id="fnName" placeholder="给这个助手起个名字，比如「收银台加时」">'
+        + '<input class="field" id="fnUrl" placeholder="要操作的页面网址（https://…）">'
+        + "</div>"
+        : "",
+      buttons: [
+        { label: isNew ? "开始录制" : "开始重录", primary: true, onClick: () => startRecording(isNew, existingName) },
+        { label: "取消" },
+      ],
+    });
+  }
+
+  function startRecording(isNew, existingName) {
+    const go = (name) => {
+      callApi("flow_start_record", name).then((r) => {
+        if (!r || !r.ok) { appendLog(`录制没起来：${r ? r.error : "无法连接后端"}`, "error"); return; }
+        recordingModal(name);
+      });
+    };
+    if (isNew) {
+      const name = ($("#fnName") && $("#fnName").value || "").trim();
+      const url = ($("#fnUrl") && $("#fnUrl").value || "").trim();
+      if (!name) { appendLog("先给它起个名字", "warn"); return; }
+      callApi("flow_new", name, url).then((r) => {
+        if (!r || !r.ok) { appendLog(`建不了：${r ? r.error : "无法连接后端"}`, "error"); return; }
+        go(name);
+      });
+    } else {
+      go(existingName);
+    }
+  }
+
+  function recordingModal(name) {
+    let timer = null;
+    const stop = () => {
+      if (timer) clearInterval(timer);
+      callApi("flow_stop_record", name).then((r) => {
+        hideModal();
+        if (!r || !r.ok) { appendLog(`收尾出错：${r ? r.error : ""}`, "error"); return; }
+        appendLog(`录完了，共 ${(r.flow && r.flow.steps || []).length} 段步骤`, "ok");
+        callApi("list_forms").then((fs) => {
+          state.forms = fs || []; renderSidebar(); selectForm(name);
+        });
+      });
+    };
+    showModal({
+      title: "录制中",
+      desc: "去浏览器里操作。步骤会实时记下来 —— 完了点浮条上的「完成」，或点这里的「结束录制」。",
+      extraHtml: '<div id="recStat" style="padding:12px;color:var(--sub)">已记 0 步…</div>',
+      buttons: [{ label: "结束录制", primary: true, onClick: stop }],
+    });
+    timer = setInterval(() => {
+      callApi("flow_record_status").then((st) => {
+        const box = $("#recStat");
+        if (box) box.textContent = `已记 ${st.steps || 0} 步…`;
+        if (st && st.done) stop();
+      });
+    }, 1500);
+  }
+
+  function initFlowCard() {
+    $("#btnFlowSave").addEventListener("click", flowSave);
+    $("#btnFlowReRecord").addEventListener("click", () => openFlowRecord(state.activeForm));
+    $("#btnFlowTemplate").addEventListener("click", () => {
+      flowSave().then((r) => {
+        if (r && r.ok) callApi("make_template", state.activeForm, null).then(handleTemplateResult);
+      });
+    });
+    $("#btnFlowSubmit").addEventListener("click", () => {
+      flowSave().then((r) => {
+        if (!r || !r.ok) return;
+        if (r.issues && r.issues.length) { appendLog("还有问题没解决，先看上面的提示", "warn"); return; }
+        callApi("flow_mark_tested", state.activeForm).then(() => {
+          appendLog("正在送审…", "info");
+          callApi("flow_submit", state.activeForm).then((s) => {
+            if (s && s.ok) {
+              appendLog(`已送审（${s.where === "github" ? "GitHub 分支" : "企微群"}）`
+                + (s.url ? "：" + s.url : ""), "ok");
+              renderFlowCard();
+            } else {
+              appendLog(`送审没成功：${s ? s.error : "无法连接后端"}`, "error");
+            }
+          });
+        });
+      });
+    });
   }
 
   // ---------------- 首页 ----------------
@@ -3471,6 +3733,7 @@
     initLaunchBrowser();
     initSidebarFooterActions();
     initLogDrawer();
+    initFlowCard();
 
     // 等界面和首屏都开始渲染后再检查，网络波动不影响程序启动速度。
     setTimeout(() => checkForUpdate(false), 800);
