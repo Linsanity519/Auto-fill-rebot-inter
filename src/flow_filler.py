@@ -34,15 +34,27 @@ class FlowFiller:
         note(self._on_note, msg)
 
     # ------------------------------------------------ 定位
-    def _candidate_locator(self, cand: dict):
-        """一个候选 → 一个 Playwright Locator（不保证存在）。认不出返回 None。"""
+    def _candidate_locators(self, cand: dict) -> list:
+        """一个候选 → 一串 Playwright Locator，按「越准越靠前」排。认不出返回 []。
+
+        text 候选拆成两条：先试**可点角色**（a/button/[role=button|tab|menuitem|option]）里
+        文字精确相等的，再退到宽标签（label/li/span/div）。忙页面上 span/div 会把
+        「文字在后代里」的祖先也算命中，可点角色优先能挡掉大半。
+        """
         if "text" in cand:
-            v = str(cand["text"])
-            # 可点的、文字等于 v 的元素（穿透子 span）
-            return self.page.locator(
-                "a,button,[role='button'],[role='link'],[role='tab'],[role='menuitem'],"
-                "label,li,span,div"
-            ).filter(has_text=re.compile(rf"^\s*{re.escape(v)}\s*$"))
+            rx = re.compile(rf"^\s*{re.escape(str(cand['text']))}\s*$")
+            return [
+                self.page.locator(
+                    "a,button,[role='button'],[role='link'],[role='tab'],"
+                    "[role='menuitem'],[role='option'],[role='checkbox'],[role='radio']"
+                ).filter(has_text=rx),
+                self.page.locator("label,li,span,div,td,th").filter(has_text=rx),
+            ]
+        loc = self._one_locator(cand)
+        return [loc] if loc is not None else []
+
+    def _one_locator(self, cand: dict):
+        """非 text 候选 → 单个 Locator（不保证存在）。认不出返回 None。"""
         if "role" in cand:
             try:
                 return self.page.get_by_role(cand["role"], name=cand.get("name"))
@@ -106,21 +118,50 @@ class FlowFiller:
         tried = []
         for cand in pick:
             how = next((k for k in ("text", "role", "label", "attr", "css") if k in cand), "?")
-            loc = self._candidate_locator(cand)
-            if loc is None:
+            locs = self._candidate_locators(cand)
+            if not locs:
                 tried.append(f"{how}(认不出)")
                 continue
-            try:
-                el = loc.first
-                if want_visible:
-                    if wait_until(self.page, lambda e=el: e.is_visible(), 2500):
-                        return Resolved(el, how)
-                elif el.count():
-                    return Resolved(el, how)
-            except Exception:
-                pass
+            for li, loc in enumerate(locs):
+                try:
+                    el = loc.first
+                    if want_visible:
+                        if not wait_until(self.page, lambda e=el: e.is_visible(), 2500):
+                            continue
+                    elif not el.count():
+                        continue
+                except Exception:
+                    continue
+                # 命中多个：取第一个，但要让用户知道 —— 忙页面上「文字相等」很容易撞。
+                try:
+                    n = loc.count()
+                    if n > 1:
+                        self._note(f"选择器（{how}）在页面上匹配到 {n} 个，用的是第 1 个；"
+                                   f"跑错了就回录制页给这步补个更准的选择器")
+                except Exception:
+                    pass
+                return Resolved(el, how if li == 0 else how + "*")
             tried.append(how)
         raise FillError(f"这一步的选择器都没命中（试过：{tried}）—— 页面可能变了，回录制页重录这步")
+
+    # ------------------------------------------------ 逐步试跑：给要操作的元素描一圈
+    def highlight(self, pick: list, on: bool = True):
+        """逐步试跑时在页面上标出这一步要碰的元素。best-effort，任何异常都不抛。"""
+        if not pick:
+            return
+        try:
+            r = self.resolve(pick, want_visible=False)
+        except FillError:
+            return
+        js_on = ("e => { e.__fo = e.style.outline; e.__oo = e.style.outlineOffset;"
+                 " e.style.outline = '3px solid #e34d82'; e.style.outlineOffset = '2px';"
+                 " try { e.scrollIntoView({block:'center'}); } catch(_){} }")
+        js_off = ("e => { if (e.__fo !== undefined) e.style.outline = e.__fo;"
+                  " if (e.__oo !== undefined) e.style.outlineOffset = e.__oo; }")
+        try:
+            r.locator.evaluate(js_on if on else js_off)
+        except Exception:
+            pass
 
     # ------------------------------------------------ 动作
     def goto(self, url: str):

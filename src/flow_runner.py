@@ -41,6 +41,10 @@ class FlowRunner(StateMixin):
         self.shot_dir = Path(settings["screenshot_dir"])
         self.shot_dir.mkdir(parents=True, exist_ok=True)
         self.auto = False
+        # 逐步试跑：每一步操作前高亮页面元素、停下等人点「下一步 / 跳过 / 全部自动 / 停」。
+        # 由 webapp._run() 在 mode=="step" 时置上，同时 dry_run 也为真（只填不提交）。
+        self._step_mode = bool(settings.get("flow_step"))
+        self._step_auto = False
         self._init_state()
 
     # ---------------- 数据 ----------------
@@ -92,10 +96,12 @@ class FlowRunner(StateMixin):
         stats = {"ok": 0, "failed": 0, "skipped": 0, "dry": 0}
         results = []
         self._stop = False
+        self._step_auto = False
 
+        tail = ("（逐步试跑：每步停下核对，只填不提交）" if self._step_mode
+                else "（试跑：填但不提交）" if dry else "")
         self.ui.log(f"「{self.flow['name']}」自制工作流，{FD.describe(self.flow)}"
-                    + (f"，共 {total} 行" if looped else "")
-                    + ("（试跑：填但不提交）" if dry else ""))
+                    + (f"，共 {total} 行" if looped else "") + tail)
         self.ui.progress(0, total, stats)
 
         try:
@@ -180,6 +186,20 @@ class FlowRunner(StateMixin):
             self.ui.checkpoint()
             op = s.get("op")
 
+            # 逐步试跑：操作类的每一步，先高亮、再停下等人。confirm 步本来就会停，不重复问。
+            if (self._step_mode and not self._step_auto
+                    and op in ("goto", "click", "fill", "select", "press", "wait_for")):
+                act = self._step_prompt(ff, s, j, label, row, src)
+                if act == "stop":
+                    self._stop = True
+                    return "stopped"
+                if act == "skip":
+                    self.ui.log(f"{label} 第 {j} 步（{op}）跳过", "warn")
+                    trace.append((op, "跳过"))
+                    continue
+                if act == "auto":
+                    self._step_auto = True
+
             if op == "goto":
                 ff.goto(FD.render(s.get("url", ""), row, src))
             elif op == "click":
@@ -228,6 +248,40 @@ class FlowRunner(StateMixin):
 
     def _note_bad(self, op):
         self.ui.log(f"    不认识的步骤「{op}」，跳过", "warn")
+
+    # ---------------- 逐步试跑 ----------------
+    def _step_prompt(self, ff: FlowFiller, s: dict, j: int, label: str, row: dict, src: str) -> str:
+        """高亮这一步要碰的元素，停下等人。返回 submit / skip / auto / stop。"""
+        pick = s.get("pick") or []
+        try:
+            ff.highlight(pick, True)
+        except Exception:
+            pass
+        try:
+            return self.ui.confirm(f"{label} 逐步", self._step_desc(s, j, row, src))
+        finally:
+            try:
+                ff.highlight(pick, False)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _step_desc(s: dict, j: int, row: dict, src: str) -> str:
+        op = s.get("op")
+        pick = s.get("pick") or []
+        what = ""
+        if pick:
+            c = pick[0]
+            k = next((x for x in ("text", "role", "label", "attr", "css") if x in c), "")
+            what = f"{k}：{c.get(k)}"
+        if op == "goto":
+            what = FD.render(s.get("url", ""), row, src)
+        elif op in ("fill", "select"):
+            what += f" ← 「{FD.render(s.get('value', ''), row, src)}」"
+        elif op == "press":
+            what = f"按 {s.get('key', 'Enter')}"
+        seen = f"（录制时是「{s.get('seen')}」）" if s.get("seen") else ""
+        return f"第 {j} 步：{op}　{what}{seen}"
 
     # ---------------- 记录 ----------------
     def _record(self, results, i, row, status, err, trace, stats, dry, key):

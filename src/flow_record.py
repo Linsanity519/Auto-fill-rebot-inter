@@ -14,8 +14,19 @@ Playwright 的 `expose_binding` + `add_init_script` 走的是 CDP，**绕过页�
 ## v1 不做的
 
   · 自定义下拉的「选了哪一项」只在点到 role=option 时能认出来；点开+点选会录成
-    两个 click，留给整理页人工并成一个 select
-  · 不自动插 wait —— 整理页有「插等待」块
+    两个 click，留给整理页人工并成一个 select（整理页有「合并为下拉」按钮）
+  · 不自动插 wait —— 整理页有「插步」菜单
+
+## 浮条为什么这么写（踩过的坑）
+
+  · 按钮**不用 `all:unset`**：`pointer-events` 是可继承属性，`all:unset` 会让按钮
+    继承祖先的值，目标页某个加载态给 `body` 设了 `pointer-events:none` 时整条浮条
+    就点不动了。这里每个按钮显式 `setProperty('pointer-events','auto','important')`。
+  · 「完成」先写 `window.__flowRecDone=true` 这个哨兵、**再**调 `__flowCtl` 绑定，
+    浮条最后才移除。绑定万一没注入成功（重连 CDP 时偶发），Python 侧还能靠轮询
+    哨兵收尾，不会卡在「已记 N 步…」永远转圈。
+  · 点击同时挂 capture / bubble / 直接 onclick 三处：个别 SPA 在 document 上抢
+    capture 阶段 `stopImmediatePropagation`，只挂一处会被吃掉。
 """
 from __future__ import annotations
 
@@ -132,33 +143,90 @@ _INJECT = r"""
     }
   }, true);
 
+  function ctl(action, arg){
+    // 绑定可能没注入成功（重连 CDP 时偶发）—— 关键状态先落到 window 上，
+    // Python 侧轮询 __flowRecDone 兜底。
+    if (action === 'done') window.__flowRecDone = true;
+    try { window.__flowCtl(action, arg || ''); } catch (e){}
+  }
+  function mkBtn(label, bg, onClick){
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.type = 'button';
+    b.style.cssText = 'cursor:pointer;padding:3px 10px;border-radius:6px;border:0;margin:0;'
+      + 'font:13px/1.4 system-ui,sans-serif;color:#fff;background:' + bg;
+    b.style.setProperty('pointer-events', 'auto', 'important');
+    // capture 阶段一处 + onclick 一处：个别 SPA 在 document 抢 capture 阶段
+    // stopImmediatePropagation，只挂 onclick 会被吃掉；两处都挂又会触发两次，
+    // 300ms 锁一下去重（pause 之类切换类操作触发两次等于没反应）。
+    let lock = 0;
+    const run = ev => {
+      if (ev){ ev.preventDefault(); ev.stopPropagation(); }
+      const now = (window.performance && performance.now()) || +new Date();
+      if (now - lock < 300) return;
+      lock = now;
+      onClick(b);
+    };
+    b.addEventListener('click', run, true);
+    b.onclick = run;
+    return b;
+  }
   function toolbar(){
     if (document.getElementById('__flowToolbar') || !document.body) return;
     const bar = document.createElement('div');
     bar.id = '__flowToolbar';
-    bar.style.cssText = 'position:fixed;z-index:2147483647;right:16px;bottom:16px;background:#211c1e;color:#fff;font:13px/1.4 system-ui,sans-serif;border-radius:10px;padding:8px 10px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:flex;gap:8px;align-items:center';
-    bar.innerHTML =
-      '<span id="__flowDot" style="width:8px;height:8px;border-radius:50%;background:#e34d82;display:inline-block"></span>' +
-      '<span id="__flowStat">录制中</span>' +
-      '<button data-a="pause" style="all:unset;cursor:pointer;padding:2px 8px;border-radius:6px;background:#3a3438">暂停</button>' +
-      '<button data-a="confirm" style="all:unset;cursor:pointer;padding:2px 8px;border-radius:6px;background:#3a3438">在这停一下</button>' +
-      '<button data-a="done" style="all:unset;cursor:pointer;padding:2px 10px;border-radius:6px;background:#e34d82">完成</button>';
-    bar.addEventListener('click', ev => {
-      const b = ev.target.closest('button'); if (!b) return;
-      const a = b.dataset.a;
-      if (a === 'pause'){
-        window.__flowRecPaused = !window.__flowRecPaused;
-        document.getElementById('__flowStat').textContent = window.__flowRecPaused ? '已暂停' : '录制中';
-        document.getElementById('__flowDot').style.background = window.__flowRecPaused ? '#948a90' : '#e34d82';
-        b.textContent = window.__flowRecPaused ? '继续' : '暂停';
-      } else if (a === 'confirm'){
-        const note = prompt('这一步停下让人核对什么？', '核对一眼再继续') || '核对一眼';
-        try { window.__flowCtl('confirm_here', note); } catch (e){}
-      } else if (a === 'done'){
-        try { window.__flowCtl('done', ''); } catch (e){}
-        bar.remove();
-      }
+    bar.style.cssText = 'position:fixed;z-index:2147483647;right:16px;bottom:16px;background:#211c1e;color:#fff;font:13px/1.4 system-ui,sans-serif;border-radius:10px;padding:8px 10px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:min(92vw,520px)';
+    bar.style.setProperty('pointer-events', 'auto', 'important');
+
+    const dot = document.createElement('span');
+    dot.id = '__flowDot';
+    dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:#e34d82;display:inline-block;flex:none';
+    const stat = document.createElement('span');
+    stat.id = '__flowStat';
+    stat.textContent = '录制中';
+
+    const btnPause = mkBtn('暂停', '#3a3438', b => {
+      window.__flowRecPaused = !window.__flowRecPaused;
+      stat.textContent = window.__flowRecPaused ? '已暂停' : '录制中';
+      dot.style.background = window.__flowRecPaused ? '#948a90' : '#e34d82';
+      b.textContent = window.__flowRecPaused ? '继续' : '暂停';
+    });
+    // 「在这停一下」：不弹 prompt（内网 Chrome 里可能被拦 / 样子难看），
+    // 就地在浮条里展开一个输入框。
+    const noteWrap = document.createElement('span');
+    noteWrap.style.cssText = 'display:none;gap:6px;align-items:center;flex:none';
+    const noteInput = document.createElement('input');
+    noteInput.placeholder = '停下来核对什么？';
+    noteInput.style.cssText = 'font:13px system-ui,sans-serif;padding:3px 6px;border-radius:5px;border:1px solid #55494f;background:#2b2529;color:#fff;width:180px';
+    noteInput.style.setProperty('pointer-events', 'auto', 'important');
+    const submitNote = () => {
+      const v = (noteInput.value || '').trim() || '核对一眼';
+      ctl('confirm_here', v);
+      noteInput.value = '';
+      noteWrap.style.display = 'none';
+      stat.textContent = window.__flowRecPaused ? '已暂停' : '录制中';
+    };
+    noteInput.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') submitNote();
+      else if (e.key === 'Escape') noteWrap.style.display = 'none';
     }, true);
+    const noteOk = mkBtn('加', '#3a3438', submitNote);
+    noteWrap.appendChild(noteInput);
+    noteWrap.appendChild(noteOk);
+
+    const btnConfirm = mkBtn('在这停一下', '#3a3438', () => {
+      const open = noteWrap.style.display !== 'none';
+      noteWrap.style.display = open ? 'none' : 'flex';
+      if (!open){ stat.textContent = '加「停一下」'; noteInput.focus(); }
+    });
+    const btnDone = mkBtn('完成', '#e34d82', () => {
+      stat.textContent = '正在收尾…';
+      ctl('done', '');
+      setTimeout(() => { const el = document.getElementById('__flowToolbar'); if (el) el.remove(); }, 400);
+    });
+
+    [dot, stat, btnPause, btnConfirm, noteWrap, btnDone].forEach(n => bar.appendChild(n));
     document.body.appendChild(bar);
   }
   toolbar();
@@ -183,14 +251,17 @@ class FlowRecorder:
     # ---------------- 生命周期 ----------------
     def start(self):
         self._start_url = self.page.url
-        try:
-            self.page.expose_binding("__flowRec", self._on_event)
-            self.page.expose_binding("__flowCtl", self._on_ctl)
-        except Exception:
-            pass                          # 重复 start 时 binding 已存在，忽略
+        # 两个 binding 各自 try：重连 CDP 后偶发「__flowRec 已注册」，
+        # 一起兜的话第一个抛出就把 __flowCtl 也漏了 —— 那正是「完成」点不动的成因之一。
+        for name, fn in (("__flowRec", self._on_event), ("__flowCtl", self._on_ctl)):
+            try:
+                self.page.expose_binding(name, fn)
+            except Exception:
+                log.debug("binding %s 已存在，忽略", name)
         self.page.add_init_script(_INJECT)
         self.page.on("framenavigated", self._on_nav)
         try:
+            self.page.evaluate("() => { window.__flowRecInstalled = false; window.__flowRecDone = false; }")
             self.page.evaluate(_INJECT)
         except Exception:
             log.warning("注入录制脚本失败（当前页），换页后会自动重试", exc_info=True)
@@ -204,7 +275,7 @@ class FlowRecorder:
             pass
         try:
             self.page.evaluate("() => { const b = document.getElementById('__flowToolbar'); if (b) b.remove(); "
-                               "window.__flowRecInstalled = false; }")
+                               "window.__flowRecInstalled = false; window.__flowRecDone = false; }")
         except Exception:
             pass
         return self.build()
@@ -212,6 +283,19 @@ class FlowRecorder:
     @property
     def done(self) -> bool:
         return self._done
+
+    def pump(self) -> dict:
+        """轮询用。sync 版 Playwright 只在调用 API 时才处理挂起的 binding 回调，
+        录制中界面若只读 self.steps 而不碰页面，计数会一直停在 0、done 也收不到。
+        这里 evaluate 一下顺带把 __flowRecDone 哨兵读回来（binding 万一没注入的兜底）。
+        """
+        try:
+            v = self.page.evaluate("() => !!window.__flowRecDone")
+            if v:
+                self._done = True
+        except Exception:
+            pass
+        return {"steps": len(self.steps), "done": self._done}
 
     # ---------------- 回调 ----------------
     def _on_ctl(self, source, action, arg=""):

@@ -204,12 +204,14 @@
             </div>
           </div>
           <div style="color:var(--mu);font-size:11px" id="flowIssues"></div>
-          <div class="row" style="gap:8px">
+          <div class="row" style="gap:8px;flex-wrap:wrap">
             <button class="btn btn-sm" id="btnFlowReRecord">重新录制</button>
             <button class="btn btn-sm" id="btnFlowSave">保存</button>
             <button class="btn btn-sm" id="btnFlowTemplate">生成 Excel 模板</button>
+            <button class="btn btn-sm" id="btnFlowTrial">本地试跑（逐步）</button>
             <button class="btn btn-sm btn-primary" style="margin-left:auto" id="btnFlowSubmit">跑通了 · 收下并送审</button>
           </div>
+          <div style="color:var(--mu);font-size:11px" id="flowGate"></div>
         </div>
 
         <div class="card col" id="dataSourceCard" style="padding:16px 18px;gap:14px">
@@ -318,6 +320,8 @@
           <div class="row" style="gap:18px">
             <div class="segmented" id="modeSegmented">
               <div class="seg-item" data-mode="dry">空跑（只填不提交）</div>
+              <!-- 只有自制配置类型（录制生成的工作流）显示：每步停下、页面上高亮当前元素 -->
+              <div class="seg-item hidden" data-mode="step">逐步试跑</div>
               <div class="seg-item active" data-mode="confirm">逐条确认</div>
               <div class="seg-item" data-mode="auto">全自动</div>
             </div>

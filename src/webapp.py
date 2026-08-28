@@ -14,6 +14,7 @@ log/progress/confirm/ask_continue/finished 推给前端；Runner 本身在后台
 
 和 gui.py 的关系：这是默认界面；gui.py 留作 --tk 备用选项，出问题时退回去用。
 """
+import atexit
 import contextlib
 import json
 import logging
@@ -204,6 +205,99 @@ def _prep_kind(f: dict) -> str:
     return "text"
 
 
+class _FlowRecSession:
+    """一次录制会话：一个独占的守护线程，从头到尾持有 sync Playwright 连接。
+
+    ⚠ 为什么非得独占一个线程 —— 这是踩出来的：
+      sync 版 Playwright 的调度 greenlet 绑死在**创建它的那个线程**上。pywebview
+      把每个 `window.pywebview.api.*` 调用派发到线程池，`flow_start_record` 和
+      随后的 `flow_record_status` / `flow_stop_record` 很可能不在同一个线程：
+        · 换线程后任何一次 `page.evaluate` 都会抛
+          `greenlet.error: cannot switch to a different thread (which happens to have exited)`
+        · 更糟的是 start 的线程一返回就结束了，绑定回调（点击 / 输入 / framenavigated）
+          的事件循环再没人 pump —— 录到的东西一条都进不来（实测「录完 0 步」）。
+      所以整段录制（连接、注入、等待、收尾）全塞进这里的 `_run`，跑在一个线程上；
+      外面只通过线程安全的 Event / list 长度跟它交互。
+    """
+
+    def __init__(self, cdp_url: str, timeout: int, source_url: str):
+        self.cdp_url = cdp_url
+        self.timeout = timeout
+        self.source_url = source_url
+        self.steps: list = []          # 录制线程里换成 rec.steps 这个活对象，边录边长
+        self.error = ""
+        self.done = False              # 用户点了浮条「完成」
+        self.lost = False              # 浏览器中途断了 / 录制线程异常退出
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._ended = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="flow-record", daemon=True)
+
+    def start(self, wait: float = 10.0) -> str:
+        """起线程，等它连上浏览器、注入完录制脚本。返回 "" 表示成功，否则是错误原因。"""
+        self._thread.start()
+        self._ready.wait(wait)
+        if not self._ready.is_set():
+            return "连接浏览器超时"
+        return self.error
+
+    def snapshot(self) -> dict:
+        return {"steps": len(self.steps), "done": self.done, "lost": self.lost,
+                "running": not self._ended.is_set()}
+
+    def stop(self, wait: float = 15.0) -> list:
+        self._stop.set()
+        self._ended.wait(wait)
+        return list(self.steps)
+
+    def _run(self):
+        from .browser import Browser
+        from .flow_record import FlowRecorder
+        try:
+            with Browser(self.cdp_url, self.timeout) as b:
+                b.front()
+                if self.source_url:
+                    try:
+                        b.page.goto(self.source_url, wait_until="domcontentloaded")
+                    except Exception:
+                        log.warning("录制：打开起始页失败，继续", exc_info=True)
+                b.front()
+                rec = FlowRecorder(b.page, self.timeout)
+                rec.start()
+                self.steps = rec.steps          # 同一个 list，len() 读得到实时条数
+                self._ready.set()
+
+                misses, ticks = 0, 0
+                while not self._stop.is_set():
+                    try:
+                        b.page.wait_for_timeout(200)   # 就在本线程 pump 绑定回调
+                        misses = 0
+                    except Exception:
+                        misses += 1
+                        if misses > 5:
+                            self.lost = True
+                            break
+                        continue
+                    if rec.done:
+                        self.done = True
+                        break
+                    ticks += 1
+                    if ticks % 10 == 0 and not chrome.is_connected(self.cdp_url):
+                        self.lost = True
+                        break
+                try:
+                    self.steps = rec.stop()
+                except Exception:
+                    log.warning("录制收尾出错，用已记下的步骤", exc_info=True)
+        except Exception as e:
+            log.exception("录制线程出错")
+            self.error = str(e)
+            self.lost = True
+        finally:
+            self._ready.set()
+            self._ended.set()
+
+
 class Api:
     """暴露给前端 JS 的方法（window.pywebview.api.xxx()，前端按 Promise 用）。
 
@@ -227,8 +321,8 @@ class Api:
         self.last_run_id = None
         self._syncing = False       # 正在往企微表格写，别并发开第二趟
         self._sync_error = ""       # 上一次上报失败的原因，首页要显示出来
-        self._flow_rec = None       # 录制中的 FlowRecorder
-        self._flow_browser = None   # 录制期间那个长开的 Browser（不走 with）
+        self._flow_sess = None      # 录制会话（_FlowRecSession），独占一个线程
+        self._flow_atexit = False   # 进程退出兜底只注册一次
         from . import __version__
         self._updater = update.UpdateService(settings, __version__)
 
@@ -870,72 +964,70 @@ class Api:
             return {"ok": False, "error": str(e)}
 
     # ---- 录制 ----
+    #
+    # ⚠ 录制会话必须整段跑在一个独占线程里，见 _FlowRecSession 的文档字符串：
+    #   sync 版 Playwright 的调度 greenlet 绑死在建它的线程上，而 pywebview 的
+    #   每个 api 调用可能落在不同线程 —— 跨线程一 evaluate 就 greenlet.error，
+    #   而且 start 的线程一返回，绑定回调就没人 pump，录到的东西一条进不来。
     def flow_start_record(self, name: str) -> dict:
         from . import flow_data as FD
-        from .browser import Browser
-        from .flow_record import FlowRecorder
-        if self._flow_rec:
-            return {"ok": False, "error": "已经在录了，先点「完成」或「停止录制」"}
+        if self._flow_sess and self._flow_sess.snapshot()["running"]:
+            return {"ok": False, "error": "已经在录了，先点「完成」或「结束录制」"}
         if not chrome.is_connected(self.settings["cdp_url"]):
             return {"ok": False, "error": "浏览器没连上，先启动浏览器并登录"}
         try:
             f = FD.load(name)
-            b = Browser(self.settings["cdp_url"], self.settings["timeout"])
-            b.__enter__()
-            if f.get("source_url"):
-                try:
-                    b.page.goto(f["source_url"], wait_until="domcontentloaded")
-                except Exception:
-                    pass
-            b.front()
-            rec = FlowRecorder(b.page, self.settings["timeout"])
-            rec.start()
-            self._flow_browser, self._flow_rec = b, rec
+            sess = _FlowRecSession(self.settings["cdp_url"], self.settings["timeout"],
+                                   f.get("source_url") or "")
+            err = sess.start()
+            if err:
+                return {"ok": False, "error": err}
+            self._flow_sess = sess
+            if not self._flow_atexit:
+                atexit.register(self._flow_cleanup)
+                self._flow_atexit = True
             return {"ok": True}
         except Exception as e:
             log.exception("开始录制失败")
-            self._flow_cleanup()
             return {"ok": False, "error": str(e)}
 
     def flow_record_status(self) -> dict:
-        rec = self._flow_rec
-        if not rec:
+        sess = self._flow_sess
+        if not sess:
             return {"running": False, "done": False, "steps": 0}
-        try:
-            return {"running": True, "done": bool(rec.done), "steps": len(rec.steps)}
-        except Exception:
-            return {"running": True, "done": False, "steps": 0}
+        snap = sess.snapshot()
+        # 浏览器中途被关掉 / 录制线程挂了：done 也置真，让界面收尾而不是一直转圈
+        return {"running": snap["running"], "steps": snap["steps"], "lost": snap["lost"],
+                "done": bool(snap["done"] or snap["lost"] or not snap["running"])}
 
     def flow_stop_record(self, name: str) -> dict:
         from . import flow_data as FD
-        rec = self._flow_rec
-        if not rec:
+        sess = self._flow_sess
+        if not sess:
             return {"ok": False, "error": "没有在录"}
-        try:
-            steps = rec.stop()
-        except Exception as e:
-            log.exception("停止录制出错")
-            steps = getattr(rec, "steps", [])
-        finally:
-            self._flow_cleanup()
+        steps = sess.stop()
+        self._flow_sess = None
         try:
             f = FD.load(name)
             f["steps"] = steps
             if not f.get("source_url") and steps and steps[0].get("op") == "goto":
                 f["source_url"] = steps[0]["url"]
             FD.save(f)
-            return _json_safe({"ok": True, "flow": FD.load(name),
-                               "issues": FD.validate(FD.load(name))})
+            out = {"ok": True, "flow": FD.load(name),
+                   "issues": FD.validate(FD.load(name)), "lost": sess.lost}
+            if sess.error:
+                out["warn"] = f"录制中途出过错：{sess.error}"
+            return _json_safe(out)
         except Exception as e:
             log.exception("录制结果存盘失败")
             return {"ok": False, "error": str(e)}
 
     def _flow_cleanup(self):
-        b = self._flow_browser
-        self._flow_browser = self._flow_rec = None
-        if b:
+        sess = self._flow_sess
+        self._flow_sess = None
+        if sess:
             try:
-                b.__exit__(None, None, None)
+                sess.stop(wait=5.0)
             except Exception:
                 pass
 
@@ -1014,7 +1106,11 @@ class Api:
 
     def _run(self, kept, mode: str, retry_of: str | None = None) -> dict:
         records = [r.payload for r in kept]
-        self.runner.s["dry_run"] = (mode == "dry")
+        # step = 逐步试跑（只自制配置类型有这一档）：等同 dry_run，外加每步停下核对
+        self.runner.s["dry_run"] = mode in ("dry", "step")
+        self.runner.s["flow_step"] = (mode == "step")
+        if hasattr(self.runner, "_step_mode"):
+            self.runner._step_mode = (mode == "step")
         self.runner.auto = (mode == "auto")
         self.ui = WebUI(self._window)
         self.runner.ui = self.ui

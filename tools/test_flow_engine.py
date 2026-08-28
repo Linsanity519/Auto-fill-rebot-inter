@@ -131,12 +131,38 @@ def test_synthetic_and_registry():
     ok("有 clear_state（webapp 无条件调）", callable(getattr(r, "clear_state", None)))
 
 
+def test_step_mode():
+    print("\n[逐步试跑]")
+    from src.flow_runner import FlowRunner
+    base = {"screenshot_dir": ".", "state_file": "x.json", "resume": False,
+            "cdp_url": "", "timeout": 1, "result_file": "r.csv"}
+    cfg = FD.synthetic_cfg(LOOP)
+    r = FlowRunner(dict(base), cfg, None)
+    ok("默认不是逐步", r._step_mode is False)
+    r2 = FlowRunner(dict(base, flow_step=True), cfg, None)
+    ok("settings.flow_step → 逐步", r2._step_mode is True)
+    d = FlowRunner._step_desc({"op": "fill", "pick": [{"label": "单元名称"}], "value": "{{单元名}}"},
+                              2, {"单元名": "甲乙"}, "http://x")
+    ok("步骤描述里带上了行的值", "甲乙" in d and "fill" in d, d)
+    d2 = FlowRunner._step_desc({"op": "goto", "url": "{{source_url}}"}, 1, {}, "http://host/x")
+    ok("goto 描述里把 {{source_url}} 渲染开", "http://host/x" in d2, d2)
+
+
+def test_rec_session_import():
+    print("\n[录制会话]")
+    from src.webapp import _FlowRecSession
+    s = _FlowRecSession("http://127.0.0.1:9222", 1000, "")
+    snap = s.snapshot()
+    ok("没 start 时 running=True 之前是啥都行，关键是 steps=0", snap["steps"] == 0)
+    ok("有独立线程、默认没起", not s._thread.is_alive())
+
+
 def main():
     print("=" * 56)
     print("flow 引擎 离线测试")
     print("=" * 56)
     for fn in (test_render, test_columns, test_validate_ok, test_validate_catches,
-               test_synthetic_and_registry):
+               test_synthetic_and_registry, test_step_mode, test_rec_session_import):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
