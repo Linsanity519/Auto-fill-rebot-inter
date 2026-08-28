@@ -153,44 +153,6 @@ def main() -> int:
             bad.conf = dict(bad.conf, manifest_url=f"{base}/nope.json")
             check("发布站不可达只报错、不抛异常",
                   bad.check(force=True)["state"] == "error")
-
-            # ---------- 6. min_supported：低于门槛强制引导升级 ----------
-            (root / "gated.json").write_text(json.dumps({
-                "version": "1.0.9", "payload": payload_spec, "installer": installer_spec,
-                "notes": "测试", "min_supported": "1.0.7",
-            }, ensure_ascii=False), encoding="utf-8")
-
-            def gated(ver, tag):
-                s = make_service(base, root, ver, tag)
-                s.conf = dict(s.conf, manifest_url=f"{base}/gated.json")
-                return s.check(force=True)
-
-            low = gated("1.0.5", "gate-low")
-            check("低于 min_supported → blocked", low.get("blocked") is True)
-            check("blocked 时照样给得出下载包", low["state"] == "available" and "kind" in low)
-            check("min_supported 透传给前端", low.get("min_supported") == "1.0.7")
-
-            at = gated("1.0.7", "gate-at")
-            check("正好等于 min_supported → 不 blocked", not at.get("blocked"))
-
-            above = gated("1.0.9", "gate-above")
-            check("到了最新版 → 不 blocked、也不提示", not above.get("blocked")
-                  and above["state"] == "current")
-
-            (root / "nogate.json").write_text(json.dumps({
-                "version": "1.0.9", "payload": payload_spec, "notes": "x",
-            }, ensure_ascii=False), encoding="utf-8")
-            ng = make_service(base, root, "1.0.5", "nogate")
-            ng.conf = dict(ng.conf, manifest_url=f"{base}/nogate.json")
-            check("没写 min_supported → 从不 blocked", not ng.check(force=True).get("blocked"))
-
-            (root / "badgate.json").write_text(json.dumps({
-                "version": "1.0.9", "payload": payload_spec, "min_supported": "新版本",
-            }, ensure_ascii=False), encoding="utf-8")
-            bg = make_service(base, root, "1.0.5", "badgate")
-            bg.conf = dict(bg.conf, manifest_url=f"{base}/badgate.json")
-            check("min_supported 写歪 → 整个 manifest 作废（不锁死老客户端）",
-                  bg.check(force=True)["state"] == "error")
         finally:
             update_mod.installed_runtime = real_runtime
             server.shutdown()

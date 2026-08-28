@@ -121,7 +121,7 @@ class UpdateService:
     def _public(result: dict) -> dict:
         """远端地址/校验值是内部实现细节，不交给前端。"""
         allowed = ("state", "version", "notes", "published_at", "mandatory",
-                   "message", "kind", "size", "blocked", "min_supported")
+                   "message", "kind", "size")
         return {key: result[key] for key in allowed if key in result}
 
     # ---------------- manifest ----------------
@@ -172,13 +172,6 @@ class UpdateService:
         version = str(doc.get("version", "")).strip()
         _version_key(version)
 
-        # 「低于这个版本必须升级才能继续用」。可选；给了就必须是合法版本号，
-        # 不合法直接让整个 manifest 作废（宁可这次不更新，也不能因为一个写错的
-        # 门槛把老客户端锁死）。
-        min_supported = str(doc.get("min_supported", "")).strip()
-        if min_supported:
-            _version_key(min_supported)
-
         payload = self._spec(doc.get("payload"), "payload", MAX_PAYLOAD_BYTES)
         installer = self._spec(doc.get("installer"), "installer", MAX_INSTALLER_BYTES)
 
@@ -196,7 +189,6 @@ class UpdateService:
             "notes": str(doc.get("notes", "")).strip()[:2000],
             "published_at": str(doc.get("published_at", "")).strip()[:80],
             "mandatory": bool(doc.get("mandatory", False)),
-            "min_supported": min_supported,
         }
 
     @staticmethod
@@ -225,29 +217,16 @@ class UpdateService:
           提示更新到自己已经在用的版本。而 output/ 是故意不被更新覆盖的
           （用户数据），这份缓存正好活了下来，更新越成功误报越准时。
         """
-        has_newer = _version_key(manifest["version"]) > _version_key(self.current_version)
-
-        # 低于门槛 = 必须升级才能继续。门槛通常 <= 最新版，所以 blocked 时一定也有新版
-        # 可下；真出现「门槛比最新版还高」这种发布事故，blocked 照样为真、下载走最新版。
-        blocked = False
-        if manifest.get("min_supported"):
-            try:
-                blocked = (_version_key(self.current_version)
-                           < _version_key(manifest["min_supported"]))
-            except ValueError:
-                blocked = False
-
-        offer = has_newer or blocked
-        result = {"state": "available" if offer else "current", "checked_at": checked_at,
+        newer = _version_key(manifest["version"]) > _version_key(self.current_version)
+        result = {"state": "available" if newer else "current", "checked_at": checked_at,
                   "manifest": manifest, "version": manifest["version"],
                   "notes": manifest["notes"], "published_at": manifest["published_at"],
-                  "mandatory": manifest["mandatory"], "blocked": blocked,
-                  "min_supported": manifest.get("min_supported", "")}
-        if offer:
+                  "mandatory": manifest["mandatory"]}
+        if newer:
             kind, spec = self.choose(manifest)
             result["kind"] = kind
             result["size"] = spec["size"]
-        self._latest = manifest if offer else None
+        self._latest = manifest if newer else None
         return result
 
     def check(self, force: bool = False) -> dict:

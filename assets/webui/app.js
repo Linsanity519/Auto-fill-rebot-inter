@@ -186,7 +186,6 @@
     reviewFilter: "all",    // all | bad | done
     browserConnected: false,
     running: false,
-    updateBlocked: false,   // 版本低于 manifest 的 min_supported：进不去执行，只能先更新
 
     // wizard（资源位投放）专用
     wizardMeta: null,       // wizard_meta 返回的资源位 / 策略字段定义
@@ -337,9 +336,6 @@
     const label = $("#updateLabel");
     const install = $("#btnInstallUpdate");
     const check = $("#btnCheckUpdate");
-    // 低于强制门槛：全程挡住「开始配置」，直到更新
-    state.updateBlocked = !!(info && info.blocked);
-    applyUpdateGate();
     if (!info || info.state === "disabled") {
       box.classList.add("hidden");
       return;
@@ -348,14 +344,6 @@
     check.disabled = false;
     check.textContent = "检查更新";
     install.classList.add("hidden");
-    if (state.updateBlocked) {
-      label.textContent = `当前版本过旧，必须更新到 ${info.min_supported || info.version} 才能继续`;
-      label.style.color = "var(--bad)";
-      install.classList.remove("hidden");
-      maybeAnnounceUpdate(info);
-      return;
-    }
-    label.style.color = "";
     if (info.state === "available") {
       // 下载量差着两个数量级（代码包 ~300KB vs 完整安装包 ~45MB），而 GitHub 在
       // 内网只有几十 KB/s —— 不写清楚的话，点下去要等 40 分钟的人会以为卡死了。
@@ -379,14 +367,10 @@
   const UPDATE_SEEN_KEY = "formbot.update.seen";
   function maybeAnnounceUpdate(info) {
     if (!info || !info.version) return;
-    // 强制升级时每次开程序都弹，而且弹窗没有「以后再说」——这是它和普通提示的区别
-    const forced = !!info.blocked;
-    if (!forced) {
-      let seen = "";
-      try { seen = localStorage.getItem(UPDATE_SEEN_KEY) || ""; } catch (e) {}
-      if (seen === info.version) return;
-      try { localStorage.setItem(UPDATE_SEEN_KEY, info.version); } catch (e) {}
-    }
+    let seen = "";
+    try { seen = localStorage.getItem(UPDATE_SEEN_KEY) || ""; } catch (e) {}
+    if (seen === info.version) return;
+    try { localStorage.setItem(UPDATE_SEEN_KEY, info.version); } catch (e) {}
 
     const size = fmtSize(info).replace(/^（|）$/g, "");
     // notes 是多行的更新日志。弹窗的 CSS 是 white-space: pre-line，换行有效，
@@ -394,34 +378,18 @@
     // ⚠ 以前这儿还有一句「更新时程序会自动关闭并重新打开，配置和数据都不会动」。
     //   去掉了：每次弹窗都念一遍同样的免责声明，只会把真正要看的改动说明挤下去。
     const lines = [
-      forced ? `当前版本太旧，已经不能用了，必须更新到 ${info.min_supported || info.version} 或更高。\n` : "",
       info.notes ? String(info.notes).trim() + "\n" : "",
       size ? `这次需要下载 ${size}。` : "",
     ].filter(Boolean);
 
-    const buttons = [
-      { label: "立即更新", primary: true, onClick: () => downloadAndInstallUpdate() },
-    ];
-    if (!forced) buttons.push({ label: "以后再说" });
-
     showModal({
-      title: forced ? `必须更新到 ${info.version}` : `有新版本 ${info.version}`,
+      title: `有新版本 ${info.version}`,
       desc: lines.join("\n"),
-      buttons,
+      buttons: [
+        { label: "立即更新", primary: true, onClick: () => downloadAndInstallUpdate() },
+        { label: "以后再说" },
+      ],
     });
-  }
-
-  // 版本低于强制门槛时，把「开始配置」按死；startRun 里还有一道硬拦截。
-  function applyUpdateGate() {
-    const btn = $("#btnStart");
-    if (!btn) return;
-    if (state.updateBlocked) {
-      btn.disabled = true;
-      btn.title = "当前版本过旧，请先在左下角更新";
-    } else if (btn.title) {
-      btn.title = "";
-      btn.disabled = state.running;
-    }
   }
 
   function checkForUpdate(force) {
@@ -2360,15 +2328,10 @@
     $("#btnPause").disabled = !running;
     $("#btnStop").disabled = !running;
     if (!running) $("#btnPause").textContent = "暂停";
-    applyUpdateGate();          // 强制升级时它会把「开始配置」重新按死
     updateNextButtonState();
   }
 
   function startRun() {
-    if (state.updateBlocked) {
-      checkForUpdate(false);    // 重新弹那个没有「以后再说」的强制升级弹窗
-      return;
-    }
     if (!state.loaded) {
       appendLog("还没有载入数据，请先在「准备」页载入并检查", "warn");
       goToStep("prepare");
