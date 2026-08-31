@@ -93,6 +93,34 @@ _INJECT = r"""
     }
     return '';
   }
+  // 一个勾选框 / 单选的 check 步：**只在 130ms 后发一次**。
+  //   一次点击派生 label-click / 转发-click / change 三四发，状态还随 React 重渲染在跳，
+  //   把定时器挂在 input 元素上，谁先触发谁建，后面的都并进去；130ms 后 readChecked 稳了。
+  function emitCheck(cb, textEl){
+    if (cb.__flowCkT) return;
+    cb.__flowCkT = setTimeout(() => {
+      cb.__flowCkT = null;
+      if (window.__flowRecPaused) return;
+      const lbl = clean(checkLabel(cb)) || (textEl ? clean(visibleText(textEl)) : '');
+      window.__flowRec({ kind: 'check', pick: pickFor(cb),
+        field: fieldOf(cb) || (textEl ? fieldOf(textEl) : '') || '',
+        value: lbl, checked: readChecked(cb), seen: lbl });
+    }, 130);
+  }
+  // 勾选框 / 单选的真实勾选状态。input.checked 不可信（antd 那个隐藏 input 常年 false），
+  // 优先看包裹层的 `...checked` class 和 aria-checked。
+  function readChecked(cb){
+    if (cb.checked) return true;
+    if (cb.getAttribute && cb.getAttribute('aria-checked') === 'true') return true;
+    const w = cb.closest && cb.closest(
+      ".ant-checkbox,.ant-radio,.ant-checkbox-wrapper,.ant-radio-wrapper," +
+      "[class*='checkbox'],[class*='radio'],label,[aria-checked]");
+    if (w){
+      if (/(^|[\s_-])(checked|is-checked|is-active)([\s_-]|$)/.test(w.className || '')) return true;
+      if (w.getAttribute && w.getAttribute('aria-checked') === 'true') return true;
+    }
+    return false;
+  }
   // 勾选框 / 单选「这一项」的文字（「Android」「指定人群」）—— 不是它所在组的名字
   function checkLabel(el){
     if (el.id){
@@ -343,17 +371,7 @@ _INJECT = r"""
             const w = el.closest && el.closest("[class*='checkbox'],[class*='Checkbox'],[class*='radio'],[class*='Radio']");
             return w ? w.querySelector("input[type='checkbox'],input[type='radio']") : null;
           })();
-    if (cbInput){
-      // 状态可能在这次 click 之后才翻，延一拍再读
-      setTimeout(() => {
-        if (window.__flowRecPaused) return;
-        const lbl = clean(checkLabel(cbInput)) || clean(visibleText(it));
-        window.__flowRec({ kind: 'check', pick: pickFor(cbInput),
-          field: fieldOf(cbInput) || fieldOf(it) || '',
-          value: lbl, checked: !!cbInput.checked, seen: lbl });
-      }, 0);
-      return;
-    }
+    if (cbInput){ emitCheck(cbInput, it); return; }
 
     // B) 点在结果表格 / 列表的某一行 —— 记「在这里选文字是『xxx』的那行」
     const tr = it.closest && it.closest('table tr, [role="row"], ul>li, [class*="list"]>[class*="item"]');
@@ -393,9 +411,7 @@ _INJECT = r"""
       const o = el.options[el.selectedIndex];
       emitPick('select', el, clean(o && o.text));
     } else if (el.matches && el.matches("input[type='checkbox'],input[type='radio']")){
-      const lbl = clean(checkLabel(el));
-      window.__flowRec({ kind: 'check', pick: pickFor(el), field: fieldOf(el) || '',
-        value: lbl, checked: !!el.checked, seen: lbl });
+      emitCheck(el, el.closest('label') || el.parentElement);
     } else if (el.matches && el.matches('input,textarea')){
       // 刚被 search_pick 消费掉的搜索框，失焦这一发 change 是回声，丢掉
       if (isSearchBox(el) && window.__flowSearchConsumed && now() - window.__flowSearchConsumed < 3000) return;
@@ -609,7 +625,7 @@ class FlowRecorder:
         pick = ev.get("pick") or []
         seen = str(ev.get("seen") or "")
         now = time.monotonic()
-        fp = json.dumps([kind, pick, ev.get("value"), ev.get("key")], ensure_ascii=False)
+        fp = json.dumps([kind, pick, ev.get("value"), ev.get("key"), ev.get("checked")], ensure_ascii=False)
         if fp == self._last[0] and now - self._last[1] < 0.8:
             return                         # 同一动作 0.8s 内重复，丢（双击 / 冒泡多次）
         self._last = (fp, now)
@@ -670,8 +686,8 @@ class FlowRecorder:
         elif kind == "check":
             step = {"op": "check", "pick": pick, "value": value,
                     "checked": bool(ev.get("checked")), "seen": seen, "field": field}
-            # 同一个勾选项一次点击会来好几发（label + input 合成 click + change）——
-            #   fp 去抖挡掉大部分；漏网的按「同 field 同 value」覆盖，不叠。
+            # 一次点击可能派生多发；连着同 field 同 value → 覆盖（后到的更准，
+            #   真要连点两下同一个框，最终状态也该以最后一次为准）。
             if self.steps and self.steps[-1].get("op") == "check" \
                     and self.steps[-1].get("value") == value \
                     and self.steps[-1].get("field") == field:
