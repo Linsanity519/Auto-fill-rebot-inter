@@ -121,21 +121,27 @@ _INJECT = r"""
   // ⚠ ":scope > a,b,c" 里只有第一个带 :scope > 前缀，b/c 变成全文档选择器 —— 每一段都要自己加
   const SCOPED_LABEL = LABELISH_PARTS.map(p => ":scope > " + p + ", :scope > * > " + p).join(",");
   function tidy(t){ return clean(t).replace(/[:：*\s]+$/, '').replace(/^[*\s]+/, ''); }
+  // 单个勾选 / 单选选项自带的文字（.ant-checkbox-label 这种）不是「字段名」，跳过
+  function isOptionText(n){
+    return n && n.closest && n.closest(
+      "label,[class*='checkbox'],[class*='Checkbox'],[class*='radio'],[class*='Radio']," +
+      "[class*='group-item'],[class*='option'],[class*='Option']");
+  }
   function fieldOf(el){
     let n = el;
     for (let i = 0; i < 9 && n; i++){
       try {
         const l = n.querySelector && n.querySelector(SCOPED_LABEL);
-        if (l && !l.contains(el)){
+        if (l && !l.contains(el) && !isOptionText(l)){
           const t = tidy(l.textContent);
           if (t && t.length >= 2 && t.length <= 20) return t;
         }
       } catch(e){}
       let sib = n.previousElementSibling, hop = 0;
       while (sib && hop++ < 3){
-        // 兄弟里找「像标签的短文本」——但别把下拉触发器 / 控件自身的显示文字当成 label
+        // 兄弟里找「像标签的短文本」——但别把下拉触发器 / 控件自身 / 单个选项的文字当成 label
         const ok = sib.matches && sib.matches(LABELISH + ",span,div,p,strong,b,dt")
-          && !sib.matches(TRIGGER)
+          && !sib.matches(TRIGGER) && !isOptionText(sib)
           && !sib.querySelector("input,select,textarea,button,a,[role='button'],[role='combobox'],[role='option']");
         if (ok){
           const t = tidy(sib.textContent);
@@ -255,6 +261,10 @@ _INJECT = r"""
     } catch (e){}
   }
   function now(){ return (window.performance && performance.now()) || +new Date(); }
+  // 监听器登记进 window，teardown 时能摘掉 —— 不然在同一个页面重录，旧监听器
+  // （闭包着上一版的 fieldOf / emit）还挂着，会双份触发、还用旧逻辑。
+  window.__flowRecHandlers = window.__flowRecHandlers || [];
+  function __on(type, fn){ document.addEventListener(type, fn, true); window.__flowRecHandlers.push([type, fn]); }
 
   const CLICKABLE = "a,button,[role='button'],[role='tab'],[role='menuitem'],[role='option'],"
     + "[role='switch'],[role='checkbox'],[role='radio'],label,summary,tr,"
@@ -263,7 +273,7 @@ _INJECT = r"""
     if (!el || !el.closest) return null;
     return el.closest(CLICKABLE) || (inPopup(el) ? (el.closest(OPTIONISH) || el) : null);
   }
-  document.addEventListener('click', e => {
+  __on('click', e => {
     if (window.__flowRecPaused) return;
     let el = e.target;
     if (el.closest && el.closest('#__flowToolbar')) return;
@@ -327,9 +337,9 @@ _INJECT = r"""
     if (triggerFor(it) || (it.matches && it.matches(TRIGGER)))
       window.__flowTrig = { el: triggerFor(it) || it, ts: now() };
     emit('click', it);
-  }, true);
+  });
 
-  document.addEventListener('change', e => {
+  __on('change', e => {
     if (window.__flowRecPaused) return;
     const el = e.target;
     if (!el || (el.closest && el.closest('#__flowToolbar'))) return;
@@ -348,9 +358,9 @@ _INJECT = r"""
         window.__flowTrig = { el: triggerFor(el) || el, ts: now() };
       emit('fill', el, { value: el.value });
     }
-  }, true);
+  });
 
-  document.addEventListener('keydown', e => {
+  __on('keydown', e => {
     if (window.__flowRecPaused) return;
     if (e.key !== 'Enter' && e.key !== 'Escape') return;
     const el = e.target;
@@ -358,7 +368,7 @@ _INJECT = r"""
     // 只在输入框里按 Enter/Esc 才算一步（页面上到处按不该记）
     if (!el || !(el.matches && el.matches("input,textarea,[contenteditable='true']"))) return;
     emit('press', el, { key: e.key });
-  }, true);
+  });
 
   function ctl(action, arg){
     // 绑定可能没注入成功（重连 CDP 时偶发）—— 关键状态先落到 window 上，
@@ -460,6 +470,8 @@ _INJECT = r"""
     window.__flowRecStopped = true;
     try { (window.__flowRecTimers || []).forEach(clearInterval); } catch(e){}
     try { if (window.__flowRecObs) window.__flowRecObs.disconnect(); } catch(e){}
+    try { (window.__flowRecHandlers || []).forEach(h => document.removeEventListener(h[0], h[1], true)); } catch(e){}
+    window.__flowRecHandlers = [];
     const b = document.getElementById('__flowToolbar'); if (b) b.remove();
   };
   window.__flowRecTimers = window.__flowRecTimers || [];
