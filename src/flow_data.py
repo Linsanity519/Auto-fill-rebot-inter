@@ -76,6 +76,11 @@ def _defaults(doc: dict) -> dict:
     doc.setdefault("created_by", "")
     doc.setdefault("created_at", "")
     doc.setdefault("steps", [])
+    # 停录时抓的整表状态：{captured_at, url, fields: [{field, kind, value}, …]}。
+    # 回放跑完步骤后按它对齐（reconcile）—— 补上录制时没碰、但目标单元该有的字段。
+    if not isinstance(doc.get("snapshot"), dict):
+        doc["snapshot"] = {}
+    doc.setdefault("reconcile", True)         # 关掉 = 只按步骤跑，不做整表对齐
     d = dict(doc.get("data") or {})
     d.setdefault("source", "none")            # none | excel
     d.setdefault("columns", [])
@@ -127,6 +132,30 @@ def list_all() -> list[tuple[str, dict]]:
 # ---------------------------------------------------------------- 给界面用的「假 cfg」
 def has_loop(doc: dict) -> bool:
     return any(s.get("op") == "loop_rows" for s in (doc.get("steps") or []))
+
+
+def snapshot_fields(doc: dict) -> list[dict]:
+    """回放跑完步骤后要对齐的字段快照 [{field, kind, value}, …]。
+
+    空 = 没录到快照 / 用户关了「回放后对齐整表」/ 这是个吃 Excel 的循环流程
+    （循环流程每行的值本来就不一样，对齐会跟 {{列}} 打架，所以不做）。
+    """
+    doc = _defaults(doc)
+    if not doc.get("reconcile", True) or has_loop(doc):
+        return []
+    out: list[dict] = []
+    for it in ((doc.get("snapshot") or {}).get("fields") or []):
+        if not isinstance(it, dict):
+            continue
+        field = str(it.get("field") or "").strip()
+        val = it.get("value")
+        if isinstance(val, list):
+            val = [str(v).strip() for v in val if str(v).strip()]
+        else:
+            val = str(val or "").strip()
+        if field and val:
+            out.append({"field": field, "kind": str(it.get("kind") or ""), "value": val})
+    return out
 
 
 def synthetic_cfg(doc: dict) -> dict:
@@ -295,4 +324,6 @@ def describe(doc: dict) -> str:
     doc = _defaults(doc)
     n = len(doc.get("steps") or [])
     loop = "，按 Excel 行循环" if has_loop(doc) else ""
-    return f"{n} 步{loop}"
+    nsnap = len(snapshot_fields(doc))
+    snap = f"，回放对齐整表 {nsnap} 字段" if nsnap else ""
+    return f"{n} 步{loop}{snap}"

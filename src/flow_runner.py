@@ -97,6 +97,8 @@ class FlowRunner(StateMixin):
         results = []
         self._stop = False
         self._step_auto = False
+        self._reconciled = False        # 整表对齐只跑一次（提交前 / 全部步骤跑完后）
+        self._reconcile_notes: list[str] = []
 
         tail = ("（逐步试跑：每步停下核对，只填不提交）" if self._step_mode
                 else "（试跑：填但不提交）" if dry else "")
@@ -163,10 +165,15 @@ class FlowRunner(StateMixin):
                                 break
 
                 if not looped:
+                    # 没有提交 / confirm 步的纯填表流程：步骤跑完在这兜底对齐一次
+                    if not self._stop:
+                        self._maybe_reconcile(ff, b)
                     # 整份步骤当一条。顶层任何一步失败 = 这条没跑通。
                     ok = stats["failed"] == 0 and not top_fail
                     err = "；".join(top_fail[:3])
-                    results.append(self._result(0, {}, "ok" if ok else "failed", err, []))
+                    align = " / ".join(self._reconcile_notes)
+                    results.append(self._result(0, {}, "ok" if ok else "failed", err, [],
+                                                extra={"对齐": align} if align else None))
                     stats["ok" if ok else "failed"] += 1
                     self.ui.progress(1, 1, stats)
 
@@ -212,6 +219,9 @@ class FlowRunner(StateMixin):
             if op == "goto":
                 ff.goto(FD.render(s.get("url", ""), row, src))
             elif op == "click":
+                if s.get("submit"):
+                    # 提交前先把整表对齐到录制时的样子，再截图 / （空跑时）跳过点击
+                    self._maybe_reconcile(ff, b)
                 if self.s.get("dry_run") and s.get("submit"):
                     self.ui.log(f"{label} 第 {j} 步：提交动作，空跑跳过")
                     trace.append((op, "skip"))
@@ -254,6 +264,7 @@ class FlowRunner(StateMixin):
             elif op == "screenshot":
                 self._shot(b.page, rec_i, s.get("tag") or f"step_{j}")
             elif op == "confirm":
+                self._maybe_reconcile(ff, b)      # 让人核对的是对齐后的整表
                 b.front()
                 self._shot(b.page, rec_i, f"confirm_{j}")
                 if self.s.get("dry_run"):
@@ -277,6 +288,30 @@ class FlowRunner(StateMixin):
 
     def _note_bad(self, op):
         self.ui.log(f"    不认识的步骤「{op}」，跳过", "warn")
+
+    # ---------------- 整表对齐 ----------------
+    def _maybe_reconcile(self, ff: FlowFiller, b):
+        """按录制结束时抓的整表快照，把没对上的字段补上。只跑一次。
+        循环流程（吃 Excel）不做 —— 每行的值本来就不同，见 FD.snapshot_fields。"""
+        if self._reconciled or FD.has_loop(self.flow):
+            return
+        self._reconciled = True
+        snap = FD.snapshot_fields(self.flow)
+        if not snap:
+            return
+        self.ui.log(f"按录制时的整表状态对齐 {len(snap)} 个字段……")
+        try:
+            b.front()
+            notes = ff.reconcile(snap)
+        except Exception as e:
+            log.exception("整表对齐失败")
+            self.ui.log(f"    对齐没跑完：{e}", "warn")
+            return
+        self._reconcile_notes = notes
+        for m in notes:
+            self.ui.log(f"    {m}", "warn")
+        if not notes:
+            self.ui.log("    整表已经和录制时一致", "ok")
 
     # ---------------- 逐步试跑 ----------------
     def _step_prompt(self, ff: FlowFiller, s: dict, j: int, label: str, row: dict, src: str) -> str:
@@ -338,10 +373,13 @@ class FlowRunner(StateMixin):
             self.state.mark_failed(key, str(row)[:60], err)
             self.ui.log(f"[{i + 1}] 失败：{err}", "error")
 
-    def _result(self, i, row, status, err, trace):
+    def _result(self, i, row, status, err, trace, extra=None):
         how = "、".join(f"{op}:{h}" for op, h in trace) if trace else ""
-        return {"序号": i + 1, "状态": status, "错误": err, "步数": len(trace),
-                "命中方式": how, **{k: v for k, v in (row or {}).items()}}
+        d = {"序号": i + 1, "状态": status, "错误": err, "步数": len(trace),
+             "命中方式": how, **{k: v for k, v in (row or {}).items()}}
+        if extra:
+            d.update(extra)
+        return d
 
     def _shot(self, page, rec_i, tag):
         ts = datetime.now().strftime("%H%M%S")

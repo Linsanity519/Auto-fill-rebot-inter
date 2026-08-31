@@ -236,6 +236,8 @@ class _FlowRecSession:
         self.timeout = timeout
         self.source_url = source_url
         self.steps: list = []          # 录制线程里换成 rec.steps 这个活对象，边录边长
+        self.form_state: list = []     # 停录时抓的整表状态，见 FlowRecorder._read_form_state
+        self.form_url = ""             # 停录那一刻的页面 url
         self.error = ""
         self.done = False              # 用户点了浮条「完成」
         self.lost = False              # 浏览器中途断了 / 录制线程异常退出
@@ -322,7 +324,12 @@ class _FlowRecSession:
                         self.lost = True
                         break
                 try:
+                    self.form_url = b.page.url
+                except Exception:
+                    pass
+                try:
                     self.steps = rec.stop()
+                    self.form_state = list(getattr(rec, "snapshot", []) or [])
                 except Exception:
                     log.warning("录制收尾出错，用已记下的步骤", exc_info=True)
         except Exception as e:
@@ -1068,6 +1075,13 @@ class Api:
                 f["steps"] = steps
                 if not f.get("source_url") and steps and steps[0].get("op") == "goto":
                     f["source_url"] = steps[0]["url"]
+                if sess.form_state:
+                    f["snapshot"] = {
+                        "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "url": getattr(sess, "form_url", "") or "",
+                        "fields": sess.form_state,
+                    }
+                    f.setdefault("reconcile", True)
             FD.save(f)
             fl = FD.load(name)
             out = {"ok": True, "flow": fl, "issues": FD.validate(fl),

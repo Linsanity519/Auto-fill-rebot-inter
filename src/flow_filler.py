@@ -451,6 +451,162 @@ class FlowFiller:
             self._note(f"「{label}」点完之后是 {'勾上' if cur else '没勾'}，想要 {'勾上' if want else '没勾'}")
         return "check"
 
+    # ------------------------------------------------ 整表对齐（reconcile）
+    #
+    # 录制只记「碰过的字段」；用户没点的（默认值、上一屏带过来的）录不到。回放跑完
+    # 所有步骤后，按录制结束时抓的整表快照逐字段比对，把没对上的补上。
+    #   · 只动「读出来的当前值 ≠ 目标值」的字段
+    #   · 读不到当前状态时（定位不到字段块）就按目标值盲填一遍，多余的没法收，靠人看
+    #   · 任何一个字段出错都不影响别的字段，收集成给人看的说明行返回
+    _GROUP_JS = r"""el => {
+      const clean = s => (s||'').replace(/\s+/g,' ').trim();
+      const onCls = c => /(^|[\s_-])(checked|is-checked|is-active)([\s_-]|$)/.test(c||'');
+      const out = [];
+      el.querySelectorAll("label,[class*='wrapper'],[class*='checkbox'],[class*='radio']," +
+        "[role='checkbox'],[role='radio'],[role='option']").forEach(w => {
+        const inp = w.querySelector("input[type=checkbox],input[type=radio]");
+        if (!inp && !/(checkbox|radio|option)/i.test(w.className||'') && !w.getAttribute('role')) return;
+        const t = clean(w.textContent);
+        if (!t || t.length > 48) return;
+        let on = onCls(w.className) || w.getAttribute('aria-checked') === 'true';
+        if (inp && (inp.checked || inp.getAttribute('aria-checked') === 'true')) on = true;
+        const cw = inp && inp.closest("[class*='checked'],[aria-checked='true']");
+        if (cw && (onCls(cw.className) || cw.getAttribute('aria-checked') === 'true')) on = true;
+        out.push([t, on]);
+      });
+      const m = new Map();
+      out.forEach(([t, o]) => { if (!m.has(t) || o) m.set(t, o); });
+      return [...m.entries()];
+    }"""
+
+    def reconcile(self, fields: list[dict]) -> list[str]:
+        """按快照对齐整表。fields = [{field, kind, value}, …]。返回说明行（空 = 全一致）。"""
+        notes: list[str] = []
+        for it in fields or []:
+            field = str(it.get("field") or "").strip()
+            kind = str(it.get("kind") or "")
+            want = it.get("value")
+            if not field or want in (None, "", []):
+                continue
+            try:
+                if kind == "checkbox":
+                    notes += self._align_checks(field, want if isinstance(want, list) else [want])
+                elif kind == "radio":
+                    notes += self._align_one(field, str(want))
+                elif kind == "select":
+                    if isinstance(want, list):
+                        notes.append(f"「{field}」是多选下拉，没自动对齐 —— 请自己确认是不是 {want}")
+                    else:
+                        notes += self._align_select(field, str(want))
+                elif kind == "text":
+                    notes += self._align_text(field, str(want))
+            except FillError as e:
+                notes.append(f"「{field}」没对上：{e}")
+            except Exception as e:
+                log.debug("对齐「%s」出错", field, exc_info=True)
+                notes.append(f"「{field}」对齐出错：{e}")
+        return notes
+
+    def _group_state(self, field: str):
+        """字段块里所有勾选项 → [(可见文字, 是否勾上), …]。定位不到块就返回 None。"""
+        root = self._field_scope(field)
+        if root is self.page:
+            return None
+        try:
+            return root.evaluate(self._GROUP_JS)
+        except Exception:
+            return None
+
+    def _align_checks(self, field: str, wants: list) -> list[str]:
+        wants = [str(w).strip() for w in wants if str(w).strip()]
+        notes: list[str] = []
+        state = self._group_state(field)
+        if state is None:
+            for w in wants:
+                self.check([], w, True, field)
+            return [f"「{field}」勾了 {wants}（当前状态读不到，多余的没动）"]
+        cur_on = {t for t, on in state if on}
+        known = {t for t, _ in state}
+        add = [w for w in wants if w not in cur_on]
+        drop = [t for t in cur_on if t not in wants and t in known]  # 文字对得上才敢取消
+        for w in add:
+            try:
+                self.check([], w, True, field)
+            except FillError as e:
+                notes.append(f"「{field}」想勾「{w}」没成：{e}")
+        for t in drop:
+            try:
+                self.check([], t, False, field)
+            except FillError as e:
+                notes.append(f"「{field}」想取消「{t}」没成：{e}")
+        if add or drop:
+            notes.insert(0, f"「{field}」对齐：补勾 {add or '—'}　取消 {drop or '—'}")
+        return notes
+
+    def _align_one(self, field: str, want: str) -> list[str]:
+        """单选 / radio：选一个即取消同组其它，check() 自己会读状态、只在需要时点。"""
+        want = str(want).strip()
+        if not want:
+            return []
+        state = self._group_state(field)
+        if state is not None:
+            on = [t for t, o in state if o]
+            if on == [want]:
+                return []
+        self.check([], want, True, field)
+        return [f"「{field}」改成「{want}」"]
+
+    def _select_value(self, field: str):
+        root = self._field_scope(field)
+        if root is self.page:
+            return None
+        try:
+            return root.evaluate(r"""el => {
+              const clean = s => (s||'').replace(/\s+/g,' ').trim();
+              const s = el.querySelector('select');
+              if (s && s.selectedIndex >= 0) return clean(s.options[s.selectedIndex].text);
+              const t = el.querySelector(".ant-select-selection-item,[class*='select-selection-item']," +
+                "[class*='selectedText'],[class*='select__single-value']");
+              return t ? clean(t.getAttribute('title') || t.textContent) : null;
+            }""")
+        except Exception:
+            return None
+
+    def _align_select(self, field: str, want: str) -> list[str]:
+        want = str(want).strip()
+        cur = self._select_value(field)
+        if cur is not None and norm(cur) == norm(want):
+            return []
+        try:
+            self.select([], want, field)
+        except FillError:
+            self.search_pick([], want, want, field)   # 可能是要打字才出选项的远程搜索下拉
+        return [f"「{field}」选成「{want}」" + (f"（原「{cur}」）" if cur else "")]
+
+    def _align_text(self, field: str, want: str) -> list[str]:
+        want = str(want).strip()
+        try:
+            r = self._control([], field)
+        except FillError as e:
+            return [f"「{field}」找不到输入框：{e}"]
+        cur = ""
+        try:
+            cur = norm(r.locator.input_value())
+        except Exception:
+            pass
+        if norm(want) == cur:
+            return []
+        try:
+            r.locator.fill("")
+            r.locator.fill(want)
+        except Exception:
+            try:
+                r.locator.click()
+                r.locator.type(want, delay=15)
+            except Exception as e:
+                return [f"「{field}」补填失败：{e}"]
+        return [f"「{field}」补填「{want}」" + (f"（原「{cur}」）" if cur else "")]
+
     def pick_item(self, pick: list, value: str, field: str = "") -> str:
         """点结果表格 / 列表里「文字是 value 的那一行」。"""
         v = str(value)

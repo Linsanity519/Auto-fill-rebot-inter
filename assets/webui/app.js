@@ -871,6 +871,20 @@
     meta.innerHTML = "";
     meta.appendChild(el("span", null, `共 ${flat.length} 步`));
     if (nCol) meta.appendChild(el("span", null, `· ${nCol} 处按表格取值`));
+
+    // 整表对齐：录到快照且不是按行循环时才有意义
+    const snapN = ((f.snapshot && f.snapshot.fields) || []).length;
+    const rcRow = $("#flowReconcileRow");
+    if (rcRow) {
+      const showRc = snapN > 0 && !$("#flowLoop").checked;
+      rcRow.style.display = showRc ? "" : "none";
+      $("#flowReconcile").checked = f.reconcile !== false;
+      if (showRc) {
+        const s = el("span", null, `· 录了整表 ${snapN} 个字段${f.reconcile === false ? "（对齐已关）" : "，回放会对齐"}`);
+        s.style.color = "var(--mu)";
+        meta.appendChild(s);
+      }
+    }
     if (nWarn) {
       const w = el("span", null, `· ${nWarn} 步定位不唯一`);
       w.style.color = "var(--mu)";
@@ -1322,6 +1336,12 @@
     $("#btnFlowAddStep").addEventListener("click", flowAddStep);
     $("#btnFlowDelSel").addEventListener("click", flowDeleteSelected);
     $("#flowRaw").addEventListener("change", () => paintFlow({ flow: state.flow, issues: [] }));
+    $("#flowReconcile").addEventListener("change", () => {
+      if (!state.flow) return;
+      state.flow.reconcile = $("#flowReconcile").checked;
+      paintFlow({ flow: state.flow, issues: state.flowIssues || [] });
+      flowSave(true);
+    });
     $("#flowLoop").addEventListener("change", () => flowSave(true));
     $("#btnFlowTemplate").addEventListener("click", () => {
       flowSave().then((r) => {

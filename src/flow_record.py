@@ -516,6 +516,63 @@ _INJECT = r"""
     [dot, stat, btnPause, btnConfirm, noteWrap, btnDone].forEach(n => bar.appendChild(n));
     document.body.appendChild(bar);
   }
+  // —— 录制结束时抓一份「整张表单此刻的状态」：每个字段块当前 选 / 勾 / 填 的值。
+  //    回放跑完所有步骤后，filler 会逐字段比对、把没对上的补上（reconcile）。
+  //    录制只记「碰过的字段」，用户没点的（默认值、上一屏带过来的）录不到 ——
+  //    这份快照就是补这个洞，让脚本复刻出来的和录制时看到的整表一致。
+  //    读不出稳定值的字段直接跳过（宁缺勿错）。
+  function fieldValue(fi){
+    const radios = [...fi.querySelectorAll("input[type='radio']")];
+    if (radios.length){
+      const on = radios.find(readChecked);
+      return { kind: 'radio', value: on ? clean(checkLabel(on)) : '' };
+    }
+    const checks = [...fi.querySelectorAll("input[type='checkbox']")];
+    if (checks.length){
+      return { kind: 'checkbox',
+        value: checks.filter(readChecked).map(c => clean(checkLabel(c))).filter(Boolean) };
+    }
+    const nsel = fi.querySelector('select');
+    if (nsel && nsel.selectedIndex >= 0){
+      const o = nsel.options[nsel.selectedIndex];
+      return { kind: 'select', value: clean(o && o.text) };
+    }
+    const tags = [...fi.querySelectorAll(
+      ".ant-select-selection-item,[class*='select-selection-item']," +
+      "[class*='multiple-tag'],[class*='selectedText'],[class*='select__single-value']," +
+      "[class*='select__multi-value__label']")]
+      .map(s => clean(s.getAttribute('title') || s.textContent)).filter(Boolean);
+    if (tags.length) return { kind: 'select', value: tags.length > 1 ? tags : tags[0] };
+    const ti = fi.querySelector(
+      "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([role=combobox]),textarea");
+    if (ti && clean(ti.value)) return { kind: 'text', value: clean(ti.value) };
+    return null;
+  }
+  window.__flowFormState = function(){
+    const out = [], seen = new Set();
+    const FI = ".ant-formily-item,.ant-form-item,.el-form-item," +
+      "[class*='form-item']:not([class*='label']):not([class*='control'])," +
+      "[class*='FormItem']:not([class*='Label']):not([class*='Control'])";
+    const NEST = ".ant-formily-item,.ant-form-item,.el-form-item";
+    document.querySelectorAll(FI).forEach(fi => {
+      try {
+        if (fi.querySelector(NEST)) return;               // 只取最内层
+        const lb = fi.querySelector(
+          ".ant-formily-item-label,.ant-form-item-label,[class*='form-item-label']," +
+          "[class*='FormItem-label'],[class*='el-form-item__label'],legend,label");
+        if (!lb || isOptionText(lb) || lb.querySelector('input,select,textarea')) return;
+        const field = tidy(lb.textContent);
+        if (!field || field.length < 2 || field.length > 20 || seen.has(field)) return;
+        const fv = fieldValue(fi);
+        if (!fv || fv.value == null || fv.value === '' ||
+            (Array.isArray(fv.value) && !fv.value.length)) return;
+        seen.add(field);
+        out.push({ field: field, kind: fv.kind, value: fv.value });
+      } catch(e){}
+    });
+    return out;
+  };
+
   // 只负责「浮条在不在」，不碰监听器（重复挂监听器会让每个操作记两遍）。
   function ensureBar(){
     if (window.__flowRecStopped || window.__flowRecDone) return;   // 已经完成 / 停了，别再冒
@@ -548,6 +605,7 @@ class FlowRecorder:
         self.page = page
         self.timeout = timeout
         self.steps: list[dict] = []
+        self.snapshot: list[dict] = []   # 停录时抓的整表状态，见 _read_form_state
         self._done = False
         self._last = (None, 0.0)          # (指纹, 时刻) 去抖
         self._last_action = 0.0           # 上一次 click/fill/select/press 的时刻
@@ -583,6 +641,12 @@ class FlowRecorder:
             self.page.remove_listener("framenavigated", self._on_nav)
         except Exception:
             pass
+        # ⚠ 快照要在 teardown 之前抓 —— teardown 之后 __flowFormState 还在（挂 window 上），
+        #   但页面此刻就是用户填完的样子，越早读越准。
+        try:
+            self.snapshot = self._read_form_state()
+        except Exception:
+            log.debug("整表快照读取失败", exc_info=True)
         try:
             # teardown 会停掉页面里的自愈定时器 + observer + 移除浮条。
             # ⚠ 不重置 __flowRecStopped —— 留着它，万一有 orphan 定时器也不会再画浮条。
@@ -591,6 +655,28 @@ class FlowRecorder:
         except Exception:
             pass
         return self.build()
+
+    def _read_form_state(self) -> list[dict]:
+        """把 window.__flowFormState() 读回来并清洗成 [{field, kind, value}, …]。
+        value 是 str（radio/select/text）或 list[str]（checkbox / 多选）。"""
+        try:
+            raw = self.page.evaluate("() => (window.__flowFormState ? window.__flowFormState() : [])")
+        except Exception:
+            return []
+        out: list[dict] = []
+        for it in raw or []:
+            if not isinstance(it, dict):
+                continue
+            field = str(it.get("field") or "").strip()
+            val = it.get("value")
+            if isinstance(val, list):
+                val = [str(v).strip() for v in val if str(v).strip()]
+            else:
+                val = str(val or "").strip()
+            if not field or not val:
+                continue
+            out.append({"field": field, "kind": str(it.get("kind") or ""), "value": val})
+        return out
 
     @property
     def done(self) -> bool:

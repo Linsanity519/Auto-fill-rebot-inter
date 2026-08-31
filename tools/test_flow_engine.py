@@ -211,6 +211,39 @@ def test_rec_session_import():
     snap = s.snapshot()
     ok("没 start 时 running=True 之前是啥都行，关键是 steps=0", snap["steps"] == 0)
     ok("有独立线程、默认没起", not s._thread.is_alive())
+    ok("会话上有 form_state / form_url 两个字段", s.form_state == [] and s.form_url == "")
+
+
+def test_snapshot_fields():
+    print("\n[整表快照 → reconcile 输入]")
+    doc = {"name": "复刻单元", "data": {"source": "none"},
+           "steps": [{"op": "goto", "url": "http://x"},
+                     {"op": "check", "field": "生效平台", "value": "Android", "checked": True}],
+           "snapshot": {"captured_at": "2026-08-31 12:00:00", "url": "http://x/unit/0", "fields": [
+               {"field": "投放流量池", "kind": "radio", "value": "特殊最优池(慎重使用)"},
+               {"field": "生效平台", "kind": "checkbox", "value": ["Android", "iPhone"]},
+               {"field": "版本限制", "kind": "select", "value": "不限"},
+               {"field": "单元名称", "kind": "text", "value": "复刻v1"},
+               {"field": "", "kind": "text", "value": "没有字段名的丢掉"},
+               {"field": "空值字段", "kind": "text", "value": ""},
+           ]}}
+    got = FD.snapshot_fields(doc)
+    ok("清洗后 4 条（丢掉没 field / 没 value 的）", len(got) == 4, got)
+    ok("radio 值是字符串", any(g["field"] == "投放流量池" and g["value"] == "特殊最优池(慎重使用)" for g in got))
+    ok("checkbox 值是列表", any(g["field"] == "生效平台" and g["value"] == ["Android", "iPhone"] for g in got))
+
+    off = dict(doc, reconcile=False)
+    ok("关了「回放后对齐整表」→ 空", FD.snapshot_fields(off) == [])
+
+    looped = {"name": "l", "data": {"source": "excel", "columns": ["名"]},
+              "steps": [{"op": "loop_rows", "body": [
+                  {"op": "fill", "pick": [{"label": "x"}], "value": "{{名}}"}]}],
+              "snapshot": {"fields": [{"field": "版本限制", "kind": "select", "value": "不限"}]}}
+    ok("吃 Excel 的循环流程 → 不对齐（每行值本就不同）", FD.snapshot_fields(looped) == [])
+
+    ok("describe 里带出快照字段数",
+       "对齐整表 4 字段" in FD.describe(doc), FD.describe(doc))
+    ok("_defaults 给 reconcile 兜底 True", FD._defaults({"name": "x"}).get("reconcile") is True)
 
 
 def main():
@@ -219,7 +252,7 @@ def main():
     print("=" * 56)
     for fn in (test_render, test_columns, test_validate_ok, test_validate_catches,
                test_synthetic_and_registry, test_step_mode, test_semantic_ops,
-               test_rec_session_import):
+               test_rec_session_import, test_snapshot_fields):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
