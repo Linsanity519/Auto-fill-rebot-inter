@@ -128,6 +128,20 @@ _INJECT = r"""
       "[class*='group-item'],[class*='option'],[class*='Option']");
   }
   function fieldOf(el){
+    // 快路：antd / Formily / element 的表单行，label 在固定的子节点里
+    try {
+      const fi = el.closest && el.closest(
+        ".ant-formily-item,.ant-form-item,[class*='form-item'],[class*='FormItem'],[class*='el-form-item']");
+      if (fi){
+        const lb = fi.querySelector(
+          ".ant-formily-item-label,.ant-form-item-label,[class*='form-item-label']," +
+          "[class*='FormItem-label'],[class*='el-form-item__label'],legend,label");
+        if (lb && !isOptionText(lb) && !lb.contains(el)){
+          const t = tidy(lb.textContent);
+          if (t && t.length >= 2 && t.length <= 20) return t;
+        }
+      }
+    } catch(e){}
     let n = el;
     for (let i = 0; i < 9 && n; i++){
       try {
@@ -261,6 +275,31 @@ _INJECT = r"""
     } catch (e){}
   }
   function now(){ return (window.performance && performance.now()) || +new Date(); }
+
+  // 从浮层里挑了一项。刚在搜索框打过字（<10s）→ 记成一步 search_pick（query + value）；
+  // 否则就是普通「选下拉」。
+  function pickFromPopup(clickedEl, opt, val){
+    const s = window.__flowSearch;
+    if (s && now() - s.ts < 10000){
+      window.__flowSearch = null;
+      window.__flowSearchConsumed = now();
+      window.__flowRec({ kind: 'search_pick', pick: pickFor(s.trig),
+        field: s.field || fieldOf(clickedEl) || '',
+        query: s.q, value: val, seen: val });
+      return;
+    }
+    const trig = (window.__flowTrig && now() - window.__flowTrig.ts < 8000)
+      ? window.__flowTrig.el : (triggerFor(clickedEl) || opt);
+    emitPick('select', trig, val);
+  }
+  // 「是不是搜索框」——放宽点，很多后台就是个普通 input 塞在 selector 里
+  function isSearchBox(el){
+    if (!el || !el.matches) return false;
+    if (el.matches("input[type='search'],[role='searchbox'],[role='combobox']")) return true;
+    if (/search|autocomplete|combobox|selector|select-search|filter/i.test((el.getAttribute && el.getAttribute('class')) || '')) return true;
+    return !!triggerFor(el) || (!!el.closest && !!el.closest(POPUP + "," + TRIGGER));
+  }
+
   // 监听器登记进 window，teardown 时能摘掉 —— 不然在同一个页面重录，旧监听器
   // （闭包着上一版的 fieldOf / emit）还挂着，会双份触发、还用旧逻辑。
   window.__flowRecHandlers = window.__flowRecHandlers || [];
@@ -287,16 +326,12 @@ _INJECT = r"""
     if (inPopup(el)){
       const opt = el.closest(OPTIONISH) || el;
       const val = visibleText(opt);
-      if (val){
-        const trig = (window.__flowTrig && now() - window.__flowTrig.ts < 8000)
-          ? window.__flowTrig.el : (triggerFor(el) || opt);
-        emitPick('select', trig, val);
-      }
+      if (val) pickFromPopup(el, opt, val);
       return;
     }
     const it = interactive(el);
     if (!it) return;
-    if (it.getAttribute && it.getAttribute('role') === 'option'){ emitPick('select', triggerFor(it) || it, visibleText(it)); return; }
+    if (it.getAttribute && it.getAttribute('role') === 'option'){ pickFromPopup(it, it, visibleText(it)); return; }
 
     // 勾选框 / 单选：就地记成语义化的 check（「勾了 Android」）。**不指望 change** ——
     // 很多组件库点可见 span 时根本不派发原生 change 事件（用户反馈：完全没记上）。
@@ -339,6 +374,17 @@ _INJECT = r"""
     emit('click', it);
   });
 
+  // 搜索框逐字敲 —— change 只在失焦时才发，等不到；用 input 实时记下打的字，
+  // 等浮层里点了某项，pickFromPopup 拿它拼成 search_pick。
+  __on('input', e => {
+    if (window.__flowRecPaused) return;
+    const el = e.target;
+    if (!el || !el.matches || !el.matches('input,textarea') || (el.closest && el.closest('#__flowToolbar'))) return;
+    if (el.type === 'checkbox' || el.type === 'radio') return;
+    if (!isSearchBox(el)) return;
+    window.__flowSearch = { q: el.value, field: fieldOf(el), trig: triggerFor(el) || el, ts: now() };
+  });
+
   __on('change', e => {
     if (window.__flowRecPaused) return;
     const el = e.target;
@@ -347,15 +393,12 @@ _INJECT = r"""
       const o = el.options[el.selectedIndex];
       emitPick('select', el, clean(o && o.text));
     } else if (el.matches && el.matches("input[type='checkbox'],input[type='radio']")){
-      // 记「勾了 / 取消了『Android』」，不是「点了这个 input」
       const lbl = clean(checkLabel(el));
       window.__flowRec({ kind: 'check', pick: pickFor(el), field: fieldOf(el) || '',
         value: lbl, checked: !!el.checked, seen: lbl });
     } else if (el.matches && el.matches('input,textarea')){
-      // 搜索框：记一下，Python 侧若紧跟着一次浮层选择，会并成一步 search_pick
-      if (triggerFor(el) || /search|autocomplete|combobox/i.test((el.getAttribute && el.getAttribute('class')) || '')
-          || el.getAttribute('role') === 'searchbox')
-        window.__flowTrig = { el: triggerFor(el) || el, ts: now() };
+      // 刚被 search_pick 消费掉的搜索框，失焦这一发 change 是回声，丢掉
+      if (isSearchBox(el) && window.__flowSearchConsumed && now() - window.__flowSearchConsumed < 3000) return;
       emit('fill', el, { value: el.value });
     }
   });
@@ -584,21 +627,39 @@ class FlowRecorder:
             else:
                 self.steps.append(step)
         elif kind == "fill":
+            # search_pick 之后紧跟的 fill 多半是搜索框失焦的回声，丢
+            if self.steps and self.steps[-1].get("op") == "search_pick" \
+                    and now - self._last_action < 3.0:
+                return
             step = {"op": "fill", "pick": pick, "value": value, "seen": seen, "field": field}
             if self.steps and self.steps[-1].get("op") == "fill" \
                     and self.steps[-1].get("pick") == pick:
                 self.steps[-1] = step
             else:
                 self.steps.append(step)
+        elif kind == "search_pick":
+            query = str(ev.get("query", ""))
+            step = {"op": "search_pick", "pick": pick, "query": query, "value": value,
+                    "seen": value, "field": field}
+            prev = self.steps[-1] if self.steps else None
+            # 前面那条 fill 若是同一个搜索框打的字（失焦 change 抢跑），并进来别留着
+            if prev and prev.get("op") == "fill" and now - self._last_fill < 6.0 \
+                    and (prev.get("value") == query or not query
+                         or prev.get("field") in (field, value)):
+                if not query:
+                    step["query"] = prev.get("value", "")
+                self.steps[-1] = step
+            else:
+                self.steps.append(step)
         elif kind == "select":
             prev = self.steps[-1] if self.steps else None
-            # 「搜索框打字」+「浮层里挑一个」紧挨着 → 并成一步 search_pick。
-            #   query（打的字）留着是为了触发远程搜索；真正的目标是 value。
+            # 兜底：JS 没并起来时（fill 的 change 先于 select 到）——「fill 紧挨 select」并成 search_pick
             if prev and prev.get("op") == "fill" and now - self._last_fill < 6.0 \
-                    and (not field or not prev.get("field") or field == prev.get("field")):
+                    and (not field or not prev.get("field") or field == prev.get("field")
+                         or prev.get("field") == value):
                 self.steps[-1] = {"op": "search_pick",
                                   "pick": prev.get("pick") or pick,
-                                  "field": prev.get("field") or field,
+                                  "field": field or prev.get("field") or "",
                                   "query": prev.get("value", ""), "value": value, "seen": value}
             else:
                 self.steps.append({"op": "select", "pick": pick, "value": value,
