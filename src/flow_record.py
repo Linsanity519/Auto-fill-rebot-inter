@@ -110,8 +110,10 @@ _INJECT = r"""
     return ':nth-child(' + ([...p.children].indexOf(n) + 1) + ')';
   }
   function finder(el){
-    let n = el, parts = [], guard = 0, leafStrong = false;
-    while (n && n.nodeType === 1 && guard++ < 8){
+    // 走到「当场唯一」就收 —— 一条唯一的 css 就是一条能用的选择器（Automa / DevTools
+    // Recorder 也是这么干的），不因为它长就算「脆」。只有走到头都定位不唯一才算没抓准。
+    let n = el, parts = [], guard = 0;
+    while (n && n.nodeType === 1 && guard++ < 9){
       const seg = segFor(n);
       let piece = seg.s;
       const p = n.parentElement;
@@ -120,10 +122,9 @@ _INJECT = r"""
         try { same = [...p.children].filter(c => c.matches(piece)).length; } catch(e){}
         if (same !== 1) piece += nthChild(n);
       }
-      if (guard === 1) leafStrong = seg.strong;
       parts.unshift(piece);
       const sel = parts.join(' > ');
-      if (uniqCount(sel) === 1) return { css: sel, anchored: leafStrong || parts.length <= 3 };
+      if (uniqCount(sel) === 1) return { css: sel, anchored: true };
       if (piece[0] === '#') return { css: sel, anchored: true };
       n = p;
     }
@@ -314,6 +315,7 @@ class FlowRecorder:
         self.steps: list[dict] = []
         self._done = False
         self._last = (None, 0.0)          # (指纹, 时刻) 去抖
+        self._last_action = 0.0           # 上一次 click/fill/select/press 的时刻
         self._start_url = ""
         self._running = False
 
@@ -386,6 +388,7 @@ class FlowRecorder:
         if fp == self._last[0] and now - self._last[1] < 0.8:
             return                         # 同一动作 0.8s 内重复，丢（双击 / 冒泡多次）
         self._last = (fp, now)
+        self._last_action = now      # 给 _on_nav 判断「这次跳转是不是刚才点出来的」
 
         if kind == "click":
             step = {"op": "click", "pick": pick, "seen": seen}
@@ -420,7 +423,12 @@ class FlowRecorder:
         url = frame.url
         if url == self._start_url or url.startswith("about:"):
             return
-        # 只在「路径变了」时记 goto，query/hash 抖动不算
+        # ⚠ 关键：**刚点过东西**（2.5s 内）的跳转，是那次点击的后果，不记 goto。
+        #   录成 goto 会把这次会话的 activityId=708 这种一次性参数焊死进流程，
+        #   下次跑必然跳到一个过期的页面 —— 这正是「录完不能复刻」的头号原因。
+        #   点击本身重放时会再触发同样的跳转，filler 里 settle() 会等它。
+        if time.monotonic() - self._last_action < 2.5:
+            return
         if self.steps and self.steps[-1].get("op") == "goto":
             self.steps[-1]["url"] = url
             return

@@ -205,6 +205,17 @@ def _prep_kind(f: dict) -> str:
     return "text"
 
 
+def _flow_flatten(steps: list) -> list:
+    """把 loop_rows 摊平成一列步骤对象（同 app.js 的 flattenSteps 顺序），
+    「重录第 N 步」按这个序号定位。返回的是原对象引用，改了直接生效。"""
+    out = []
+    for s in steps or []:
+        out.append(s)
+        if s.get("op") == "loop_rows":
+            out.extend(_flow_flatten(s.get("body") or []))
+    return out
+
+
 class _FlowRecSession:
     """一次录制会话：一个独占的守护线程，从头到尾持有 sync Playwright 连接。
 
@@ -228,6 +239,7 @@ class _FlowRecSession:
         self.error = ""
         self.done = False              # 用户点了浮条「完成」
         self.lost = False              # 浏览器中途断了 / 录制线程异常退出
+        self.replace_index = None      # 不为 None = 只重录第几步（flat 序号）
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._ended = threading.Event()
@@ -979,7 +991,9 @@ class Api:
     #   sync 版 Playwright 的调度 greenlet 绑死在建它的线程上，而 pywebview 的
     #   每个 api 调用可能落在不同线程 —— 跨线程一 evaluate 就 greenlet.error，
     #   而且 start 的线程一返回，绑定回调就没人 pump，录到的东西一条进不来。
-    def flow_start_record(self, name: str) -> dict:
+    def flow_start_record(self, name: str, step_index=None) -> dict:
+        """step_index 给了 = 只重录这一步：不跳转起始页（用户自己把页面停到位），
+        停录时取录到的第一个动作，替换掉原来那一步的选择器 / 值。"""
         from . import flow_data as FD
         if self._flow_sess and self._flow_sess.snapshot()["running"]:
             return {"ok": False, "error": "已经在录了，先点「完成」或「结束录制」"}
@@ -987,8 +1001,10 @@ class Api:
             return {"ok": False, "error": "浏览器没连上，先启动浏览器并登录"}
         try:
             f = FD.load(name)
+            single = step_index is not None
             sess = _FlowRecSession(self.settings["cdp_url"], self.settings["timeout"],
-                                   f.get("source_url") or "")
+                                   "" if single else (f.get("source_url") or ""))
+            sess.replace_index = step_index
             err = sess.start()
             if err:
                 return {"ok": False, "error": err}
@@ -1016,12 +1032,28 @@ class Api:
         if not sess:
             return {"ok": False, "error": "没有在录"}
         steps = sess.stop()
+        replace_at = sess.replace_index
         self._flow_sess = None
         try:
             f = FD.load(name)
-            f["steps"] = steps
-            if not f.get("source_url") and steps and steps[0].get("op") == "goto":
-                f["source_url"] = steps[0]["url"]
+            if replace_at is not None:
+                # 只替第几步：取录到的第一个动作，覆盖那一步的定位 / 值，op 保持不变
+                act = next((s for s in steps
+                            if s.get("op") in ("click", "fill", "select", "press")), None)
+                if not act:
+                    return {"ok": False, "error": "这次没录到任何操作，原来那步没动"}
+                flat = _flow_flatten(f.get("steps") or [])
+                if not (0 <= replace_at < len(flat)):
+                    return {"ok": False, "error": "步骤号不对，可能列表已经变了"}
+                tgt = flat[replace_at]
+                tgt["pick"] = act.get("pick", tgt.get("pick"))
+                if "value" in act:
+                    tgt["value"] = act["value"]
+                tgt["seen"] = act.get("seen", tgt.get("seen", ""))
+            else:
+                f["steps"] = steps
+                if not f.get("source_url") and steps and steps[0].get("op") == "goto":
+                    f["source_url"] = steps[0]["url"]
             FD.save(f)
             fl = FD.load(name)
             out = {"ok": True, "flow": fl, "issues": FD.validate(fl),

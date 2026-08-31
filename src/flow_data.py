@@ -278,7 +278,7 @@ def warnings(doc: dict) -> list[str]:
                     if "css" in c and c.get("anchored"):
                         anchored = True
                 if kinds and set(kinds) <= {"css"} and not anchored:
-                    out.append(f"{where}：只找到一个脆弱的位置，改版后这步可能要重录")
+                    out.append(f"{where}：选择器在页面上定位不唯一，跑的时候取第一个 —— 可能不是你要的")
             if op == "loop_rows":
                 walk(s.get("body") or [], f"{where} 里 ")
 

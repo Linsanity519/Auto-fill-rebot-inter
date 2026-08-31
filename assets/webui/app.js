@@ -808,11 +808,11 @@
     if (s.op === "press") return { text: "键 " + (s.key || "Enter"), raw: "", warn: false };
     if (s.op === "screenshot") return { text: "存到结果目录", raw: "", warn: false };
     const pick = s.pick || [];
-    // 「认不准」= 一个像样的锚都没有：没有文字/label/role/属性候选，
-    //   而且那条 css 也没挂在稳定祖先上（anchored）。
-    const hasAnchor = pick.some((p) => p.text || p.label || (p.role && p.name)
+    // 只有「定位不唯一」才提示 —— 一条当场验证过唯一的 css（anchored）就是能用的，
+    //   不因为它长就算脆。有文字 / label / role / 属性候选的也不提示。
+    const locatable = pick.some((p) => p.text || p.label || (p.role && p.name)
       || p.attr || (p.css && p.anchored));
-    const warn = pick.length > 0 && !hasAnchor;
+    const warn = pick.length > 0 && !locatable;
     // 优先「录制时你看到的字」，再退到 text / label / role / 属性 / 图标名
     let text = (s.seen || "").trim();
     if (!text) {
@@ -859,9 +859,9 @@
     meta.appendChild(el("span", null, `共 ${flat.length} 步`));
     if (nCol) meta.appendChild(el("span", null, `· ${nCol} 处按表格取值`));
     if (nWarn) {
-      const w = el("span", null, `· ${nWarn} 步位置脆弱`);
+      const w = el("span", null, `· ${nWarn} 步定位不唯一`);
       w.style.color = "var(--mu)";
-      w.title = "只找到一个不稳的 css 位置。能跑，但页面改版后这几步可能要重录。";
+      w.title = "这几步的选择器在页面上匹配到多个元素，跑的时候取第一个 —— 可能不是你要的那个。跑错了就删掉重录这步。";
       meta.appendChild(w);
       meta.appendChild(linkSpan("勾选这些", () => {
         flowSel = new Set(flat.filter((it) => stepTarget(it.s).warn).map((it) => it.ref));
@@ -878,7 +878,7 @@
     const hasSubmit = flat.some((it) => it.s.op === "click" && it.s.submit);
     const hasConfirm = flat.some((it) => it.s.op === "confirm");
     const warns = [];
-    if (nWarn) warns.push(`${nWarn} 步只找到脆弱的位置 —— 能跑，页面改版后这几步可能要重录`);
+    if (nWarn) warns.push(`${nWarn} 步定位不唯一（页面上匹配到多个，取第一个）—— 跑错了就删掉重录这步`);
     if (hasSubmit && !hasConfirm) warns.push("全程没有「停下核对」——真正跑时不会给确认机会，建议在提交动作前插一个");
 
     $("#btnFlowSubmit").disabled = issues.length > 0 || !real;
@@ -968,9 +968,9 @@
     // 操作对象
     const tgt = stepTarget(s);
     if (tgt.warn) {
-      const w = el("span", null, "⚠ 位置脆弱" + (tgt.text ? "：" + tgt.text : ""));
+      const w = el("span", null, "⚠ 定位不唯一" + (tgt.text ? "：" + tgt.text : ""));
       w.style.cssText = "color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:40px";
-      w.title = "只抓到一个不稳的 css 位置。这步照样会跑，但页面改版后可能定位不到、需要重录。勾「显示选择器细节」看具体位置。";
+      w.title = "这步的选择器在页面上匹配到多个元素，跑的时候取第一个 —— 可能不是你要的。跑错了删掉重录。勾「显示选择器细节」看具体位置。";
       row.appendChild(w);
     } else if (tgt.text) {
       const t = el("span", null, tgt.text);
@@ -1021,9 +1021,13 @@
       row.appendChild(inp);
     }
 
-    // 右侧：合并 / 上移 / 下移 / 删
+    // 右侧：重录这步 / 合并 / 上移 / 下移 / 删
     const tools = el("span", "row");
     tools.style.cssText = "margin-left:auto;gap:1px;flex:none";
+    if (["click", "fill", "select"].includes(s.op)) {
+      tools.appendChild(iconBtn("重录", "只重录这一步 —— 去浏览器里把这个操作做一遍",
+        () => rerecordStep(n)));
+    }
     if (s.op === "click" && sib[it.idx + 1] && sib[it.idx + 1].op === "click") {
       tools.appendChild(iconBtn("合并", "和下一步合并成一个「选择下拉」", () => {
         const nxt = sib[it.idx + 1];
@@ -1141,6 +1145,39 @@
         },
         { label: "留着" },
       ],
+    });
+  }
+
+  // 只重录一步：不跳转起始页，用户自己把页面停到位、做一次这个操作
+  function rerecordStep(flatIndex) {
+    if (!state.browserConnected) { appendLog("浏览器没连上，先点右上角「启动浏览器并登录」", "warn"); return; }
+    callApi("flow_start_record", state.activeForm, flatIndex).then((r) => {
+      if (!r || !r.ok) { appendLog(`起不来：${r ? r.error : "无法连接后端"}`, "error"); return; }
+      let timer = null, stopped = false;
+      const finish = () => {
+        if (stopped) return;
+        stopped = true;
+        if (timer) clearInterval(timer);
+        callApi("flow_stop_record", state.activeForm).then((res) => {
+          hideModal();
+          if (!res || !res.ok) { appendLog(`没换成：${res ? res.error : ""}`, "error"); return; }
+          appendLog(`第 ${flatIndex + 1} 步已按新录的替换`, "ok");
+          renderFlowCard();
+        });
+      };
+      showModal({
+        title: `重录第 ${flatIndex + 1} 步`,
+        desc: "去浏览器里，把这一步的操作（点这个 / 填这个）做一次，然后回来点「用这一次」。只取你做的第一个操作。",
+        extraHtml: '<div id="recStat" style="padding:12px;color:var(--sub)">等你操作…</div>',
+        buttons: [{ label: "用这一次", primary: true, onClick: finish }, { label: "算了", onClick: finish }],
+      });
+      timer = setInterval(() => {
+        callApi("flow_record_status").then((st) => {
+          const box = $("#recStat");
+          if (box) box.textContent = st && st.steps ? `已记到 ${st.steps} 个操作（取第 1 个）` : "等你操作…";
+          if (st && (st.done || st.lost || st.running === false)) finish();
+        });
+      }, 1000);
     });
   }
 

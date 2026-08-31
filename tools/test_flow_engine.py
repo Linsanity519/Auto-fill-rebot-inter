@@ -87,12 +87,12 @@ def test_validate_catches():
     # 录下来的流程本来就该能复原、能重复，改版会失效是所有前端自动化的通病
     css_only = {"name": "x", "data": {"source": "none"}, "steps": [
         {"op": "click", "pick": [{"css": "div > input"}]}]}
-    ok("只有 css 兜底 → 不算硬伤", FD.validate(css_only) == [], FD.validate(css_only))
-    ok("只有 css 兜底 → 进 warnings", has(FD.warnings(css_only), "脆弱"))
+    ok("非唯一 css → 不算硬伤", FD.validate(css_only) == [], FD.validate(css_only))
+    ok("非唯一 css → 进 warnings", has(FD.warnings(css_only), "定位不唯一"))
 
     anchored = {"name": "x", "data": {"source": "none"}, "steps": [
-        {"op": "click", "pick": [{"css": "#bar > button:nth-of-type(2)", "anchored": True}]}]}
-    ok("css 挂在稳定祖先（anchored）→ 连提醒都没有", FD.warnings(anchored) == [], FD.warnings(anchored))
+        {"op": "click", "pick": [{"css": "#bar > button:nth-child(2)", "anchored": True}]}]}
+    ok("唯一 css（anchored）→ 连提醒都没有", FD.warnings(anchored) == [], FD.warnings(anchored))
 
     unbound = {"name": "x", "data": {"source": "excel", "columns": ["甲"]}, "steps": [
         {"op": "loop_rows", "body": [{"op": "fill", "pick": [{"label": "x"}], "value": "{{乙}}"}]}]}

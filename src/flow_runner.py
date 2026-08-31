@@ -218,10 +218,12 @@ class FlowRunner(StateMixin):
                 if s.get("submit"):
                     self._shot(b.page, rec_i, f"before_submit_{j}")
                 trace.append((op, ff.click(s.get("pick") or [])))
+                ff.settle(hard=bool(s.get("submit")))     # 点完等页面跟上，别急着下一步
             elif op == "fill":
                 trace.append((op, ff.fill(s.get("pick") or [], FD.render(s.get("value", ""), row, src))))
             elif op == "select":
                 trace.append((op, ff.select(s.get("pick") or [], FD.render(s.get("value", ""), row, src))))
+                ff.settle()
             elif op == "press":
                 ff.press(s.get("key", "Enter"), s.get("pick"))
             elif op == "wait_for":

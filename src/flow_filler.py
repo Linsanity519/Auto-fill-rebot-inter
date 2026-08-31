@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 
-from .fill_core import FillError, norm, note, wait_until
+from .fill_core import FillError, norm, note, wait_stable, wait_until
 
 log = logging.getLogger(__name__)
 
@@ -167,8 +167,30 @@ class FlowFiller:
             pass
 
     # ------------------------------------------------ 动作
+    def settle(self, hard: bool = False):
+        """一个动作之后：等页面别再动。录制是「点了就下一步」，重放得等渲染跟上，
+        不然下一步的选择器十有八九「还没出现」。全都有上限，超时就往下走。
+        """
+        try:
+            self.page.wait_for_load_state("domcontentloaded", timeout=3000)
+        except Exception:
+            pass
+        if hard:
+            try:
+                self.page.wait_for_load_state("networkidle", timeout=4000)
+            except Exception:
+                pass
+        try:
+            wait_stable(self.page,
+                        lambda: self.page.evaluate(
+                            "document.body ? document.body.getElementsByTagName('*').length : 0"),
+                        quiet_ms=400, timeout=2500)
+        except Exception:
+            pass
+
     def goto(self, url: str):
         self.page.goto(url, wait_until="domcontentloaded")
+        self.settle(hard=True)
 
     def click(self, pick: list) -> str:
         r = self.resolve(pick)

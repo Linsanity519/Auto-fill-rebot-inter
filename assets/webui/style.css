@@ -332,8 +332,14 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .footer-link:hover { color: var(--pink); }
 .footer-link.has-update { color: var(--pink); font-weight: 700; }
 .footer-link.dim { color: var(--mu); cursor: default; }
-.theme-icon { margin-left: auto; border: 0; background: none; padding: 2px 5px; border-radius: 6px; color: var(--sub); font-size: 13px; line-height: 1; cursor: pointer; }
-.theme-icon:hover { background: var(--pink-light); color: var(--pink); }
+.theme-icon {
+  margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 20px; border: 1px solid var(--bd); background: transparent;
+  border-radius: 6px; color: var(--sub); font-size: 12px; line-height: 1; cursor: pointer;
+  transition: background .1s, color .1s, border-color .1s;
+}
+.theme-icon:hover { background: var(--pink-light); color: var(--pink); border-color: var(--pink); }
+.theme-icon:active { transform: translateY(1px); }
 .update-box { margin: 5px 0 3px; padding: 8px; border: 1px solid var(--pink); border-radius: 8px; background: var(--pink-light); display: flex; flex-direction: column; gap: 6px; }
 .update-box > span { color: var(--pink-text-on-light); font-size: 11px; font-weight: 700; line-height: 1.35; }
 .update-actions { display: flex; gap: 6px; }
