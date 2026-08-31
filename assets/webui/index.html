@@ -204,8 +204,9 @@
             <label class="row" style="gap:5px;color:var(--sub);font-size:11px;cursor:pointer">
               <input type="checkbox" id="flowRaw"> 显示选择器细节
             </label>
-            <button class="btn btn-sm" id="btnFlowTemplate">生成 Excel 模板</button>
-            <button class="btn btn-sm" id="btnFlowSubmit">跑通了 · 送审</button>
+            <!-- 下面两个：试跑通过前都藏着。通过后才谈「填模板」和「这套对不对」 -->
+            <button class="btn btn-sm" id="btnFlowTemplate" style="display:none">生成 Excel 模板</button>
+            <button class="btn btn-sm" id="btnFlowSubmit" style="display:none">这套录制对不对？</button>
           </div>
 
           <div class="row" style="gap:8px;color:var(--mu);font-size:11px" id="flowMeta"></div>

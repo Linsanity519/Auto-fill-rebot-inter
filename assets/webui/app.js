@@ -881,20 +881,26 @@
     if (nWarn) warns.push(`${nWarn} 步定位不唯一（页面上匹配到多个，取第一个）—— 跑错了就删掉重录这步`);
     if (hasSubmit && !hasConfirm) warns.push("全程没有「停下核对」——真正跑时不会给确认机会，建议在提交动作前插一个");
 
-    $("#btnFlowSubmit").disabled = issues.length > 0 || !real;
     $("#btnFlowTrial").disabled = issues.length > 0 || !real;
+    // 动线：录 → 编辑 → 本地试跑通过 → 才谈「这套对不对 / 填模板 / 上传跑」
+    const eatsExcel = nCol > 0 || $("#flowLoop").checked;
+    const submitted = f.status === "submitted" || f.status === "adopted";
+    $("#btnFlowSubmit").style.display = (tested && !submitted) ? "" : "none";
+    $("#btnFlowTemplate").style.display = (tested && eatsExcel) ? "" : "none";
+    $("#btnFlowSubmit").disabled = issues.length > 0;
 
     const parts = [];
     if (issues.length) parts.push('<span style="color:var(--bad)">' + issues.map((x) => "· " + escapeHtml(x)).join("<br>") + "</span>");
     if (warns.length) parts.push('<span style="color:var(--mu)">⚠ ' + warns.map(escapeHtml).join("<br>⚠ ") + "</span>");
-    if (!parts.length && real) parts.push('<span style="color:var(--ok)">看着能跑，点「本地试跑」走一遍</span>');
+    if (!parts.length && real && !tested) parts.push('<span style="color:var(--ok)">看着能跑，点「本地试跑」走一遍</span>');
     $("#flowIssues").innerHTML = parts.join("<br>");
 
     const gate = $("#flowGate");
     gate.textContent = !real
       ? "还没录到实际操作（点击 / 输入 / 选择）—— 点「重新录制」去浏览器里走一遍。"
-      : !tested ? "「核对」「执行」两步在本地试跑通过后自动打开。"
-      : "";
+      : !tested ? "先「本地试跑」跑一遍、确认这套操作做的就是你要的事；通过之后才需要填模板、上传跑。"
+      : eatsExcel ? "已确认。「生成 Excel 模板」→ 填数据 → 到「核对 / 执行」批量跑。"
+      : "已确认。到「核对 / 执行」就能跑。";
     $("#dataSourceCard").classList.toggle("hidden", hasFlow() && !needsExcel());
 
     const box = $("#flowSteps");
@@ -1284,23 +1290,41 @@
         if (r && r.ok) callApi("make_template", state.activeForm, null).then(handleTemplateResult);
       });
     });
-    $("#btnFlowSubmit").addEventListener("click", () => {
-      flowSave().then((r) => {
-        if (!r || !r.ok) return;
-        if (r.issues && r.issues.length) { appendLog("还有问题没解决，先看上面的提示", "warn"); return; }
-        callApi("flow_mark_tested", state.activeForm).then(() => {
-          appendLog("正在送审…", "info");
-          callApi("flow_submit", state.activeForm).then((s) => {
-            if (s && s.ok) {
-              appendLog(`已送审（${s.where === "github" ? "GitHub 分支" : "企微群"}）`
-                + (s.url ? "：" + s.url : ""), "ok");
-              renderFlowCard();
-            } else {
-              appendLog(`送审没成功：${s ? s.error : "无法连接后端"}`, "error");
-            }
-          });
-        });
-      });
+    $("#btnFlowSubmit").addEventListener("click", () => flowConfirmDialog());
+  }
+
+  // 试跑通过后问一句：这套录下来的操作，做的是不是你要的事。
+  //   是 → 悄悄收下 + 送审；否 → 引导重录 / 回去编辑。用户不用关心「送审」这个词。
+  function flowConfirmDialog() {
+    const nm = state.activeForm;
+    showModal({
+      title: "这套录制对不对？",
+      desc: `刚才「${nm}」跑了一遍没报错。它做的这一串操作，就是你想要工具替你重复的那件事吗？`,
+      buttons: [
+        {
+          label: "对，就是它", primary: true, onClick: () => {
+            callApi("flow_mark_tested", nm).then(() => {
+              callApi("flow_submit", nm).then((s) => {
+                if (s && s.ok) appendLog("已收下 —— 也发给维护者过一眼，通过后会转成正式配置类型", "ok");
+                else appendLog(`收下了，但没发出去：${s ? s.error : "无法连接后端"}（不影响你自己用）`, "warn");
+                renderFlowCard();
+              });
+            });
+          },
+        },
+        {
+          label: "不对，要改", onClick: () => {
+            showModal({
+              title: "去改哪儿？",
+              desc: "把不对的地方改掉，改完再「本地试跑」一遍。",
+              buttons: [
+                { label: "重录整套", onClick: () => openFlowRecord(nm) },
+                { label: "回去逐步编辑", primary: true, onClick: () => { state.flowTrial = false; goToStep("prepare"); } },
+              ],
+            });
+          },
+        },
+      ],
     });
   }
 
@@ -4059,15 +4083,14 @@
       state.usage = null;      // 跑完有新数据了，统计缓存作废
       state.running = false;
       setRunButtons(false);
-      // 自制配置类型：一次没有失败的（逐步/空跑）试跑 = 本地跑通了，收编成「待审核」
-      if (hasFlow() && state.flow && summary && !summary.misaligned
-          && !(summary.failed && summary.failed.length)) {
-        callApi("flow_mark_tested", state.activeForm).then(() => {
-          appendLog("本地跑通，已标记「本地已跑通 · 待审核」—— 现在「核对」「执行」两步也开了", "ok");
-          renderFlowCard();
-        });
-      }
+      // 自制配置类型：试跑没报错 → 不自动收编，问一句「这套对不对」，用户点是才收
+      const flowOk = hasFlow() && state.flow && state.flowTrial && summary
+        && !summary.misaligned && !(summary.failed && summary.failed.length);
       state.flowTrial = false;
+      if (flowOk) { setTimeout(flowConfirmDialog, 300); return; }
+      if (hasFlow() && state.flow && summary && summary.failed && summary.failed.length) {
+        appendLog("试跑有步骤失败 —— 上面日志里那条 [setup] 失败点开看，删掉 / 重录那步再试", "warn");
+      }
       if (!summary) return;
       if (summary.misaligned) {
         appendLog("这次跑的范围和结果对不上号（常见原因：没勾「跳过已成功的」），失败清单这次没法逐行列出，请看运行日志里的报错", "warn");
