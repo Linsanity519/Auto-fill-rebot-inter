@@ -41,8 +41,8 @@ from .paths import user_path
 
 log = logging.getLogger(__name__)
 
-OPS = {"goto", "click", "fill", "select", "search_pick", "pick_item", "press",
-       "wait_for", "wait_text", "assert", "screenshot", "confirm", "loop_rows"}
+OPS = {"goto", "click", "fill", "select", "search_pick", "pick_item", "check",
+       "press", "wait_for", "wait_text", "assert", "screenshot", "confirm", "loop_rows"}
 PICK_KEYS = {"text", "role", "name", "label", "attr", "css"}
 
 _VAR = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
@@ -214,16 +214,17 @@ def validate(doc: dict, rows: list[dict] | None = None) -> list[str]:
             if op not in OPS:
                 issues.append(f"{where}：不认识的动作「{op}」")
                 continue
-            if op in ("click", "fill", "select", "search_pick", "pick_item", "wait_for"):
+            if op in ("click", "fill", "select", "search_pick", "pick_item", "check", "wait_for"):
                 pick = s.get("pick") or []
                 field = str(s.get("field") or "")
-                if (not isinstance(pick, list) or not pick) and not field:
-                    # pick_item / select 靠 field 也能定位，没 pick 但有 field 就不算硬伤
+                # check 靠可见文字（value）也能定位；select/pick_item 靠 field 也能
+                if (not isinstance(pick, list) or not pick) and not field \
+                        and not (op == "check" and str(s.get("value", ""))):
                     issues.append(f"{where}：{op} 既没有选择器（pick）也没有字段名（field）")
                 elif pick and not any([k for k in c if k in PICK_KEYS] for c in pick):
                     issues.append(f"{where}：选择器候选都是空的 / 不认识")
-            if op in ("fill", "select", "search_pick", "pick_item") and not str(s.get("value", "")):
-                issues.append(f"{where}：{op} 没有要{'填' if op == 'fill' else '选'}的值")
+            if op in ("fill", "select", "search_pick", "pick_item", "check") and not str(s.get("value", "")):
+                issues.append(f"{where}：{op} 没有要{'填' if op == 'fill' else '勾' if op == 'check' else '选'}的值")
             if op == "goto" and not str(s.get("url", "")):
                 issues.append(f"{where}：goto 没有 url")
             if op == "wait_text" and not str(s.get("text", "")):
@@ -270,7 +271,7 @@ def warnings(doc: dict) -> list[str]:
                 n_confirm += 1
             if op == "click" and s.get("submit"):
                 n_submit += 1
-            if op in ("click", "fill", "select", "search_pick", "pick_item", "wait_for"):
+            if op in ("click", "fill", "select", "search_pick", "pick_item", "check", "wait_for"):
                 pick = s.get("pick") or []
                 kinds, anchored = [], False
                 for c in pick:

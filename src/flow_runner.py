@@ -197,7 +197,7 @@ class FlowRunner(StateMixin):
             # 逐步试跑：操作类的每一步，先高亮、再停下等人。confirm 步本来就会停，不重复问。
             if (self._step_mode and not self._step_auto
                     and op in ("goto", "click", "fill", "select", "search_pick",
-                               "pick_item", "press", "wait_for")):
+                               "pick_item", "check", "press", "wait_for")):
                 act = self._step_prompt(ff, s, j, label, row, src)
                 if act == "stop":
                     self._stop = True
@@ -236,6 +236,12 @@ class FlowRunner(StateMixin):
                 trace.append((op, ff.pick_item(s.get("pick") or [],
                                                FD.render(s.get("value", ""), row, src),
                                                field=s.get("field", ""))))
+                ff.settle()
+            elif op == "check":
+                trace.append((op, ff.check(s.get("pick") or [],
+                                           FD.render(s.get("value", ""), row, src),
+                                           checked=s.get("checked", True),
+                                           field=s.get("field", ""))))
                 ff.settle()
             elif op == "press":
                 ff.press(s.get("key", "Enter"), s.get("pick"))
@@ -289,8 +295,8 @@ class FlowRunner(StateMixin):
                 pass
 
     _VERB = {"goto": "打开", "click": "点击", "fill": "填写", "select": "选择",
-             "search_pick": "搜索并选", "pick_item": "选中行", "press": "按键",
-             "wait_for": "等元素"}
+             "search_pick": "搜索并选", "pick_item": "选中行", "check": "勾选",
+             "press": "按键", "wait_for": "等元素"}
 
     @classmethod
     def _step_desc(cls, s: dict, j: int, row: dict, src: str) -> str:
@@ -301,6 +307,8 @@ class FlowRunner(StateMixin):
             what = FD.render(s.get("url", ""), row, src)
         elif op in ("select", "pick_item"):
             what = (f"在「{field}」里 " if field else "") + f"选「{val}」"
+        elif op == "check":
+            what = (f"「{field}」" if field else "") + ("勾" if s.get("checked", True) else "取消勾") + f"「{val}」"
         elif op == "search_pick":
             q = FD.render(s.get("query", "") or val, row, src)
             what = (f"在「{field}」里 " if field else "") + f"搜「{q}」→ 选「{val}」"

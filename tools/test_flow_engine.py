@@ -173,9 +173,20 @@ def test_semantic_ops():
          "value": "运营白名单251203", "pick": [{"label": "人群分组ID"}]},
         {"op": "pick_item", "field": "投放展示位置", "value": "播放页催费条",
          "pick": [{"css": "table", "anchored": True}]},
+        {"op": "check", "field": "生效平台", "value": "Android", "checked": True},
+        {"op": "check", "field": "生效内容", "value": "全部", "checked": True},
     ]}
     ok("语义步骤都在 OPS 里、结构没硬伤", FD.validate(good) == [], FD.validate(good))
     ok("select 有 field 就不报「没有选择器」", not has(FD.validate(good), "没有选择器"))
+    ok("check 靠 value 也能定位，没 pick 没 field 也不算硬伤",
+       FD.validate({"name": "x", "data": {"source": "none"},
+                    "steps": [{"op": "check", "value": "Android", "checked": True}]}) == [])
+    ok("check 没 value → 硬伤",
+       has(FD.validate({"name": "x", "data": {"source": "none"},
+                        "steps": [{"op": "check", "field": "生效平台"}]}), "没有要勾的值"))
+    from src.flow_runner import FlowRunner
+    dc = FlowRunner._step_desc({"op": "check", "field": "生效平台", "value": "Android", "checked": True}, 5, {}, "")
+    ok("check 描述：勾「Android」", "勾「Android」" in dc and "生效平台" in dc, dc)
 
     noval = {"name": "x", "data": {"source": "none"}, "steps": [
         {"op": "select", "field": "人群选组"}]}

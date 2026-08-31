@@ -768,11 +768,12 @@
   // 大白话动词。录到的 op 是英文，界面上一律显示这个
   const FLOW_VERB = {
     goto: "打开页面", click: "点击", fill: "填写", select: "选择",
-    search_pick: "搜索并选", pick_item: "选中行", press: "按键",
+    search_pick: "搜索并选", pick_item: "选中行", check: "勾选", press: "按键",
     wait_for: "等元素", wait_text: "等文字", assert: "校验", screenshot: "截图",
     confirm: "停下核对", loop_rows: "按表格逐行",
   };
-  const VALUE_OPS = ["fill", "select", "search_pick", "pick_item"];   // 有「值」可编辑 / 可绑表格的
+  const VALUE_OPS = ["fill", "select", "search_pick", "pick_item", "check"];   // 有「值」可编辑 / 可绑表格的
+  const REC_OPS = ["click", "fill", "select", "search_pick", "pick_item", "check"];  // 能「重录这步」的
   // 「＋加一步」能加的：录制器吐不出来、得手动补的那几种
   const FLOW_INSERT = [
     ["confirm", "停下让人核对", () => ({ op: "confirm", note: "核对一眼再继续" })],
@@ -785,7 +786,7 @@
   function flowHasRealSteps(f) {
     let yes = false;
     flattenSteps((f && f.steps) || []).forEach((it) => {
-      if (["click", "fill", "select", "search_pick", "pick_item"].includes(it.s.op)) yes = true;
+      if (REC_OPS.includes(it.s.op)) yes = true;
     });
     return yes;
   }
@@ -810,12 +811,14 @@
     if (s.op === "press") return { text: "键 " + (s.key || "Enter"), raw: "", warn: false };
     if (s.op === "screenshot") return { text: "存到结果目录", raw: "", warn: false };
     // 语义步：主键是「在哪个字段里选了什么」，DOM 位置只是缓存
-    if (["select", "search_pick", "pick_item"].includes(s.op)) {
+    if (["select", "search_pick", "pick_item", "check"].includes(s.op)) {
       const f = s.field ? `「${s.field}」里 ` : "";
-      const v = s.op === "search_pick" && s.query && s.query !== s.value
-        ? `搜「${s.query}」→ 选「${s.value || ""}」` : `选「${s.value || ""}」`;
+      let v;
+      if (s.op === "check") v = (s.checked === false ? "取消勾「" : "勾「") + (s.value || "") + "」";
+      else if (s.op === "search_pick" && s.query && s.query !== s.value) v = `搜「${s.query}」→ 选「${s.value || ""}」`;
+      else v = `选「${s.value || ""}」`;
       return { text: f + v, raw: (s.pick || []).map((p) => Object.keys(p)[0] + "=" + p[Object.keys(p)[0]]).join("  |  "),
-        warn: !s.field && !(s.pick || []).some((p) => p.text || p.label || p.attr || (p.css && p.anchored)) };
+        warn: !s.field && !(s.value) && !(s.pick || []).some((p) => p.text || p.label || p.attr || (p.css && p.anchored)) };
     }
     const pick = s.pick || [];
     // 只有「定位不唯一」才提示 —— 一条当场验证过唯一的 css（anchored）就是能用的，
@@ -1005,6 +1008,16 @@
       row.appendChild(inp);
     };
     if (VALUE_OPS.includes(s.op)) {
+      // check：勾 / 取消勾 切换
+      if (s.op === "check") {
+        const on = s.checked !== false;
+        const tg = el("span", null, on ? "☑ 勾上" : "☐ 取消");
+        tg.style.cssText = "flex:none;font-size:11px;border-radius:5px;padding:1px 6px;cursor:pointer;"
+          + (on ? "color:#fff;background:var(--pink)" : "color:var(--sub);background:var(--bd)");
+        tg.title = "切换：勾上 / 取消勾";
+        tg.addEventListener("click", () => { it.ref.checked = !on; repaint(); });
+        row.appendChild(tg);
+      }
       // search_pick：额外一个「搜索词」小框（只为触发搜索，可留空 = 用值本身）
       if (s.op === "search_pick") {
         const q = el("input", "field");
@@ -1030,7 +1043,8 @@
         + (colName ? ";color:var(--pink)" : "");
       inp.value = colName || (s.value || "");
       inp.placeholder = colName ? "表格里这一列叫什么"
-        : (s.op === "fill" ? "要填的固定值" : "要选中的那一项（按可见文字）");
+        : (s.op === "fill" ? "要填的固定值"
+          : s.op === "check" ? "勾选项的文字（如 Android）" : "要选中的那一项（按可见文字）");
       inp.addEventListener("change", () => {
         it.ref.value = colName ? "{{" + inp.value.trim() + "}}" : inp.value;
         flowSave(true);
@@ -1050,7 +1064,7 @@
     // 右侧：重录这步 / 合并 / 上移 / 下移 / 删
     const tools = el("span", "row");
     tools.style.cssText = "margin-left:auto;gap:1px;flex:none";
-    if (["click", "fill", "select", "search_pick", "pick_item"].includes(s.op)) {
+    if (REC_OPS.includes(s.op)) {
       tools.appendChild(iconBtn("重录", "只重录这一步 —— 去浏览器里把这个操作做一遍",
         () => rerecordStep(n)));
     }

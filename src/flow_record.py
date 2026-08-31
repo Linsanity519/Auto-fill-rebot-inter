@@ -93,6 +93,25 @@ _INJECT = r"""
     }
     return '';
   }
+  // 勾选框 / 单选「这一项」的文字（「Android」「指定人群」）—— 不是它所在组的名字
+  function checkLabel(el){
+    if (el.id){
+      try { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) return clean(l.textContent); } catch(e){}
+    }
+    const wrap = el.closest('label');
+    if (wrap){ const t = clean(wrap.textContent); if (t) return t; }
+    for (const dir of ['nextSibling', 'previousSibling']){
+      let sib = el[dir];
+      while (sib){
+        if (sib.nodeType === 3){ const t = clean(sib.textContent); if (t) return t; }
+        else if (sib.nodeType === 1){ const t = clean(sib.textContent); if (t && t.length <= 24) return t; break; }
+        sib = sib[dir];
+      }
+    }
+    const p = el.parentElement;
+    if (p){ const t = clean(p.textContent); if (t && t.length <= 24) return t; }
+    return '';
+  }
   // 这个元素属于哪个「字段 / 区块」—— 「投放展示位置」「人群选组」「人群分组ID」这种。
   // 重放靠它先定位到对的那一块，再在块里按文字挑，比死记 DOM 位置稳。
   const LABELISH_PARTS = ["label", "legend", ".ant-form-item-label",
@@ -269,6 +288,12 @@ _INJECT = r"""
     if (!it) return;
     if (it.getAttribute && it.getAttribute('role') === 'option'){ emitPick('select', triggerFor(it) || it, visibleText(it)); return; }
 
+    // 勾选框 / 单选：交给 change 事件记成语义化的 check（记「勾了 Android」而不是「点了这个 span」）
+    const box = (it.matches && it.matches("input[type='checkbox'],input[type='radio']")) ? it
+      : (it.querySelector && it.querySelector("input[type='checkbox'],input[type='radio']"))
+      || (it.tagName === 'LABEL' && it.control && /^(checkbox|radio)$/.test(it.control.type) ? it.control : null);
+    if (box) return;
+
     // B) 点在结果表格 / 列表的某一行 —— 记「在这里选文字是『xxx』的那行」
     const tr = it.closest && it.closest('table tr, [role="row"], ul>li, [class*="list"]>[class*="item"]');
     if (tr && !inPopup(tr) && (tr.querySelector('td,[role="cell"]') || tr.tagName === 'LI')){
@@ -295,8 +320,12 @@ _INJECT = r"""
     if (el.tagName === 'SELECT'){
       const o = el.options[el.selectedIndex];
       emitPick('select', el, clean(o && o.text));
+    } else if (el.matches && el.matches("input[type='checkbox'],input[type='radio']")){
+      // 记「勾了 / 取消了『Android』」，不是「点了这个 input」
+      const lbl = clean(checkLabel(el));
+      window.__flowRec({ kind: 'check', pick: pickFor(el), field: fieldOf(el) || '',
+        value: lbl, checked: !!el.checked, seen: lbl });
     } else if (el.matches && el.matches('input,textarea')){
-      if (el.type === 'checkbox' || el.type === 'radio') return;
       // 搜索框：记一下，Python 侧若紧跟着一次浮层选择，会并成一步 search_pick
       if (triggerFor(el) || /search|autocomplete|combobox/i.test((el.getAttribute && el.getAttribute('class')) || '')
           || el.getAttribute('role') === 'searchbox')

@@ -299,32 +299,94 @@ class FlowFiller:
         self._pick_option(value)
         return r.how
 
+    def _search_box(self, el):
+        """控件本身不是输入框时，找它里面 / 附近的那个搜索输入框。"""
+        try:
+            if el.evaluate("e => e.tagName") in ("INPUT", "TEXTAREA"):
+                return el
+        except Exception:
+            pass
+        for sel in ("input:not([type=hidden]):not([type=checkbox]):not([type=radio])",
+                    "textarea", "[contenteditable='true']"):
+            try:
+                inner = el.locator(sel).first
+                if inner.count():
+                    return inner
+            except Exception:
+                pass
+        return el
+
     def search_pick(self, pick: list, query: str, value: str, field: str = "") -> str:
         """搜索框打字 + 从结果里挑。query 只为触发（远程）搜索，真正的目标是 value。"""
         r = self._control(pick, field)
         el = r.locator
+        # 打开下拉 / 聚焦
         try:
             el.click()
         except Exception:
-            pass
-        box = el
-        try:
-            if el.evaluate("e => e.tagName") not in ("INPUT", "TEXTAREA"):
-                inner = el.locator("input, textarea").first
-                if inner.count():
-                    box = inner
-        except Exception:
-            pass
+            try:
+                el.evaluate("e => e.click()")
+            except Exception:
+                pass
+        self.page.wait_for_timeout(200)
+        box = self._search_box(el)
         typed = str(query or value)
+        # ⚠ 远程搜索靠真实 keyup/input 事件 —— .fill() 很多框架不认。先清空再逐字敲。
         try:
-            box.fill("")
-            box.type(typed, delay=20)
-        except Exception:
             box.click()
-            self.page.keyboard.type(typed, delay=20)
-        self.page.wait_for_timeout(450)
+        except Exception:
+            pass
+        for combo in ("Control+A", "Meta+A"):
+            try:
+                box.press(combo)
+                box.press("Delete")
+                break
+            except Exception:
+                pass
+        try:
+            box.type(typed, delay=50)
+        except Exception:
+            self.page.keyboard.type(typed, delay=50)
+        # 等目标项加载出来（远程搜索有网络往返，给足时间）
+        want = self.page.get_by_text(str(value), exact=False)
+        if not wait_until(self.page, lambda: want.count() > 0, max(self.timeout, 8000)):
+            raise FillError(f"在「{field or '搜索框'}」里搜「{typed}」之后，列表里没等到「{value}」"
+                            f" —— 搜索词对不对？")
         self._pick_option(value)
         return r.how
+
+    def check(self, pick: list, value: str, checked: bool = True, field: str = "") -> str:
+        """勾 / 取消勾一个复选框或单选。value = 那个选项的可见文字（「Android」「指定人群」）。
+        按可见文字 / 无障碍名定位，不认死 DOM 位置 —— 这类多选项框改版最频繁。"""
+        label = str(value)
+        rx = re.compile(rf"^\s*{re.escape(label)}\s*$")
+        hit = None
+        for role in ("checkbox", "radio"):
+            try:
+                loc = self.page.get_by_role(role, name=label)
+                n = loc.count()
+            except Exception:
+                n = 0
+            if n == 1 or (n > 1 and role == "radio"):
+                hit = loc.first
+                break
+        if hit is not None:
+            try:
+                cur = hit.is_checked()
+            except Exception:
+                cur = None
+            if cur is None or bool(cur) != bool(checked):
+                try:
+                    hit.click()
+                except Exception:
+                    self.page.get_by_text(rx).first.click()   # 真实 input 常被样式盖住，点它的文字
+            return "role"
+        # 退到「点可见文字」——很多后台可点区域就是那行字
+        t = self.page.get_by_text(rx)
+        if not wait_until(self.page, lambda: t.count() > 0, 3000):
+            raise FillError(f"找不到勾选项「{label}」" + (f"（在「{field}」下）" if field else ""))
+        t.first.click()
+        return "text"
 
     def pick_item(self, pick: list, value: str, field: str = "") -> str:
         """点结果表格 / 列表里「文字是 value 的那一行」。"""
