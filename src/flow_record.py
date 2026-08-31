@@ -394,6 +394,7 @@ _INJECT = r"""
     });
     const btnDone = mkBtn('完成', '#e34d82', () => {
       stat.textContent = '正在收尾…';
+      window.__flowRecStopped = true;      // 立刻叫停「浮条自愈」，别让它 1 秒后又冒出来
       ctl('done', '');
       setTimeout(() => { const el = document.getElementById('__flowToolbar'); if (el) el.remove(); }, 400);
     });
@@ -402,15 +403,26 @@ _INJECT = r"""
     document.body.appendChild(bar);
   }
   // 只负责「浮条在不在」，不碰监听器（重复挂监听器会让每个操作记两遍）。
-  // Python 侧录制循环每隔一两秒也会 evaluate 一次这个函数兜底。
-  window.__flowEnsureBar = toolbar;
+  function ensureBar(){
+    if (window.__flowRecStopped || window.__flowRecDone) return;   // 已经完成 / 停了，别再冒
+    if (!document.getElementById('__flowToolbar')) toolbar();
+  }
+  window.__flowEnsureBar = ensureBar;
   toolbar();
+  // 录制结束时 Python 侧 evaluate 调它：停掉自愈定时器 + observer + 移除浮条，
+  // 不然这几个 orphan 定时器会在会话结束后把浮条再画出来（就是「完成后又弹一个框」）。
+  window.__flowRecTeardown = function(){
+    window.__flowRecStopped = true;
+    try { (window.__flowRecTimers || []).forEach(clearInterval); } catch(e){}
+    try { if (window.__flowRecObs) window.__flowRecObs.disconnect(); } catch(e){}
+    const b = document.getElementById('__flowToolbar'); if (b) b.remove();
+  };
+  window.__flowRecTimers = window.__flowRecTimers || [];
   try {
-    new MutationObserver(() => { if (!document.getElementById('__flowToolbar')) toolbar(); })
-      .observe(document.documentElement, { childList: true, subtree: true });
+    window.__flowRecObs = new MutationObserver(ensureBar);
+    window.__flowRecObs.observe(document.documentElement, { childList: true, subtree: true });
   } catch (e){}
-  // SPA 整片重渲染时 MutationObserver 偶尔跟不上，再加一个定时兜底
-  try { setInterval(() => { if (!window.__flowRecDone && !document.getElementById('__flowToolbar')) toolbar(); }, 1000); } catch (e){}
+  try { window.__flowRecTimers.push(setInterval(ensureBar, 1000)); } catch (e){}
 })();
 """
 
@@ -440,7 +452,10 @@ class FlowRecorder:
         self.page.add_init_script(_INJECT)
         self.page.on("framenavigated", self._on_nav)
         try:
-            self.page.evaluate("() => { window.__flowRecInstalled = false; window.__flowRecDone = false; }")
+            # 上一次录制留下的 teardown / 定时器先清掉，再重置标志，最后重新注入
+            self.page.evaluate("() => { try { window.__flowRecTeardown && window.__flowRecTeardown(); } catch(e){} "
+                               "window.__flowRecInstalled = false; window.__flowRecDone = false; "
+                               "window.__flowRecStopped = false; }")
             self.page.evaluate(_INJECT)
         except Exception:
             log.warning("注入录制脚本失败（当前页），换页后会自动重试", exc_info=True)
@@ -453,8 +468,10 @@ class FlowRecorder:
         except Exception:
             pass
         try:
-            self.page.evaluate("() => { const b = document.getElementById('__flowToolbar'); if (b) b.remove(); "
-                               "window.__flowRecInstalled = false; window.__flowRecDone = false; }")
+            # teardown 会停掉页面里的自愈定时器 + observer + 移除浮条。
+            # ⚠ 不重置 __flowRecStopped —— 留着它，万一有 orphan 定时器也不会再画浮条。
+            self.page.evaluate("() => { try { window.__flowRecTeardown && window.__flowRecTeardown(); } catch(e){} "
+                               "window.__flowRecInstalled = false; }")
         except Exception:
             pass
         return self.build()
