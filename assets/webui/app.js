@@ -4050,7 +4050,7 @@
       if (!picked.length) chosen.appendChild(el("span", "spick-empty", "还没选 —— 一个都不选就是这一段不要"));
       const badgeOn = tieHasBadge(values);
       picked.forEach((o, i) => {
-        const chip = el("div", "spick");
+        const chip = el("div", "spick-tag");
         chip.appendChild(el("i", "spick-no", String(i + 1)));
         chip.appendChild(el("span", null, o));
         if (badgeOn) chip.appendChild(tieBadge(o, values, fire));
