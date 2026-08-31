@@ -288,11 +288,27 @@ _INJECT = r"""
     if (!it) return;
     if (it.getAttribute && it.getAttribute('role') === 'option'){ emitPick('select', triggerFor(it) || it, visibleText(it)); return; }
 
-    // 勾选框 / 单选：交给 change 事件记成语义化的 check（记「勾了 Android」而不是「点了这个 span」）
-    const box = (it.matches && it.matches("input[type='checkbox'],input[type='radio']")) ? it
-      : (it.querySelector && it.querySelector("input[type='checkbox'],input[type='radio']"))
-      || (it.tagName === 'LABEL' && it.control && /^(checkbox|radio)$/.test(it.control.type) ? it.control : null);
-    if (box) return;
+    // 勾选框 / 单选：就地记成语义化的 check（「勾了 Android」）。**不指望 change** ——
+    // 很多组件库点可见 span 时根本不派发原生 change 事件（用户反馈：完全没记上）。
+    const cbInput =
+      (it.matches && it.matches("input[type='checkbox'],input[type='radio']") ? it : null)
+      || (it.tagName === 'LABEL' && it.control && /^(checkbox|radio)$/.test(it.control.type) ? it.control : null)
+      || (it.querySelector && it.querySelector("input[type='checkbox'],input[type='radio']"))
+      || (function(){
+            const w = el.closest && el.closest("[class*='checkbox'],[class*='Checkbox'],[class*='radio'],[class*='Radio']");
+            return w ? w.querySelector("input[type='checkbox'],input[type='radio']") : null;
+          })();
+    if (cbInput){
+      // 状态可能在这次 click 之后才翻，延一拍再读
+      setTimeout(() => {
+        if (window.__flowRecPaused) return;
+        const lbl = clean(checkLabel(cbInput)) || clean(visibleText(it));
+        window.__flowRec({ kind: 'check', pick: pickFor(cbInput),
+          field: fieldOf(cbInput) || fieldOf(it) || '',
+          value: lbl, checked: !!cbInput.checked, seen: lbl });
+      }, 0);
+      return;
+    }
 
     // B) 点在结果表格 / 列表的某一行 —— 记「在这里选文字是『xxx』的那行」
     const tr = it.closest && it.closest('table tr, [role="row"], ul>li, [class*="list"]>[class*="item"]');
@@ -578,6 +594,17 @@ class FlowRecorder:
         elif kind == "pick_item":
             self.steps.append({"op": "pick_item", "pick": pick, "value": value,
                                "seen": seen, "field": field})
+        elif kind == "check":
+            step = {"op": "check", "pick": pick, "value": value,
+                    "checked": bool(ev.get("checked")), "seen": seen, "field": field}
+            # 同一个勾选项一次点击会来好几发（label + input 合成 click + change）——
+            #   fp 去抖挡掉大部分；漏网的按「同 field 同 value」覆盖，不叠。
+            if self.steps and self.steps[-1].get("op") == "check" \
+                    and self.steps[-1].get("value") == value \
+                    and self.steps[-1].get("field") == field:
+                self.steps[-1] = step
+            else:
+                self.steps.append(step)
         elif kind == "press":
             self.steps.append({"op": "press", "key": ev.get("key", "Enter")})
 
