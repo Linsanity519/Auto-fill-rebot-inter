@@ -5,32 +5,30 @@
 
 ## 步骤词汇表
 
-参照 Automa 的 block 集，砍到这个场景够用：
+  goto         打开 / 跳转页面
+  click        点一个元素（submit:true 的是提交动作，空跑时跳过）
+  fill         往输入框写值
+  select       选下拉（原生 <select> 或「点开下拉 + 点浮层里某项」）
+  search_pick  搜索框打字（query）+ 从结果里挑（value）
+  pick_item    点结果表格 / 列表里「文字是 value 的那一行」
+  press        敲键（Enter / Escape）
+  wait_for / wait_text / assert / screenshot / confirm / loop_rows  同前
 
-  goto        打开 / 跳转页面
-  click       点一个元素（submit:true 的是提交动作，空跑时跳过）
-  fill        往输入框写值
-  select      选下拉
-  press       敲键（Enter / Escape）
-  wait_for    等某个元素出现
-  wait_text   等某段文字出现
-  assert      校验：某文字在 / 某元素没了 / URL 匹配
-  screenshot  截一张进结果目录
-  confirm     停下，等人在浏览器里核对后继续
-  loop_rows   把 body 里的步骤按 Excel 每行跑一遍，{{列名}} 绑进去
+## 「记意图」不是「记 DOM 位置」
+
+每步都带一个 **field**（这一步在哪个字段 / 区块下 —— 「投放展示位置」「人群选组」
+「人群分组ID」）。重放先按 field 文字定位到那一块，再在块里按可见文字挑；
+选择器 pick 只当命中最快的缓存。对齐 testRigor / Stagehand / UiPath 语义选择器的思路。
 
 ## 选择器候选（pick）
 
-一个 pick 是一串候选，跑的时候按顺序试，命中哪个记哪个。稳→脆：
+一个 pick 是一串候选，跑的时候按顺序试。当场验证过唯一的 css 带 `anchored: true`，
+不算脆；其它顺序稳→脆：
 
-  {"text": "新建"}                 元素可见文字（穿透子节点）
-  {"role": "button", "name": "新建"}  无障碍名
-  {"label": "单元名称"}            label 文字 → 它管的字段块 → 块里的控件
-  {"attr": "data-testid=submit"}   稳定属性 / id
-  {"css": "form > div:nth-child(3) input"}   ⚠ 只当最后兜底
+  {"text": "新建"} / {"role": "button", "name": "新建"} / {"label": "单元名称"}
+  {"attr": "data-testid=submit"} / {"css": "...", "anchored": true}
 
-⚠ 硬约定 #2：不用编译哈希类名。录制器只把 css 当兜底，validate 对
-  「一步只有 css 候选」标黄。
+select / search_pick / pick_item **有 field 就能定位**，pick 可以缺。
 """
 from __future__ import annotations
 
@@ -43,8 +41,8 @@ from .paths import user_path
 
 log = logging.getLogger(__name__)
 
-OPS = {"goto", "click", "fill", "select", "press", "wait_for", "wait_text",
-       "assert", "screenshot", "confirm", "loop_rows"}
+OPS = {"goto", "click", "fill", "select", "search_pick", "pick_item", "press",
+       "wait_for", "wait_text", "assert", "screenshot", "confirm", "loop_rows"}
 PICK_KEYS = {"text", "role", "name", "label", "attr", "css"}
 
 _VAR = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
@@ -165,7 +163,7 @@ def all_refs(doc: dict) -> set[str]:
 
     def walk(steps):
         for s in steps or []:
-            for k in ("url", "value", "text", "note"):
+            for k in ("url", "value", "text", "note", "query"):
                 seen.update(refs_in(s.get(k)))
             if s.get("op") == "loop_rows":
                 walk(s.get("body"))
@@ -216,14 +214,16 @@ def validate(doc: dict, rows: list[dict] | None = None) -> list[str]:
             if op not in OPS:
                 issues.append(f"{where}：不认识的动作「{op}」")
                 continue
-            if op in ("click", "fill", "select", "wait_for"):
+            if op in ("click", "fill", "select", "search_pick", "pick_item", "wait_for"):
                 pick = s.get("pick") or []
-                if not isinstance(pick, list) or not pick:
-                    issues.append(f"{where}：{op} 没有选择器（pick）")
-                elif not any([k for k in c if k in PICK_KEYS] for c in pick):
+                field = str(s.get("field") or "")
+                if (not isinstance(pick, list) or not pick) and not field:
+                    # pick_item / select 靠 field 也能定位，没 pick 但有 field 就不算硬伤
+                    issues.append(f"{where}：{op} 既没有选择器（pick）也没有字段名（field）")
+                elif pick and not any([k for k in c if k in PICK_KEYS] for c in pick):
                     issues.append(f"{where}：选择器候选都是空的 / 不认识")
-            if op in ("fill", "select") and not str(s.get("value", "")):
-                issues.append(f"{where}：{op} 没有要填的值")
+            if op in ("fill", "select", "search_pick", "pick_item") and not str(s.get("value", "")):
+                issues.append(f"{where}：{op} 没有要{'填' if op == 'fill' else '选'}的值")
             if op == "goto" and not str(s.get("url", "")):
                 issues.append(f"{where}：goto 没有 url")
             if op == "wait_text" and not str(s.get("text", "")):
@@ -270,15 +270,16 @@ def warnings(doc: dict) -> list[str]:
                 n_confirm += 1
             if op == "click" and s.get("submit"):
                 n_submit += 1
-            if op in ("click", "fill", "select", "wait_for"):
+            if op in ("click", "fill", "select", "search_pick", "pick_item", "wait_for"):
                 pick = s.get("pick") or []
                 kinds, anchored = [], False
                 for c in pick:
                     kinds += [k for k in c if k in PICK_KEYS]
                     if "css" in c and c.get("anchored"):
                         anchored = True
-                if kinds and set(kinds) <= {"css"} and not anchored:
-                    out.append(f"{where}：选择器在页面上定位不唯一，跑的时候取第一个 —— 可能不是你要的")
+                # 有 field（语义定位）就不慌；纯 css 又不唯一、又没 field 才提醒
+                if kinds and set(kinds) <= {"css"} and not anchored and not str(s.get("field") or ""):
+                    out.append(f"{where}：选择器定位不唯一、也没记到字段名 —— 跑错了就删掉重录这步")
             if op == "loop_rows":
                 walk(s.get("body") or [], f"{where} 里 ")
 

@@ -767,10 +767,12 @@
   };
   // 大白话动词。录到的 op 是英文，界面上一律显示这个
   const FLOW_VERB = {
-    goto: "打开页面", click: "点击", fill: "填写", select: "选择", press: "按键",
+    goto: "打开页面", click: "点击", fill: "填写", select: "选择",
+    search_pick: "搜索并选", pick_item: "选中行", press: "按键",
     wait_for: "等元素", wait_text: "等文字", assert: "校验", screenshot: "截图",
     confirm: "停下核对", loop_rows: "按表格逐行",
   };
+  const VALUE_OPS = ["fill", "select", "search_pick", "pick_item"];   // 有「值」可编辑 / 可绑表格的
   // 「＋加一步」能加的：录制器吐不出来、得手动补的那几种
   const FLOW_INSERT = [
     ["confirm", "停下让人核对", () => ({ op: "confirm", note: "核对一眼再继续" })],
@@ -783,7 +785,7 @@
   function flowHasRealSteps(f) {
     let yes = false;
     flattenSteps((f && f.steps) || []).forEach((it) => {
-      if (["click", "fill", "select"].includes(it.s.op)) yes = true;
+      if (["click", "fill", "select", "search_pick", "pick_item"].includes(it.s.op)) yes = true;
     });
     return yes;
   }
@@ -807,10 +809,18 @@
     }
     if (s.op === "press") return { text: "键 " + (s.key || "Enter"), raw: "", warn: false };
     if (s.op === "screenshot") return { text: "存到结果目录", raw: "", warn: false };
+    // 语义步：主键是「在哪个字段里选了什么」，DOM 位置只是缓存
+    if (["select", "search_pick", "pick_item"].includes(s.op)) {
+      const f = s.field ? `「${s.field}」里 ` : "";
+      const v = s.op === "search_pick" && s.query && s.query !== s.value
+        ? `搜「${s.query}」→ 选「${s.value || ""}」` : `选「${s.value || ""}」`;
+      return { text: f + v, raw: (s.pick || []).map((p) => Object.keys(p)[0] + "=" + p[Object.keys(p)[0]]).join("  |  "),
+        warn: !s.field && !(s.pick || []).some((p) => p.text || p.label || p.attr || (p.css && p.anchored)) };
+    }
     const pick = s.pick || [];
     // 只有「定位不唯一」才提示 —— 一条当场验证过唯一的 css（anchored）就是能用的，
-    //   不因为它长就算脆。有文字 / label / role / 属性候选的也不提示。
-    const locatable = pick.some((p) => p.text || p.label || (p.role && p.name)
+    //   不因为它长就算脆。有文字 / label / role / 属性 / field 候选的也不提示。
+    const locatable = !!s.field || pick.some((p) => p.text || p.label || (p.role && p.name)
       || p.attr || (p.css && p.anchored));
     const warn = pick.length > 0 && !locatable;
     // 优先「录制时你看到的字」，再退到 text / label / role / 属性 / 图标名
@@ -994,7 +1004,16 @@
       inp.addEventListener("change", () => { it.ref[field] = inp.value; flowSave(true); });
       row.appendChild(inp);
     };
-    if (["fill", "select"].includes(s.op)) {
+    if (VALUE_OPS.includes(s.op)) {
+      // search_pick：额外一个「搜索词」小框（只为触发搜索，可留空 = 用值本身）
+      if (s.op === "search_pick") {
+        const q = el("input", "field");
+        q.value = s.query || ""; q.placeholder = "搜索词";
+        q.style.cssText = "height:22px;width:80px;flex:none;font-size:12px";
+        q.title = "打进搜索框触发筛选的字，留空就用下面的目标值";
+        q.addEventListener("change", () => { it.ref.query = q.value; flowSave(true); });
+        row.appendChild(q);
+      }
       // 固定值 / 按表格取值 两态切换
       const colName = stepCol(s);
       const seg = el("span", null, colName ? "按表格" : "固定值");
@@ -1002,7 +1021,7 @@
         + (colName ? "color:#fff;background:var(--pink)" : "color:var(--sub);background:var(--bd)");
       seg.title = colName ? "点一下改回「固定值」" : "点一下改成「按表格每行取一个值」";
       seg.addEventListener("click", () => {
-        it.ref.value = colName ? "" : "{{" + (s.seen || tgt.text || "列名").trim() + "}}";
+        it.ref.value = colName ? "" : "{{" + (s.field || s.seen || "列名").trim() + "}}";
         repaint();
       });
       row.appendChild(seg);
@@ -1010,7 +1029,8 @@
       inp.style.cssText = "height:22px;flex:1;min-width:70px;font-size:12px"
         + (colName ? ";color:var(--pink)" : "");
       inp.value = colName || (s.value || "");
-      inp.placeholder = colName ? "表格里这一列叫什么" : "要填的固定值";
+      inp.placeholder = colName ? "表格里这一列叫什么"
+        : (s.op === "fill" ? "要填的固定值" : "要选中的那一项（按可见文字）");
       inp.addEventListener("change", () => {
         it.ref.value = colName ? "{{" + inp.value.trim() + "}}" : inp.value;
         flowSave(true);
@@ -1030,7 +1050,7 @@
     // 右侧：重录这步 / 合并 / 上移 / 下移 / 删
     const tools = el("span", "row");
     tools.style.cssText = "margin-left:auto;gap:1px;flex:none";
-    if (["click", "fill", "select"].includes(s.op)) {
+    if (["click", "fill", "select", "search_pick", "pick_item"].includes(s.op)) {
       tools.appendChild(iconBtn("重录", "只重录这一步 —— 去浏览器里把这个操作做一遍",
         () => rerecordStep(n)));
     }

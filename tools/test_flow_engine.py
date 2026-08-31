@@ -149,11 +149,48 @@ def test_step_mode():
     ok("默认不是逐步", r._step_mode is False)
     r2 = FlowRunner(dict(base, flow_step=True), cfg, None)
     ok("settings.flow_step → 逐步", r2._step_mode is True)
-    d = FlowRunner._step_desc({"op": "fill", "pick": [{"label": "单元名称"}], "value": "{{单元名}}"},
+    d = FlowRunner._step_desc({"op": "fill", "field": "单元名称", "value": "{{单元名}}"},
                               2, {"单元名": "甲乙"}, "http://x")
-    ok("步骤描述里带上了行的值", "甲乙" in d and "fill" in d, d)
+    ok("步骤描述里带上了行的值和字段名", "甲乙" in d and "单元名称" in d, d)
     d2 = FlowRunner._step_desc({"op": "goto", "url": "{{source_url}}"}, 1, {}, "http://host/x")
     ok("goto 描述里把 {{source_url}} 渲染开", "http://host/x" in d2, d2)
+    d3 = FlowRunner._step_desc({"op": "search_pick", "field": "人群分组ID",
+                               "query": "白", "value": "运营白名单251203"}, 3, {}, "")
+    ok("search_pick 描述里有字段 / 搜索词 / 目标值",
+       "人群分组ID" in d3 and "白" in d3 and "运营白名单251203" in d3, d3)
+
+
+def test_semantic_ops():
+    print("\n[语义步骤 select / search_pick / pick_item]")
+
+    def has(issues, frag):
+        return any(frag in x for x in issues)
+
+    good = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "goto", "url": "http://x"},
+        {"op": "select", "field": "人群选组", "value": "指定人群包（离线数据）"},
+        {"op": "search_pick", "field": "人群分组ID", "query": "白",
+         "value": "运营白名单251203", "pick": [{"label": "人群分组ID"}]},
+        {"op": "pick_item", "field": "投放展示位置", "value": "播放页催费条",
+         "pick": [{"css": "table", "anchored": True}]},
+    ]}
+    ok("语义步骤都在 OPS 里、结构没硬伤", FD.validate(good) == [], FD.validate(good))
+    ok("select 有 field 就不报「没有选择器」", not has(FD.validate(good), "没有选择器"))
+
+    noval = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "select", "field": "人群选组"}]}
+    ok("select 没 value → 硬伤", has(FD.validate(noval), "没有要选的值"))
+
+    nofield = {"name": "x", "data": {"source": "none"}, "steps": [
+        {"op": "pick_item", "value": "某行"}]}
+    ok("pick_item 既没 pick 又没 field → 硬伤", has(FD.validate(nofield), "既没有选择器"))
+
+    # {{列}} 也要能从 query 里扫出来
+    bound = {"name": "x", "data": {"source": "excel", "columns": ["名单"]}, "steps": [
+        {"op": "loop_rows", "body": [
+            {"op": "search_pick", "field": "ID", "query": "{{名单}}", "value": "{{名单}}",
+             "pick": [{"label": "ID"}]}]}]}
+    ok("search_pick 的 query 里的 {{列}} 认得出", FD.columns(bound) == ["名单"], FD.columns(bound))
 
 
 def test_rec_session_import():
@@ -170,7 +207,8 @@ def main():
     print("flow 引擎 离线测试")
     print("=" * 56)
     for fn in (test_render, test_columns, test_validate_ok, test_validate_catches,
-               test_synthetic_and_registry, test_step_mode, test_rec_session_import):
+               test_synthetic_and_registry, test_step_mode, test_semantic_ops,
+               test_rec_session_import):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

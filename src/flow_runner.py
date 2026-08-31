@@ -196,7 +196,8 @@ class FlowRunner(StateMixin):
 
             # 逐步试跑：操作类的每一步，先高亮、再停下等人。confirm 步本来就会停，不重复问。
             if (self._step_mode and not self._step_auto
-                    and op in ("goto", "click", "fill", "select", "press", "wait_for")):
+                    and op in ("goto", "click", "fill", "select", "search_pick",
+                               "pick_item", "press", "wait_for")):
                 act = self._step_prompt(ff, s, j, label, row, src)
                 if act == "stop":
                     self._stop = True
@@ -222,7 +223,19 @@ class FlowRunner(StateMixin):
             elif op == "fill":
                 trace.append((op, ff.fill(s.get("pick") or [], FD.render(s.get("value", ""), row, src))))
             elif op == "select":
-                trace.append((op, ff.select(s.get("pick") or [], FD.render(s.get("value", ""), row, src))))
+                trace.append((op, ff.select(s.get("pick") or [], FD.render(s.get("value", ""), row, src),
+                                            field=s.get("field", ""))))
+                ff.settle()
+            elif op == "search_pick":
+                trace.append((op, ff.search_pick(
+                    s.get("pick") or [],
+                    FD.render(s.get("query", "") or s.get("value", ""), row, src),
+                    FD.render(s.get("value", ""), row, src), field=s.get("field", ""))))
+                ff.settle()
+            elif op == "pick_item":
+                trace.append((op, ff.pick_item(s.get("pick") or [],
+                                               FD.render(s.get("value", ""), row, src),
+                                               field=s.get("field", ""))))
                 ff.settle()
             elif op == "press":
                 ff.press(s.get("key", "Enter"), s.get("pick"))
@@ -275,23 +288,32 @@ class FlowRunner(StateMixin):
             except Exception:
                 pass
 
-    @staticmethod
-    def _step_desc(s: dict, j: int, row: dict, src: str) -> str:
+    _VERB = {"goto": "打开", "click": "点击", "fill": "填写", "select": "选择",
+             "search_pick": "搜索并选", "pick_item": "选中行", "press": "按键",
+             "wait_for": "等元素"}
+
+    @classmethod
+    def _step_desc(cls, s: dict, j: int, row: dict, src: str) -> str:
         op = s.get("op")
-        pick = s.get("pick") or []
-        what = ""
-        if pick:
-            c = pick[0]
-            k = next((x for x in ("text", "role", "label", "attr", "css") if x in c), "")
-            what = f"{k}：{c.get(k)}"
+        field = s.get("field") or ""
+        val = FD.render(s.get("value", ""), row, src)
         if op == "goto":
             what = FD.render(s.get("url", ""), row, src)
-        elif op in ("fill", "select"):
-            what += f" ← 「{FD.render(s.get('value', ''), row, src)}」"
+        elif op in ("select", "pick_item"):
+            what = (f"在「{field}」里 " if field else "") + f"选「{val}」"
+        elif op == "search_pick":
+            q = FD.render(s.get("query", "") or val, row, src)
+            what = (f"在「{field}」里 " if field else "") + f"搜「{q}」→ 选「{val}」"
+        elif op == "fill":
+            what = (f"「{field}」← " if field else "") + f"「{val}」"
         elif op == "press":
-            what = f"按 {s.get('key', 'Enter')}"
-        seen = f"（录制时是「{s.get('seen')}」）" if s.get("seen") else ""
-        return f"第 {j} 步：{op}　{what}{seen}"
+            what = f"{s.get('key', 'Enter')}"
+        else:
+            pick = s.get("pick") or []
+            c = pick[0] if pick else {}
+            k = next((x for x in ("text", "role", "label", "attr", "css") if x in c), "")
+            what = f"{c.get(k)}" if k else (s.get("seen") or "")
+        return f"第 {j} 步：{cls._VERB.get(op, op)}　{what}"
 
     # ---------------- 记录 ----------------
     def _record(self, results, i, row, status, err, trace, stats, dry, key):

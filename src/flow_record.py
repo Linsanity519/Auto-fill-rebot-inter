@@ -5,16 +5,25 @@
 Playwright 的 `expose_binding` + `add_init_script` 走的是 CDP，**绕过页面 CSP** ——
 所以内网后台再严的 script-src 也能注进去。往页面装：
 
-  · 捕获阶段的 click / change / keydown 监听，每个元素即时算出**多套选择器候选**
-    （见 flow_data 顶部：text / role / label / attr / css，稳→脆）
+  · 捕获阶段的 click / change / keydown 监听
   · 一个右下角浮动工具条（暂停 / 在这停一下 / 完成），SPA 重渲染会自动补回来
 
 事件回传给 Python，这里去抖 + 拼步骤。导航（framenavigated）单独记成 goto。
 
+## 「记意图」不是「记 DOM 位置」（对齐 testRigor / Stagehand / UiPath 语义选择器）
+
+每一步除了选择器候选，还记 **field**（这一步在哪个字段 / 区块下 —— 「投放展示位置」
+「人群选组」「人群分组ID」）和**选中项的可见文字**。重放时先按 field 定位到那一块，
+再在块里按文字挑；css 只当命中最快的缓存。这样后台改版、列表顺序变、要滚动才可见，
+都不影响。识别出的语义步骤：
+
+  · select {field, value}        —— 原生 <select> 或「点开下拉 + 点浮层里的某项」
+  · search_pick {field, query, value} —— 搜索框打字 + 从结果里挑（Python 侧把 fill+select 并起来）
+  · pick_item {value}            —— 点结果表格 / 列表里「文字是 xxx 的那一行」
+  · fill / click / press         —— 和以前一样，fill/click 也带上 field
+
 ## v1 不做的
 
-  · 自定义下拉的「选了哪一项」只在点到 role=option 时能认出来；点开+点选会录成
-    两个 click，留给整理页人工并成一个 select（整理页有「合并为下拉」按钮）
   · 不自动插 wait —— 整理页有「插步」菜单
 
 ## 浮条为什么这么写（踩过的坑）
@@ -83,6 +92,59 @@ _INJECT = r"""
       s = s.parentElement;
     }
     return '';
+  }
+  // 这个元素属于哪个「字段 / 区块」—— 「投放展示位置」「人群选组」「人群分组ID」这种。
+  // 重放靠它先定位到对的那一块，再在块里按文字挑，比死记 DOM 位置稳。
+  const LABELISH_PARTS = ["label", "legend", ".ant-form-item-label",
+    "[class*='form-item-label']", "[class*='FormItem-label']",
+    "[class*='label']", "[class*='Label']", "dt", "th"];
+  const LABELISH = LABELISH_PARTS.join(",");
+  // ⚠ ":scope > a,b,c" 里只有第一个带 :scope > 前缀，b/c 变成全文档选择器 —— 每一段都要自己加
+  const SCOPED_LABEL = LABELISH_PARTS.map(p => ":scope > " + p + ", :scope > * > " + p).join(",");
+  function tidy(t){ return clean(t).replace(/[:：*\s]+$/, '').replace(/^[*\s]+/, ''); }
+  function fieldOf(el){
+    let n = el;
+    for (let i = 0; i < 9 && n; i++){
+      try {
+        const l = n.querySelector && n.querySelector(SCOPED_LABEL);
+        if (l && !l.contains(el)){
+          const t = tidy(l.textContent);
+          if (t && t.length >= 2 && t.length <= 20) return t;
+        }
+      } catch(e){}
+      let sib = n.previousElementSibling, hop = 0;
+      while (sib && hop++ < 3){
+        // 兄弟里找「像标签的短文本」——但别把下拉触发器 / 控件自身的显示文字当成 label
+        const ok = sib.matches && sib.matches(LABELISH + ",span,div,p,strong,b,dt")
+          && !sib.matches(TRIGGER)
+          && !sib.querySelector("input,select,textarea,button,a,[role='button'],[role='combobox'],[role='option']");
+        if (ok){
+          const t = tidy(sib.textContent);
+          if (t && t.length >= 2 && t.length <= 20) return t;
+        }
+        sib = sib.previousElementSibling;
+      }
+      n = n.parentElement;
+    }
+    const h = el.closest && el.closest('section,fieldset,[class*="card"],[class*="panel"],[class*="block"]');
+    const head = h && h.querySelector('h1,h2,h3,h4,h5,legend,[class*="title"]');
+    return head ? tidy(head.textContent).slice(0, 20) : '';
+  }
+  // 浮层：下拉 / 级联 / 搜索结果这类
+  const POPUP = "[role='listbox'],[role='menu'],[class*='dropdown'],[class*='Dropdown'],"
+    + "[class*='select-menu'],[class*='select__menu'],[class*='option-list'],[class*='cascader'],"
+    + "[class*='autocomplete'],[class*='popover'],[class*='pull-down'],[class*='select-dropdown']";
+  function inPopup(el){ return !!(el.closest && el.closest(POPUP)); }
+  const OPTIONISH = "[role='option'],[class*='option'],[class*='Option'],li,[class*='menu-item'],[class*='item']";
+  // 触发下拉的那个控件（重放先点它，再在浮层里挑）。刻意不含 *-dropdown / *-menu /
+  // *-popup —— 那些是浮层容器，不是触发器。
+  const TRIGGER = "[role='combobox'],select,[class*='selector'],[class*='select-selection'],"
+    + "[class*='select__control'],[class*='ivu-select-selection'],[class*='cascader-picker'],"
+    + "[class*='-picker']:not([class*='dropdown'])";
+  function triggerFor(el){
+    if (!el.closest) return null;
+    const t = el.closest(TRIGGER);
+    return (t && !inPopup(t)) ? t : null;
   }
   // —— 参照 Automa 用的 @medv/finder / Chrome Recorder：生成一个**当场验证过唯一**
   //    的 css，而不是从 body 一路 nth-of-type 猜。做法：从叶子往根，每加一层就
@@ -159,30 +221,71 @@ _INJECT = r"""
   function emit(kind, el, extra){
     try {
       window.__flowRec(Object.assign({
-        kind: kind, pick: pickFor(el),
+        kind: kind, pick: pickFor(el), field: fieldOf(el) || '',
         seen: visibleText(el) || clean((el.getAttribute && (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder'))) || '')
       }, extra || {}));
     } catch (e){}
   }
+  // 语义步：主键是「选了什么」，pick 用触发控件（重放先点它、再在浮层里按文字挑）
+  function emitPick(kind, trig, value, extra){
+    try {
+      window.__flowRec(Object.assign({
+        kind: kind, pick: trig ? pickFor(trig) : [], field: (trig && fieldOf(trig)) || '',
+        value: value, seen: value
+      }, extra || {}));
+    } catch (e){}
+  }
+  function now(){ return (window.performance && performance.now()) || +new Date(); }
 
   const CLICKABLE = "a,button,[role='button'],[role='tab'],[role='menuitem'],[role='option'],"
-    + "[role='switch'],[role='checkbox'],[role='radio'],label,summary,"
+    + "[role='switch'],[role='checkbox'],[role='radio'],label,summary,tr,"
     + "input[type='checkbox'],input[type='radio'],input[type='button'],input[type='submit'],[onclick],[tabindex]";
   function interactive(el){
     if (!el || !el.closest) return null;
-    const hit = el.closest(CLICKABLE);
-    if (hit) return hit;
-    // 没落在任何可交互元素上：多半是点空白 / 滚动条 / 拖选，别记
-    return null;
+    return el.closest(CLICKABLE) || (inPopup(el) ? (el.closest(OPTIONISH) || el) : null);
   }
   document.addEventListener('click', e => {
     if (window.__flowRecPaused) return;
     let el = e.target;
     if (el.closest && el.closest('#__flowToolbar')) return;
+
+    // 每次点击先看：这是不是个下拉触发器？是就记下来（在 A/B/C 之前，因为触发器
+    // 本身往往不落在 CLICKABLE 里、会被下面的 gate 拦掉）
+    const trg0 = triggerFor(el);
+    if (trg0) window.__flowTrig = { el: trg0, ts: now() };
+
+    // A) 点在下拉 / 级联 / 搜索结果的浮层里 —— 记「选了『xxx』」，不是「点了这个 li」
+    if (inPopup(el)){
+      const opt = el.closest(OPTIONISH) || el;
+      const val = visibleText(opt);
+      if (val){
+        const trig = (window.__flowTrig && now() - window.__flowTrig.ts < 8000)
+          ? window.__flowTrig.el : (triggerFor(el) || opt);
+        emitPick('select', trig, val);
+      }
+      return;
+    }
     const it = interactive(el);
-    if (!it) return;                       // 只记真的点在可交互元素上的
-    if (it.getAttribute && it.getAttribute('role') === 'option') emit('select', it, { value: visibleText(it) });
-    else emit('click', it);
+    if (!it) return;
+    if (it.getAttribute && it.getAttribute('role') === 'option'){ emitPick('select', triggerFor(it) || it, visibleText(it)); return; }
+
+    // B) 点在结果表格 / 列表的某一行 —— 记「在这里选文字是『xxx』的那行」
+    const tr = it.closest && it.closest('table tr, [role="row"], ul>li, [class*="list"]>[class*="item"]');
+    if (tr && !inPopup(tr) && (tr.querySelector('td,[role="cell"]') || tr.tagName === 'LI')){
+      const cells = [...tr.querySelectorAll('td,[role="cell"]')].map(c => clean(c.textContent)).filter(Boolean);
+      const key = (cells[0] || clean(tr.textContent) || '').slice(0, 40);
+      if (key && key.length >= 2){
+        const box = tr.closest('table') || tr.parentElement;
+        window.__flowRec({ kind: 'pick_item', pick: pickFor(box), field: fieldOf(box) || '',
+          value: key, seen: key });
+        return;
+      }
+    }
+
+    // C) 普通点击。顺手记一下这是不是个「下拉触发器」，给下一次浮层点击用
+    if (triggerFor(it) || (it.matches && it.matches(TRIGGER)))
+      window.__flowTrig = { el: triggerFor(it) || it, ts: now() };
+    emit('click', it);
   }, true);
 
   document.addEventListener('change', e => {
@@ -191,9 +294,13 @@ _INJECT = r"""
     if (!el || (el.closest && el.closest('#__flowToolbar'))) return;
     if (el.tagName === 'SELECT'){
       const o = el.options[el.selectedIndex];
-      emit('select', el, { value: clean(o && o.text) });
+      emitPick('select', el, clean(o && o.text));
     } else if (el.matches && el.matches('input,textarea')){
       if (el.type === 'checkbox' || el.type === 'radio') return;
+      // 搜索框：记一下，Python 侧若紧跟着一次浮层选择，会并成一步 search_pick
+      if (triggerFor(el) || /search|autocomplete|combobox/i.test((el.getAttribute && el.getAttribute('class')) || '')
+          || el.getAttribute('role') === 'searchbox')
+        window.__flowTrig = { el: triggerFor(el) || el, ts: now() };
       emit('fill', el, { value: el.value });
     }
   }, true);
@@ -316,6 +423,7 @@ class FlowRecorder:
         self._done = False
         self._last = (None, 0.0)          # (指纹, 时刻) 去抖
         self._last_action = 0.0           # 上一次 click/fill/select/press 的时刻
+        self._last_fill = 0.0             # 上一次 fill 的时刻（判 fill+select→search_pick）
         self._start_url = ""
         self._running = False
 
@@ -389,30 +497,46 @@ class FlowRecorder:
             return                         # 同一动作 0.8s 内重复，丢（双击 / 冒泡多次）
         self._last = (fp, now)
         self._last_action = now      # 给 _on_nav 判断「这次跳转是不是刚才点出来的」
+        field = str(ev.get("field") or "")
+        value = str(ev.get("value", ""))
 
         if kind == "click":
-            step = {"op": "click", "pick": pick, "seen": seen}
+            step = {"op": "click", "pick": pick, "seen": seen, "field": field}
             if _SUBMIT_WORDS.search(seen):
                 step["submit"] = True
-            # 和上一条 click 落在同一个元素上（pick 一样）→ 覆盖，不叠一堆
             if self.steps and self.steps[-1].get("op") == "click" \
                     and self.steps[-1].get("pick") == pick:
                 self.steps[-1] = step
             else:
                 self.steps.append(step)
         elif kind == "fill":
-            step = {"op": "fill", "pick": pick, "value": str(ev.get("value", "")), "seen": seen}
-            # 同一个字段连续 fill → 覆盖上一条
+            step = {"op": "fill", "pick": pick, "value": value, "seen": seen, "field": field}
             if self.steps and self.steps[-1].get("op") == "fill" \
                     and self.steps[-1].get("pick") == pick:
                 self.steps[-1] = step
             else:
                 self.steps.append(step)
         elif kind == "select":
-            self.steps.append({"op": "select", "pick": pick,
-                               "value": str(ev.get("value", "")), "seen": seen})
+            prev = self.steps[-1] if self.steps else None
+            # 「搜索框打字」+「浮层里挑一个」紧挨着 → 并成一步 search_pick。
+            #   query（打的字）留着是为了触发远程搜索；真正的目标是 value。
+            if prev and prev.get("op") == "fill" and now - self._last_fill < 6.0 \
+                    and (not field or not prev.get("field") or field == prev.get("field")):
+                self.steps[-1] = {"op": "search_pick",
+                                  "pick": prev.get("pick") or pick,
+                                  "field": prev.get("field") or field,
+                                  "query": prev.get("value", ""), "value": value, "seen": value}
+            else:
+                self.steps.append({"op": "select", "pick": pick, "value": value,
+                                   "seen": seen, "field": field})
+        elif kind == "pick_item":
+            self.steps.append({"op": "pick_item", "pick": pick, "value": value,
+                               "seen": seen, "field": field})
         elif kind == "press":
             self.steps.append({"op": "press", "key": ev.get("key", "Enter")})
+
+        if kind == "fill":
+            self._last_fill = now
 
     def _on_nav(self, frame):
         try:

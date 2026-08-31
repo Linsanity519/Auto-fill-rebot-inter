@@ -1045,9 +1045,9 @@ class Api:
         try:
             f = FD.load(name)
             if replace_at is not None:
-                # 只替第几步：取录到的第一个动作，覆盖那一步的定位 / 值，op 保持不变
-                act = next((s for s in steps
-                            if s.get("op") in ("click", "fill", "select", "press")), None)
+                # 只替第几步：取录到的第一个动作，覆盖那一步的定位 / 值 / 字段，op 保持不变
+                act = next((s for s in steps if s.get("op") in (
+                    "click", "fill", "select", "search_pick", "pick_item", "press")), None)
                 if not act:
                     return {"ok": False, "error": "这次没录到任何操作，原来那步没动"}
                 flat = _flow_flatten(f.get("steps") or [])
@@ -1055,9 +1055,9 @@ class Api:
                     return {"ok": False, "error": "步骤号不对，可能列表已经变了"}
                 tgt = flat[replace_at]
                 tgt["pick"] = act.get("pick", tgt.get("pick"))
-                if "value" in act:
-                    tgt["value"] = act["value"]
-                tgt["seen"] = act.get("seen", tgt.get("seen", ""))
+                for k in ("value", "query", "field", "seen"):
+                    if k in act:
+                        tgt[k] = act[k]
             else:
                 f["steps"] = steps
                 if not f.get("source_url") and steps and steps[0].get("op") == "goto":

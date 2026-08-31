@@ -219,21 +219,132 @@ class FlowFiller:
             self._note(f"填「{value}」之后读到的是「{got}」")
         return r.how
 
-    def select(self, pick: list, value: str) -> str:
-        r = self.resolve(pick)
+    # ------------------------------------------------ 语义定位：先 pick，不行再按 field 文字
+    def _control(self, pick: list, field: str) -> Resolved:
+        """定位一个「控件」。pick 命中就用 pick；没命中就按 field（那个字段/区块的
+        label 文字）去找它管的控件。重放时后台改版，pick 常失效，field 文字一般还在。"""
+        if pick:
+            try:
+                return self.resolve(pick, want_visible=True)
+            except FillError:
+                pass
+        if field:
+            loc = self._by_label(str(field))
+            if loc.count():
+                return Resolved(loc.first, "field")
+            loc2 = self._field_control(str(field))
+            if loc2 is not None and loc2.count():
+                return Resolved(loc2.first, "field")
+        raise FillError(f"这一步既定位不到选择器，也找不到字段「{field or '(未记)'}」—— 回录制页重录这步")
+
+    def _field_control(self, text: str):
+        """label 文字 → 它那一块里「能点开的控件」（下拉触发器 / combobox / 按钮 / 输入框）。"""
+        js = r"""
+        (labelText) => {
+          const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+          document.querySelectorAll('[data-flow-ctl]').forEach(e => e.removeAttribute('data-flow-ctl'));
+          const nodes = [...document.querySelectorAll("label,.ant-form-item-label,[class*='label'],[class*='Label'],dt,th,span,div,p")];
+          for (const lb of nodes) {
+            if (clean(lb.textContent) !== labelText) continue;
+            if (lb.querySelector("input,select,textarea,[role='combobox']")) continue;
+            let scope = lb.parentElement;
+            for (let up = 0; up < 4 && scope; up++) {
+              const c = scope.querySelector(
+                "select,[role='combobox'],[class*='selector'],[class*='select-selection']," +
+                "[class*='picker'],input:not([type=hidden]),[role='button'],button");
+              if (c) { c.setAttribute('data-flow-ctl', '1'); return true; }
+              scope = scope.parentElement;
+            }
+          }
+          return false;
+        }
+        """
+        try:
+            if self.page.evaluate(js, text):
+                return self.page.locator("[data-flow-ctl='1']")
+        except Exception:
+            pass
+        return None
+
+    def _pick_option(self, value: str, where=None):
+        """在浮层 / 页面里点文字匹配 value 的那一项。先精确、再退到包含（远程搜索结果常带后缀）。"""
+        v = str(value)
+        root = where or self.page
+        exact = root.get_by_text(re.compile(rf"^\s*{re.escape(v)}\s*$"))
+        if wait_until(self.page, lambda: exact.count() > 0, self.timeout):
+            exact.last.click()
+            return
+        loose = root.get_by_text(v, exact=False)
+        if wait_until(self.page, lambda: loose.count() > 0, 3000):
+            loose.first.click()
+            return
+        raise FillError(f"列表里没有「{value}」")
+
+    def select(self, pick: list, value: str, field: str = "") -> str:
+        r = self._control(pick, field)
         el = r.locator
         try:
-            el.select_option(label=str(value))
+            el.select_option(label=str(value))      # 原生 <select>
             return r.how
         except Exception:
             pass
-        # 不是原生 <select>：点开、按文字挑
-        el.click()
-        opt = self.page.get_by_text(re.compile(rf"^\s*{re.escape(str(value))}\s*$")).last
-        if not wait_until(self.page, lambda: opt.count() > 0, self.timeout):
-            raise FillError(f"下拉里没有「{value}」")
-        opt.click()
+        try:
+            el.click()
+        except Exception:
+            try:
+                el.evaluate("e => e.click()")
+            except Exception:
+                pass
+        self.page.wait_for_timeout(150)
+        self._pick_option(value)
         return r.how
+
+    def search_pick(self, pick: list, query: str, value: str, field: str = "") -> str:
+        """搜索框打字 + 从结果里挑。query 只为触发（远程）搜索，真正的目标是 value。"""
+        r = self._control(pick, field)
+        el = r.locator
+        try:
+            el.click()
+        except Exception:
+            pass
+        box = el
+        try:
+            if el.evaluate("e => e.tagName") not in ("INPUT", "TEXTAREA"):
+                inner = el.locator("input, textarea").first
+                if inner.count():
+                    box = inner
+        except Exception:
+            pass
+        typed = str(query or value)
+        try:
+            box.fill("")
+            box.type(typed, delay=20)
+        except Exception:
+            box.click()
+            self.page.keyboard.type(typed, delay=20)
+        self.page.wait_for_timeout(450)
+        self._pick_option(value)
+        return r.how
+
+    def pick_item(self, pick: list, value: str, field: str = "") -> str:
+        """点结果表格 / 列表里「文字是 value 的那一行」。"""
+        v = str(value)
+        scope = self.page
+        try:
+            scope = self._control(pick, field).locator
+        except FillError:
+            pass
+        row = scope.locator("tr, li, [role='row'], [class*='item']").filter(
+            has_text=re.compile(re.escape(v)))
+        if not wait_until(self.page, lambda: row.count() > 0, self.timeout):
+            raise FillError(f"列表里没有「{v}」这一行")
+        target = row.first
+        try:
+            target.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        target.click()
+        return "pick_item"
 
     def press(self, key: str, pick: list | None = None):
         if pick:
