@@ -1689,12 +1689,18 @@
     return c;
   }
 
-  // 功能导航 / 覆盖度：没用过的那些才是这一块的重点
+  // 功能导航 / 覆盖度：没用过的那些才是这一块的重点。
+  // ⚠ 自制配置类型（录下来的）不进首页这个格子 —— 它是各人自己的草稿，
+  //   不是「工具能干的事」，只在侧栏《自制配置类型》里出现。
   function homeCatalog(used, hasData) {
-    const groups = groupedForms();
-    const total = state.forms.length;
+    const groups = groupedForms()
+      .map((g) => ({ ...g, items: g.items.filter((f) => f.mode !== "flow") }))
+      .filter((g) => g.items.length);
+    const total = groups.reduce((n, g) => n + g.items.length, 0);
+    let usedHere = 0;
+    groups.forEach((g) => g.items.forEach((f) => { if (used.has(f.name)) usedHere++; }));
     const c = homeCard(hasData ? "还能干什么" : "能干什么",
-      hasData ? `${total} 个配置类型，你用过 ${used.size} 个` : "");
+      hasData ? `${total} 个配置类型，你用过 ${usedHere} 个` : "");
     const wrap = el("div", "catalog");
     groups.forEach((g) => {
       g.items.forEach((f) => {
