@@ -276,6 +276,12 @@ class _FlowRecSession:
                 b.front()
                 rec = FlowRecorder(b.page, self.timeout)
                 rec.start()
+                # 把 Chrome 窗口顶到 OS 前台 —— 光 bring_to_front() 只切标签页，
+                # 用户还得自己 alt-tab 过去。录制正要用户马上在里面操作。
+                try:
+                    chrome.raise_window(b.page.title())
+                except Exception:
+                    pass
                 self.steps = rec.steps          # 同一个 list，len() 读得到实时条数
                 self._ready.set()
 

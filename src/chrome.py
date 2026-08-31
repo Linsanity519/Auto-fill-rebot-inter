@@ -3,11 +3,58 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def raise_window(title_hint: str = "") -> bool:
+    """把 Chrome / Edge 窗口拽到 OS 前台（Windows）。非 Windows / 失败都静默 False。
+
+    ⚠ `page.bring_to_front()`（CDP）只把**标签页**在 Chrome 里激活，
+      不保证把 Chrome **窗口**顶到别的程序前面 —— 尤其我们的 pywebview 窗口正拿着
+      焦点时，Windows 的「前台锁」会挡住后台进程抢焦点。这里按一下 ALT 解锁再抢。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        u = ctypes.windll.user32
+        hint = (title_hint or "").strip().lower()
+        found: list[tuple[int, str]] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _cb(hwnd, _):
+            if not u.IsWindowVisible(hwnd):
+                return True
+            cls = ctypes.create_unicode_buffer(256)
+            u.GetClassNameW(hwnd, cls, 256)
+            if cls.value != "Chrome_WidgetWin_1":
+                return True
+            buf = ctypes.create_unicode_buffer(512)
+            u.GetWindowTextW(hwnd, buf, 512)
+            if buf.value:
+                found.append((hwnd, buf.value))
+            return True
+
+        u.EnumWindows(_cb, 0)
+        if not found:
+            return False
+        target = next((h for h, t in found if hint and hint in t.lower()), found[0][0])
+        u.ShowWindow(target, 9)                       # SW_RESTORE
+        u.keybd_event(0x12, 0, 0, 0)                  # ALT down（解前台锁）
+        u.keybd_event(0x12, 0, 2, 0)                  # ALT up
+        u.SetForegroundWindow(target)
+        u.BringWindowToTop(target)
+        return True
+    except Exception:
+        log.debug("raise_window 失败", exc_info=True)
+        return False
 
 CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
