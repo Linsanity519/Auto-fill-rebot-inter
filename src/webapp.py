@@ -290,9 +290,17 @@ class _FlowRecSession:
                             self.lost = True
                             break
                         continue
+                    # 点了浮条「完成」：_on_ctl 绑定会置 rec.done；绑定万一没到，
+                    # 还有 window.__flowRecDone 这个哨兵兜底（否则用户得再点弹窗那个按钮）。
                     if rec.done:
                         self.done = True
                         break
+                    try:
+                        if b.page.evaluate("() => !!window.__flowRecDone"):
+                            self.done = True
+                            break
+                    except Exception:
+                        pass
                     ticks += 1
                     # 每 ~1.4s 兜一次浮条：SPA 整片重渲染时页面内的 observer 偶尔跟不上。
                     # __flowEnsureBar 只重建浮条、不重挂监听器；整个脚本没了才重注入。

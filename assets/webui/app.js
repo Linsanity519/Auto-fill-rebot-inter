@@ -1179,11 +1179,11 @@
       });
       timer = setInterval(() => {
         callApi("flow_record_status").then((st) => {
+          if (st && (st.done || st.lost || st.running === false)) { finish(); return; }
           const box = $("#recStat");
           if (box) box.textContent = st && st.steps ? `已记到 ${st.steps} 个操作（取第 1 个）` : "等你操作…";
-          if (st && (st.done || st.lost || st.running === false)) finish();
         });
-      }, 1000);
+      }, 700);
     });
   }
 
@@ -1247,17 +1247,21 @@
     };
     showModal({
       title: "录制中",
-      desc: "去浏览器里正常操作。每一步会实时记下来 —— 完事点浏览器右下角浮条上的「完成」，或点这里的「结束录制」。",
+      desc: "去浏览器里正常操作。每一步会实时记下来 —— 完事点浏览器右下角浮条上的「完成」就行（这个弹窗会自动关）。也可以点下面的「结束录制」。",
       extraHtml: '<div id="recStat" style="padding:12px;color:var(--sub)">已记 0 步…</div>',
       buttons: [{ label: "结束录制", primary: true, onClick: () => stop(false) }],
     });
     timer = setInterval(() => {
       callApi("flow_record_status").then((st) => {
         const box = $("#recStat");
-        if (box) box.textContent = st && st.lost ? "浏览器断开了…" : `已记 ${(st && st.steps) || 0} 步…`;
-        if (st && (st.done || st.lost || st.running === false)) stop(!!st.lost);
+        if (st && (st.done || st.lost || st.running === false)) {
+          if (box) box.textContent = "收尾中…";
+          stop(!!st.lost);
+          return;
+        }
+        if (box) box.textContent = `已记 ${(st && st.steps) || 0} 步…`;
       });
-    }, 1200);
+    }, 700);
   }
 
   function flowTrialRun() {
