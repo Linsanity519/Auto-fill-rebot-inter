@@ -507,6 +507,43 @@ def test_webhook_payload():
           len(json.dumps(big, ensure_ascii=False).encode("utf-8")) < 2048)
 
 
+def test_webhook_migration():
+    print("\n[换群迁移] 存量机器的 webhook.txt 还是旧 key 时，自动改用新地址")
+    from src import report
+    tmp = Path(tempfile.mkdtemp(prefix="usage-webhook-"))
+    orig = report.user_path
+    report.user_path = lambda *parts: tmp.joinpath(*parts)
+    try:
+        cfg = tmp / "config"
+        cfg.mkdir()
+        hook = cfg / "webhook.txt"
+        old = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=53d90b8b-f8f8-4c02-83bc-52ec1369ac29"
+        new = report.BUNDLED_WEBHOOK
+
+        hook.write_text("# 注释\n" + old + "\n", encoding="utf-8")
+        check("旧 key → 换成随包发的新地址", report._webhook_from_file() == new,
+              report._webhook_from_file())
+        check("feedback 兜底也跟着换", report.feedback_webhook_url({}) == new)
+
+        other = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=99999999-0000-0000-0000-000000000000"
+        hook.write_text(other + "\n", encoding="utf-8")
+        check("别人自己配的 key 不动", report._webhook_from_file() == other,
+              report._webhook_from_file())
+
+        hook.write_text(new + "\n", encoding="utf-8")
+        check("已经是新 key 就原样返回", report._webhook_from_file() == new)
+
+        hook.unlink()
+        check("文件缺失仍然静默不上报（clone 打的包）",
+              report._webhook_from_file() == "")
+
+        check("settings.yaml 显式配的最优先",
+              report.webhook_url({"usage": {"webhook_url": other}}) == other)
+    finally:
+        report.user_path = orig
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_report_header_mismatch():
     print("\n[表头对不上] 宁可显示「还没有」，也不能把错位的列当真数据")
     FORMS = ["DMP延期"]
@@ -523,7 +560,8 @@ def main():
                test_dirty, test_week_boundary, test_fail_kinds, test_bad_fields,
                test_percentiles, test_status_alias, test_write_and_switch,
                test_share_dedupe, test_broken_file, test_report_roundtrip, test_saving,
-               test_week_key_normalize, test_webhook_payload, test_report_header_mismatch):
+               test_week_key_normalize, test_webhook_payload, test_webhook_migration,
+               test_report_header_mismatch):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

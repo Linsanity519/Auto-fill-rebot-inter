@@ -22,6 +22,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 
 from .paths import user_path
 
@@ -29,6 +30,25 @@ log = logging.getLogger(__name__)
 
 TIMEOUT = 3          # 内网偶尔抽风，三秒不通就算了，下次再补
 MAX_BYTES = 1800     # 企微 text 消息上限 2048 字节，留点余量
+
+# ── 存量迁移：换群时把旧 key 挂到这里 ──────────────────────────────
+# config/webhook.txt 不在 300KB 代码包的更新范围内（见 tools/updater.py 的
+# PAYLOAD_MEMBERS），只有跑完整安装包才会刷新，而绝大多数人只走代码包更新 ——
+# 于是换了群，存量机器还一直往旧群回传。这个文件（src/）是跟代码包一起发的，
+# 所以在这兜一层：本机 webhook.txt 里若还是下面这些废弃 key，就改用 BUNDLED_WEBHOOK。
+# ⚠ 只在「文件存在且是废弃 key」时替换；文件缺失仍然静默不上报（别人 clone 打的包）。
+BUNDLED_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=4e7859e7-43d5-4eee-bda4-501989499c87"
+_RETIRED_WEBHOOK_KEYS = frozenset({
+    "53d90b8b-f8f8-4c02-83bc-52ec1369ac29",   # 1.1.4 换群前的统计群
+})
+
+
+def _webhook_key(url: str) -> str:
+    """取 ?key=... 的值，用来判断是不是废弃地址。取不到返回空串。"""
+    try:
+        return (parse_qs(urlsplit(url).query).get("key") or [""])[0].strip()
+    except ValueError:
+        return ""
 
 
 def _webhook_from_file() -> str:
@@ -45,12 +65,16 @@ def _webhook_from_file() -> str:
       换群 / 临时改地址：设环境变量 USAGE_WEBHOOK_URL（优先，会写回这个文件，
       见 tools/inject_release_config.py）。
     ⚠ 文件缺失是正常情况（比如别人自己 clone 打的包），此时静默不上报。
+    ⚠ 文件里若是 _RETIRED_WEBHOOK_KEYS 里的废弃 key，返回 BUNDLED_WEBHOOK ——
+      存量机器换群迁移，见上面那段注释。
     """
     p = user_path("config", "webhook.txt")
     try:
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
+                if _webhook_key(line) in _RETIRED_WEBHOOK_KEYS:
+                    return BUNDLED_WEBHOOK
                 return line
     except OSError:
         pass
