@@ -373,48 +373,83 @@ class FlowFiller:
         except Exception:
             return None
 
+    def _field_scope(self, field: str):
+        """字段名 → 它那一整块（含该 label 的 form-item 容器）。找不到就返回整页。
+        重放的核心：先缩到「创意赛马」那一块，再在块里找「需要」——
+        不然「需要」会撞上别的字段的「需要」/「不需要」。"""
+        f = str(field or "").strip()
+        if not f:
+            return self.page
+        for sel in (".ant-formily-item", ".ant-form-item", "[class*='form-item']",
+                    "[class*='FormItem']", ".el-form-item", "tr", "li"):
+            try:
+                blk = self.page.locator(sel).filter(has_text=f)
+                if blk.count():
+                    # 命中一堆嵌套时，取最内层那个（DOM 里最靠后）
+                    tight = blk.filter(has=self.page.get_by_text(f, exact=True))
+                    return tight.last if tight.count() else blk.last
+            except Exception:
+                pass
+        try:
+            lab = self.page.get_by_text(re.compile(rf"^\s*{re.escape(f)}\s*$")).first
+            if lab.count():
+                return lab.locator("xpath=ancestor::*[self::div or self::section or self::li or self::tr][1]")
+        except Exception:
+            pass
+        return self.page
+
     def check(self, pick: list, value: str, checked: bool = True, field: str = "") -> str:
         """勾 / 取消勾一个复选框或单选。value = 那个选项的可见文字（「Android」「指定人群」）。
-        按可见文字 / 无障碍名定位，不认死 DOM 位置 —— 这类多选项框改版最频繁。"""
+        「字段块 → 块里按文字找可点的包裹层 → 点它」——不认死 DOM 位置，也不点被样式
+        盖住的隐藏 input（antd / element 的 input 都是隐藏的，直接点会超时）。"""
         label = str(value)
         rx = re.compile(rf"^\s*{re.escape(label)}\s*$")
         want = bool(checked)
-        hit = None
-        for role in ("checkbox", "radio"):
-            try:
-                loc = self.page.get_by_role(role, name=label)
-                n = loc.count()
-            except Exception:
-                n = 0
-            if n == 1 or (n > 1 and role == "radio"):
-                hit = loc.first
-                break
+        root = self._field_scope(field)
 
-        def toggle_via_text():
-            self.page.get_by_text(rx).first.click(timeout=3000)
-
-        if hit is not None:
-            for attempt in range(2):
-                cur = self._is_on(hit)
-                if cur is not None and cur == want:
-                    return "role"
+        # 1) 可点的那个：块里 label / wrapper / [role] 中，文字**精确等于** label 的
+        clicker = None
+        for r in ([root, self.page] if root is not self.page else [self.page]):
+            for sel in ("label", "[class*='wrapper']", "[class*='checkbox']", "[class*='radio']",
+                        "[role='checkbox']", "[role='radio']", "[role='option']"):
                 try:
-                    hit.click(timeout=2500)
+                    c = r.locator(sel).filter(has_text=rx)
+                    if c.count():
+                        clicker = c.first
+                        break
                 except Exception:
-                    toggle_via_text()          # 隐藏 input 被样式盖住 → 点它的文字
-                self.page.wait_for_timeout(200)
-            cur = self._is_on(hit)
-            if cur is not None and cur != want:
-                self._note(f"「{label}」点完之后状态还是 {'勾上' if cur else '没勾'}，想要的是 {'勾上' if want else '没勾'}")
-            return "role"
+                    pass
+            if clicker is not None:
+                break
+        if clicker is None:
+            t = (root if root is not self.page else self.page).get_by_text(rx)
+            if not wait_until(self.page, lambda: t.count() > 0, 3000):
+                raise FillError(f"找不到勾选项「{label}」" + (f"（在「{field}」下）" if field else ""))
+            clicker = t.first
 
-        # 退到「点可见文字」——很多后台可点区域就是那行字
-        t = self.page.get_by_text(rx)
-        if not wait_until(self.page, lambda: t.count() > 0, 3000):
-            raise FillError(f"找不到勾选项「{label}」" + (f"（在「{field}」下）" if field else ""))
-        # 单选点一下就对；多选没法读状态，点一下（录制时是「勾上」的居多）
-        t.first.click(timeout=3000)
-        return "text"
+        # 2) 读状态用的 input（在 clicker 里找）
+        state_input = None
+        try:
+            ii = clicker.locator("input[type='checkbox'], input[type='radio']").first
+            if ii.count():
+                state_input = ii
+        except Exception:
+            pass
+
+        try:
+            clicker.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        for _ in range(2):
+            cur = self._is_on(state_input) if state_input is not None else self._is_on(clicker)
+            if cur is not None and cur == want:
+                return "check"
+            clicker.click(timeout=3000)
+            self.page.wait_for_timeout(200)
+        cur = self._is_on(state_input) if state_input is not None else self._is_on(clicker)
+        if cur is not None and cur != want:
+            self._note(f"「{label}」点完之后是 {'勾上' if cur else '没勾'}，想要 {'勾上' if want else '没勾'}")
+        return "check"
 
     def pick_item(self, pick: list, value: str, field: str = "") -> str:
         """点结果表格 / 列表里「文字是 value 的那一行」。"""
