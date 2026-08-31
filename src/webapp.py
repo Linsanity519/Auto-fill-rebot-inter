@@ -12,7 +12,8 @@ log/progress/confirm/ask_continue/finished 推给前端；Runner 本身在后台
   命令行版 main.py --cli 因为 preview()/run() 用的是同一个实例，反而没有这个问题。
   这里选择复用实例，行为对齐命令行版（更接近直觉：核对页看到啥，跑的就是啥）。
 
-和 gui.py 的关系：这是默认界面；gui.py 留作 --tk 备用选项，出问题时退回去用。
+（历史：曾有一套 --tk 的 tkinter 界面 src/gui.py，1.1.2 起删掉了 —— 下面注释里
+提到的 gui.py 都是讲那段设计渊源，代码已不在。）
 """
 import atexit
 import contextlib
@@ -108,6 +109,10 @@ class WebUI(BaseUI):
         self.item_seconds = []
         self._tick = None
         self._tick_wait = 0.0
+        # 「抽样确认」档：前 sample_n 条逐条问，用户确认够数了就返回 "auto"，
+        # Runner 自己会翻成全自动、后面不再调 confirm。0 = 不抽样（逐条 / 全自动照旧）。
+        self.sample_n = 0
+        self._sample_submits = 0
 
     def _push(self, fn, *args):
         try:
@@ -130,14 +135,22 @@ class WebUI(BaseUI):
         self._push("onProgress", done, total, dict(stats))
 
     def confirm(self, label, summary):
+        # 抽样确认：前 N 条确认过了，之后交给 Runner 全自动跑
+        if self.sample_n and self._sample_submits >= self.sample_n:
+            self.log(f"抽样确认：前 {self.sample_n} 条已确认，其余自动提交", "ok")
+            return "auto"
         self._push("onConfirm", label, summary)
         with self._waiting():
             while True:
                 try:
-                    return self.answer.get(timeout=0.3)
+                    ans = self.answer.get(timeout=0.3)
                 except queue.Empty:
                     if self.stop_flag.is_set():
                         return "stop"
+                    continue
+                if self.sample_n and ans == "submit":
+                    self._sample_submits += 1
+                return ans
 
     def ask_continue(self, error):
         self._push("onAskContinue", error)
@@ -408,6 +421,10 @@ class Api:
             "toggle": bool(cfg.get("toggle")),
             # 自制配置类型（录制生成的工作流）：准备页显示步骤卡
             "flow": bool(cfg.get("flow")),
+            # 能不能「体检当前页」：yaml 里有字段或弹窗判据就能查选择器还准不准
+            "health": bool(cfg.get("fields") or cfg.get("ready_selector")),
+            # 跑完能不能「把这批翻回去」（价格策略批量开关：反方向再点一遍）
+            "reversible": bool(cfg.get("reversible")),
         }
 
     # 界面上跟着配置类型变的那几句话。yaml 里 ui: 段可以覆盖，
@@ -464,7 +481,11 @@ class Api:
     def app_info(self) -> dict:
         """版本号显示在侧栏底部。全项目只有 src/__init__.py 那一个版本号。"""
         from . import __version__
-        return {"version": __version__}
+        try:
+            sample_n = max(1, int(self.settings.get("confirm_sample_n", 3)))
+        except (TypeError, ValueError):
+            sample_n = 3
+        return {"version": __version__, "confirm_sample_n": sample_n}
 
     # ---------------- 程序更新 ----------------
     def check_update(self, force: bool = False) -> dict:
@@ -569,6 +590,46 @@ class Api:
     # ---------------- 浏览器 ----------------
     def browser_status(self) -> bool:
         return chrome.is_connected(self.settings["cdp_url"], timeout=0.8)
+
+    def _want_host(self, form_name: str | None) -> str | None:
+        """这个配置类型该在哪个域名下操作 —— 给 chrome.diagnose 用。读不到就算了。"""
+        form_url = None
+        if form_name:
+            try:
+                form_url = self._form_cfg(form_name).get("form_url")
+            except Exception:
+                pass
+        for src in (form_url, self.settings.get("start_url")):
+            if src and "//" in str(src):
+                return str(src).split("//", 1)[1].split("/", 1)[0]
+        return None
+
+    def browser_diagnose(self, form_name: str | None = None) -> dict:
+        """「浏览器为什么连不上」的结构化诊断 + 一句人话 hint。"""
+        try:
+            return chrome.diagnose(self.settings["cdp_url"], self._want_host(form_name))
+        except Exception as e:
+            log.warning("诊断浏览器失败", exc_info=True)
+            return {"hint": f"诊断出错：{e}", "port_open": False}
+
+    def health_check(self, form_name: str) -> dict:
+        """对当前打开的浏览器页跑一遍选择器体检（见 src/health.py）。"""
+        cdp = self.settings["cdp_url"]
+        if not chrome.is_connected(cdp):
+            return {"ok": False, "error": chrome.diagnose(cdp, self._want_host(form_name))["hint"]}
+        try:
+            from . import health
+            from .browser import Browser
+            cfg = self._form_cfg(form_name)
+            with Browser(cdp, int(self.settings.get("timeout", 15000))) as b:
+                page_url = b.page.url
+                res = health.probe(cfg, b.page)
+            # res: {ok(全绿吗), checked, bad, rows:[...]}。带 error 键 = 体检没跑成。
+            res["page_url"] = page_url
+            return _json_safe(res)
+        except Exception as e:
+            log.exception("体检失败")
+            return {"ok": False, "error": str(e)}
 
     def launch_browser(self, form_name: str | None) -> dict:
         try:
@@ -736,6 +797,31 @@ class Api:
             log.exception("存策略失败")
             return {"ok": False, "error": str(e)}
 
+    # ---------------- 策略 / 准备页配置：分享给同事 ----------------
+    def config_share(self, kind: str, form_name: str) -> dict:
+        try:
+            from . import config_sync
+            return config_sync.push(self.settings, kind, self._form_cfg(form_name), form_name)
+        except Exception as e:
+            log.exception("分享配置失败")
+            return {"ok": False, "error": str(e)}
+
+    def config_pull(self, kind: str, form_name: str) -> dict:
+        try:
+            from . import config_sync
+            return config_sync.pull(self.settings, kind, self._form_cfg(form_name), form_name)
+        except Exception as e:
+            log.exception("拉取配置失败")
+            return {"ok": False, "error": str(e)}
+
+    def config_remote_list(self) -> dict:
+        try:
+            from . import config_sync
+            return config_sync.list_remote(self.settings)
+        except Exception as e:
+            log.exception("列远端配置失败")
+            return {"ok": False, "error": str(e)}
+
     def make_template(self, form_name: str, scope: str | None, positions: list | None = None,
                       options: dict | None = None) -> dict:
         try:
@@ -844,9 +930,47 @@ class Api:
                 "ok": True,
                 "rows": _json_safe([self._row_summary(r) for r in rows]),
                 "total": len(rows), "bad": bad,
+                # 你的 Excel 表头 vs 这个配置类型的模板本该有的列（缺列会静默漏填）
+                "template_diff": self._template_diff(cfg, data_file, options),
             }
         except Exception as e:
             log.exception("载入失败")
+            return {"ok": False, "error": str(e)}
+
+    @staticmethod
+    def _col_opts(options: dict | None) -> dict:
+        """registry.expected_columns 要的 opts：选了哪几个资源位、挂不挂已有活动。"""
+        o = options or {}
+        return {
+            "positions": o.get("positions"),
+            "existing_activity": bool((o.get("activity") or {}).get("existing")
+                                      or o.get("existing_activity")),
+        }
+
+    def _template_diff(self, cfg: dict, data_file: str | None, options: dict | None) -> dict | None:
+        """你的表 vs 模板预期列。没吃 Excel / 没选文件 / 算不出来 → None（前端不显示）。"""
+        if not data_file:
+            return None
+        try:
+            from . import xlsx_diff
+            expected = registry.expected_columns(cfg, self._col_opts(options))
+            if not expected:
+                return None
+            diff = xlsx_diff.compare(expected, data_file)
+            return None if diff.get("ok") else _json_safe(diff)
+        except Exception:
+            log.warning("模板列对齐检查失败（不影响载入）", exc_info=True)
+            return None
+
+    def check_template(self, form_name: str, data_file: str | None,
+                       options: dict | None = None) -> dict:
+        """「准备」页选好数据文件后单独跑一次列对齐，给前端即时反馈。"""
+        try:
+            cfg = self._form_cfg(form_name)
+            diff = self._template_diff(cfg, data_file, options)
+            return {"ok": True, "diff": diff}
+        except Exception as e:
+            log.exception("列对齐检查失败")
             return {"ok": False, "error": str(e)}
 
     @staticmethod
@@ -904,6 +1028,52 @@ class Api:
             return {"ok": True}
         except Exception as e:
             log.exception("清除断点失败")
+            return {"ok": False, "error": str(e)}
+
+    # ---------------- 产物清单 / 回滚 ----------------
+    def open_manifest(self, path: str | None = None) -> dict:
+        """打开产物清单（默认打开最近这次的）。"""
+        p = path or getattr(self, "last_manifest_path", "") or ""
+        if not p:
+            from . import manifest
+            p = manifest.latest_for(self.form_name)
+        if not p or not Path(p).exists():
+            return {"ok": False, "error": "还没有产物清单（跑一批之后才有）"}
+        self.open_path(p)
+        return {"ok": True, "path": p}
+
+    def pt_rollback(self, run_id: str | None = None) -> dict:
+        """「把这批翻回去」：读产物清单里成功翻转过的那些行，反方向再点一遍。
+
+        只服务 reversible 的配置类型（价格策略批量开关）。走「逐条确认」，不自动提交。
+        """
+        try:
+            from . import manifest
+            cfg = self._form_cfg(self.form_name)
+            if not cfg.get("reversible"):
+                return {"ok": False, "error": "这个配置类型不支持一键翻回"}
+            path = getattr(self, "last_manifest_path", "") or manifest.latest_for(self.form_name)
+            doc = manifest.load(path)
+            done = [it for it in (doc.get("items") or []) if str(it.get("status")) == "ok"]
+            if not done:
+                return {"ok": False, "error": "这批没有成功翻转的行，无需翻回"}
+            names = [str(it.get("name") or "") for it in done if it.get("name")]
+            verbs = {str(it.get("方向") or "") for it in done}
+            # 原方向 → 反方向
+            rev_dir = "off" if "开启" in verbs else "on"
+            r1 = self.load_and_check(self.form_name, None, "list", options={
+                "toggle_direction": rev_dir,
+                "toggle_params": "\n".join(names),
+            })
+            if not r1.get("ok"):
+                return {"ok": False, "error": "载入翻回清单失败：" + str(r1.get("error"))}
+            r2 = self.start_run("confirm", skip_done=False)
+            if not r2.get("ok"):
+                return {"ok": False, "error": r2.get("error")}
+            return {"ok": True, "total": r2.get("total"),
+                    "direction": rev_dir, "names": len(names)}
+        except Exception as e:
+            log.exception("翻回失败")
             return {"ok": False, "error": str(e)}
 
     def submit_feedback(self, payload: dict | None) -> dict:
@@ -1019,7 +1189,8 @@ class Api:
         if self._flow_sess and self._flow_sess.snapshot()["running"]:
             return {"ok": False, "error": "已经在录了，先点「完成」或「结束录制」"}
         if not chrome.is_connected(self.settings["cdp_url"]):
-            return {"ok": False, "error": "浏览器没连上，先启动浏览器并登录"}
+            return {"ok": False, "error": self.browser_diagnose(name).get("hint")
+                    or "浏览器没连上，先启动浏览器并登录"}
         try:
             f = FD.load(name)
             single = step_index is not None
@@ -1154,7 +1325,8 @@ class Api:
         if not self.runner or not self.preview_rows:
             return {"ok": False, "error": "还没有载入数据，请先在「准备」页载入并检查"}
         if not chrome.is_connected(self.settings["cdp_url"]):
-            return {"ok": False, "error": "浏览器没连上，请先启动浏览器并登录"}
+            return {"ok": False, "error": self.browser_diagnose(self.form_name).get("hint")
+                    or "浏览器没连上，请先启动浏览器并登录"}
 
         good = [r for r in self.preview_rows if not r.issues]
         kept = [r for r in good if not (skip_done and r.done)]
@@ -1167,7 +1339,8 @@ class Api:
         if not self.runner:
             return {"ok": False, "error": "还没有载入数据，请先在「准备」页载入并检查"}
         if not chrome.is_connected(self.settings["cdp_url"]):
-            return {"ok": False, "error": "浏览器没连上，请先启动浏览器并登录"}
+            return {"ok": False, "error": self.browser_diagnose(self.form_name).get("hint")
+                    or "浏览器没连上，请先启动浏览器并登录"}
         wanted = set(indices or [])
         rows = [r for r in self.preview_rows if r.index in wanted]
         if not rows:
@@ -1184,11 +1357,18 @@ class Api:
             self.runner._step_mode = (mode == "step")
         self.runner.auto = (mode == "auto")
         self.ui = WebUI(self._window)
+        # 抽样确认：前 N 条逐条问，之后 WebUI.confirm 自动返回 "auto"
+        if mode == "sample":
+            try:
+                self.ui.sample_n = max(1, int(self.settings.get("confirm_sample_n", 3)))
+            except (TypeError, ValueError):
+                self.ui.sample_n = 3
         self.runner.ui = self.ui
         self._run_kept_rows = kept
 
         run_id = usage.new_run_id()
         self.last_run_id = run_id
+        self.last_manifest_path = ""
 
         def work():
             t0 = time.monotonic()
@@ -1201,6 +1381,12 @@ class Api:
             finally:
                 self._record_run(run_id, mode, retry_of, len(records),
                                  time.monotonic() - t0, self.ui.wait_seconds)
+                # 产物清单：这批到底动了哪些东西，给人工清理 / 一键翻回去用
+                if mode not in ("dry", "step"):
+                    from . import manifest
+                    self.last_manifest_path = manifest.write(
+                        run_id, self.form_name, mode, kept, self.last_results,
+                        extra={"scope": self.scope, "retry_of": retry_of})
                 self._sync_sheet_async()
                 self.ui._push("onRunDone", self._failed_summary())
 
@@ -1225,6 +1411,8 @@ class Api:
             entry="webui", **counts,
             # 失败分成哪几类、卡在哪一层（都是固定枚举，不含错误原文）
             **usage.fail_detail(self.last_results),
+            # 卡在哪个字段上（「类别@字段label」计数，字段名=模板表头，不含业务值）
+            **usage.fail_fields(self.last_results),
             # 单条耗时分位数：区分「整体慢」和「个别卡死」
             **usage.percentiles(self.ui.item_seconds if self.ui else []),
         )
@@ -1298,11 +1486,14 @@ class Api:
           按钮），也不能把错误安在错的行上。
         """
         kept, results = self._run_kept_rows, self.last_results
+        manifest_path = getattr(self, "last_manifest_path", "") or ""
         if len(results) != len(kept):
-            return {"failed": [], "misaligned": bool(kept)}
+            return {"failed": [], "misaligned": bool(kept),
+                    "manifest_path": manifest_path}
         failed = [{"index": row.index, "name": row.name, "error": res.get("错误", "")}
                   for row, res in zip(kept, results) if res.get("状态") == "failed"]
-        return {"failed": failed, "misaligned": False}
+        return {"failed": failed, "misaligned": False,
+                "manifest_path": manifest_path}
 
     def pause_run(self) -> dict:
         if not self.ui:

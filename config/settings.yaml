@@ -14,6 +14,7 @@ group_key: "分组"          # 多行合并成一条配置的归组列；表里�
 # 行为开关
 dry_run: false            # true = 只填不提交，也不问
 confirm_before_submit: true   # 每条填完截图 + 等你确认（推荐）
+confirm_sample_n: 3       # 「抽样确认」档：前 N 条逐条确认，口径一致后自动跑完剩下的
 start_row: 0              # 从第几行开始（0 起）；断点续跑会自动覆盖
 resume: true              # 读 output/state.json，跳过已成功的行
 

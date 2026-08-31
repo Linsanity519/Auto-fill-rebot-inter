@@ -39,7 +39,9 @@ if sys.stdout:
 from src import usage  # noqa: E402
 
 # 上报消息长这样（src/report.py 拼的）：
-#   {"指纹": "16d69684", "版本": "1.0.20", "次数": 3, ..., "分类型": {"DMP延期": 38}}
+#   {"指纹": "16d69684", "版本": "1.0.20", "次数": 3, ..., "分类型": {"DMP延期": 38},
+#    "失败明细": {"fail_kinds": {"selector_miss": 3}, "fail_fields": {"selector_miss@pid": 3}}}
+#   （失败明细是 1.1.2 起才带的，老消息没有；全是定长枚举 + 字段名，无业务值）
 # ⚠ 用「找 { 再配对括号」而不是正则一把梭：分类型是嵌套对象，正则配不平。
 NEEDLE = '"指纹"'
 
@@ -191,6 +193,17 @@ def _fold(old: dict, new: dict) -> dict:
     for name, cnt in (new.get("分类型") or {}).items():
         forms[name] = max(_num(forms.get(name)), _num(cnt))
     out["分类型"] = forms
+
+    # 失败明细（fail_kinds / fail_fields）：同「分类型」，逐叶子键取最大（累计语义）
+    fd = {}
+    for sect in ("fail_kinds", "fail_fields"):
+        cur = dict((old.get("失败明细") or {}).get(sect) or {})
+        for k, v in ((new.get("失败明细") or {}).get(sect) or {}).items():
+            cur[k] = max(_num(cur.get(k)), _num(v))
+        if cur:
+            fd[sect] = cur
+    if fd:
+        out["失败明细"] = fd
     return out
 
 
@@ -349,6 +362,32 @@ def push_team(root) -> str:
     return "已推送，同事下次打开就能看到（raw 有几分钟 CDN 缓存）"
 
 
+def _print_fail_hotspots(msgs: list[dict], top: int = 12) -> None:
+    """把所有上报里的「失败明细」汇总,按次数排出热点。
+
+    这一段**只打给维护者看**,不进 team.json —— 目的是不等有人手动报,
+    就知道「哪个配置类型的哪个字段这周崩得最多」。全是定长枚举 + 字段名,无业务值。
+    """
+    kinds: dict[str, int] = {}
+    fields: dict[str, int] = {}
+    for d in msgs:
+        fd = d.get("失败明细") or {}
+        for k, v in (fd.get("fail_kinds") or {}).items():
+            kinds[k] = kinds.get(k, 0) + _num(v)
+        for k, v in (fd.get("fail_fields") or {}).items():
+            fields[k] = fields.get(k, 0) + _num(v)
+    if not kinds and not fields:
+        return
+    print("\n  失败热点（来自上报的失败明细，仅本地展示）：")
+    if kinds:
+        top_k = sorted(kinds.items(), key=lambda x: -x[1])[:top]
+        print("    按类别： " + "　".join(f"{k}×{v}" for k, v in top_k))
+    if fields:
+        top_f = sorted(fields.items(), key=lambda x: -x[1])[:top]
+        for k, v in top_f:
+            print(f"    {k}　×{v}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="把统计群里的上报消息整理成 config/team.json")
     ap.add_argument("--file", help="从文件读，不读剪贴板（调试用）")
@@ -404,6 +443,7 @@ def main() -> int:
     t = team.get("totals", {})
     print(f"  全团队：{team.get('people')} 人 · 累计 {t.get('items')} 条 · "
           f"省下 {int(t.get('saved', 0)) // 3600} 小时 · 失败 {t.get('failed')} 条")
+    _print_fail_hotspots(all_msgs)
 
     if args.dry:
         print("\n--dry：没有写文件")

@@ -57,14 +57,13 @@ def load_form(name: str | None) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="大会员业务后台 配置助手")
     ap.add_argument("--cli", action="store_true", help="走命令行，不开图形界面")
-    ap.add_argument("--tk", action="store_true",
-                    help="走旧版 tkinter 界面。⚠ 它没有「准备」页/策略中心/活动选择，"
-                         "这几样只能先在默认界面里配好；不支持的配置类型开进去会提示")
     ap.add_argument("--form", help="配置类型（config/forms/ 下的文件名）")
     ap.add_argument("--settings", default="config/settings.yaml")
     ap.add_argument("--data", help="覆盖数据文件")
     ap.add_argument("--dry-run", action="store_true", help="只填不提交")
     ap.add_argument("--auto", action="store_true", help="不逐条确认，连续提交")
+    ap.add_argument("--sample", type=int, metavar="N", default=0,
+                    help="抽样确认：前 N 条逐条确认，之后自动跑完剩下的")
     ap.add_argument("--no-resume", action="store_true", help="忽略断点，从头跑")
     ap.add_argument("--make-template", action="store_true", help="只生成 Excel 模板然后退出")
     ap.add_argument("--positions", help="wizard 模式：要配置的资源位，逗号分隔")
@@ -127,12 +126,6 @@ def main():
             print("已生成：" + spec.build_template(n))
         return
 
-    if args.tk:
-        from src.gui import main as gui_main
-
-        gui_main()
-        return
-
     if not args.cli:
         from src.webapp import main as web_main
 
@@ -160,8 +153,19 @@ def main():
         from src import registry
 
         runner = registry.spec_for(form_cfg.get("mode")).make_runner(
-            settings, form_cfg, ConsoleUI(auto=args.auto))
+            settings, form_cfg, ConsoleUI(auto=args.auto, sample_n=args.sample))
         runner.auto = args.auto
+
+        # 和界面版一致：跑之前先把「你的表缺哪些模板列」说出来（不阻断）
+        data_file = settings.get("data_file")
+        if data_file:
+            from src import xlsx_diff
+            exp = registry.expected_columns(form_cfg,
+                                            {"positions": [p.strip() for p in (args.positions or "").split(",") if p.strip()],
+                                             "existing_activity": bool(args.activity_id)})
+            miss = xlsx_diff.summarize(xlsx_diff.compare(exp, data_file))
+            if miss:
+                print("⚠ " + miss + "（缺的列不会被读，跑之前先补上）")
 
         rows = runner.preview()
         bad = [r for r in rows if r.issues]
@@ -177,8 +181,11 @@ def main():
             return
 
         # 埋点：和界面版走同一套口径，见 src/usage.py
-        from src import usage
+        from src import manifest, usage
 
+        run_id = usage.new_run_id()
+        run_mode = ("dry" if settings.get("dry_run") else
+                    ("auto" if args.auto else ("sample" if args.sample else "confirm")))
         t0 = time.monotonic()
         results = []
         ui = runner.ui
@@ -187,15 +194,21 @@ def main():
         finally:
             usage.record(
                 settings, "run_finished",
-                run_id=usage.new_run_id(), form=form_cfg.get("name", ""),
-                mode=("dry" if settings.get("dry_run") else ("auto" if args.auto else "confirm")),
+                run_id=run_id, form=form_cfg.get("name", ""),
+                mode=run_mode,
                 scope=args.scope, total=len(records),
                 seconds=round(time.monotonic() - t0, 1), entry="cli",
                 wait_seconds=round(getattr(ui, "wait_seconds", 0.0), 1),
                 chrome=usage.chrome_version(settings.get("cdp_url")),
                 **usage.count_status(results),
                 **usage.fail_detail(results),
+                **usage.fail_fields(results),
             )
+            if run_mode not in ("dry", "step"):
+                mp = manifest.write(run_id, form_cfg.get("name", ""), run_mode,
+                                    None, results, extra={"scope": args.scope})
+                if mp:
+                    print(f"产物清单：{mp}")
     except KeyboardInterrupt:
         print("\n已中断。下次运行会从断点继续。")
         sys.exit(1)

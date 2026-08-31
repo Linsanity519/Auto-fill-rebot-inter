@@ -54,8 +54,11 @@ def _ask(prompt: str) -> str | None:
 
 
 class ConsoleUI(BaseUI):
-    def __init__(self, auto: bool = False):
+    def __init__(self, auto: bool = False, sample_n: int = 0):
         self.auto = auto
+        # 抽样确认：前 sample_n 条逐条问，确认够数了自动跑完剩下的。0 = 不抽样。
+        self.sample_n = max(0, int(sample_n or 0))
+        self._submits = 0
         # 等人敲键盘的总时长。埋点要拿它把「机器在干活」和「机器在等人」分开，
         # 口径和图形界面那边的 WebUI.wait_seconds 保持一致 —— 不然同一件事
         # 命令行跑出来的「机器代劳」会凭空多出思考时间。
@@ -75,11 +78,16 @@ class ConsoleUI(BaseUI):
     def confirm(self, label, summary):
         if self.auto:
             return "submit"
+        if self.sample_n and self._submits >= self.sample_n:
+            self.auto = True
+            _out(f"（抽样确认：前 {self.sample_n} 条已确认，其余自动提交）")
+            return "submit"
         while True:
             ans = self._timed_ask(f"{label} 提交？[y=提交 / n=跳过 / a=以后全部自动 / q=退出] ")
             if ans is None:          # 没法问，保守起见不提交
                 return "skip"
             if ans in ("y", ""):
+                self._submits += 1
                 return "submit"
             if ans == "n":
                 return "skip"

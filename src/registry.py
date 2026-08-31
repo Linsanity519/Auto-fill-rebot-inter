@@ -24,9 +24,13 @@ from typing import Callable, Optional
 class ModeSpec:
     make_runner: Callable                     # (settings, cfg, ui) -> Runner-like 对象
     scopes: list = field(default_factory=list)          # [(显示文字, 值), ...]；没有就不显示「延期范围」这一行
-    build_template: Optional[Callable] = None            # (form_name) -> 生成的文件路径；wizard 不走这个，各自处理见 gui.py/main.py
+    build_template: Optional[Callable] = None            # (form_name) -> 生成的文件路径；wizard 不走这个，各自处理见 main.py --make-template
     no_template_hint: str = ""                            # 界面上：当前范围不需要 Excel 模板时的提示
     no_template_hint_cli: str = ""                         # 命令行下同一件事的措辞（引导用 --scope，不是点界面）
+    # 「这个 mode 的模板该有哪几列」——一等公民，给「你的 Excel 缺列了吗」用。
+    # 签名 (cfg, opts) -> {sheet名: [列名, ...]}；不吃 Excel 的 mode 留空。
+    # ⚠ 各 *_template.py 生成模板时就该走同一个函数，别再各写一份列定义（会漂移）。
+    template_columns: Optional[Callable] = None
 
 
 def _runner_wizard(settings, cfg, ui):
@@ -103,12 +107,74 @@ def _template_default(name: str) -> str:
     return template.build(name)
 
 
+# ---------------------------------------------------------------- 模板预期列
+# ⚠ 都返回 {sheet名: [列名, ...]}。复用各 *_data / *_template 里已有的「出哪几列」
+#   函数,不新写一份 —— 那份一旦和真模板对不上,「缺列检查」就会误报。
+def _columns_default(cfg: dict, opts: dict | None = None) -> dict:
+    from .datasource import header_field_names, item_field_names
+    grouped = bool(cfg.get("list"))
+    cols = ((["分组"] if grouped else [])
+            + header_field_names(cfg) + item_field_names(cfg.get("list")))
+    return {"数据": cols}
+
+
+def _columns_ad(cfg: dict, opts: dict | None = None) -> dict:
+    from . import ad_data as D
+    return {"素材": [c["name"] for c in D.columns(cfg)]}
+
+
+def _columns_dmp(cfg: dict, opts: dict | None = None) -> dict:
+    from . import dmp_template as T
+    return {"人群清单": [c[0] for c in T.COLS]}
+
+
+def _columns_ab(cfg: dict, opts: dict | None = None) -> dict:
+    from . import ab_template as T
+    return {"实验清单": [c[0] for c in T.COLS]}
+
+
+def _columns_wizard(cfg: dict, opts: dict | None = None) -> dict:
+    from . import wizard_schema as W
+    from . import wizard_template as WT
+    opts = opts or {}
+    positions = opts.get("positions") or W.position_names(cfg)
+    if not positions:
+        return {}
+    out = {}
+    if not opts.get("existing_activity"):
+        out["活动"] = [f["name"] for f in W.columns_for(cfg, positions[0], W.STEP_ACTIVITY)]
+    for p in positions:
+        out[WT.sheet_name(p)] = [c["title"] for c in WT.columns_for_sheet(cfg, p)]
+    return out
+
+
+def _columns_price_panel(cfg: dict, opts: dict | None = None) -> dict:
+    from . import pp_data as D
+    from . import wizard_strategy as S
+    opts = opts or {}
+    payload = S.active_payload(cfg)
+    channel = D.channel_of(cfg)
+    per_sku = D.sku_columns(cfg, payload)
+    units = [f["name"] for f in (D.unit_fields(cfg, channel) + list(per_sku or []))]
+    out = {"单元": units}
+    if not opts.get("existing_activity"):
+        out[D.activity_sheet(cfg)] = [f["name"] for f in D.activity_fields(cfg)]
+    return out
+
+
+def _columns_flow(cfg: dict, opts: dict | None = None) -> dict:
+    from . import flow_data as FD
+    cols = FD.columns(cfg.get("_flow") or cfg.get("flow") or {})
+    return {"数据": cols} if cols else {}
+
+
 # 「延期范围」按配置类型给不同选项，每种类型的第一项就是默认值。
 # 没列在这里的 mode（价格配置、资源位投放）不会显示这一行。
 # ⚠ AB 故意不给「全部实验中」：全站几千条实验，全扫既慢又会动到别人的实验。
 MODES: dict[str, ModeSpec] = {
     "wizard": ModeSpec(
         make_runner=_runner_wizard,
+        template_columns=_columns_wizard,
     ),
     "dmp_extension": ModeSpec(
         make_runner=_runner_dmp,
@@ -118,6 +184,7 @@ MODES: dict[str, ModeSpec] = {
             ("按清单指定人群ID", "id_list"),
         ],
         build_template=_template_dmp,
+        template_columns=_columns_dmp,
         no_template_hint=(
             "当前「延期范围」直接读取网页里的人群，不需要 Excel 模板。\n\n"
             "要按人群ID指定的话，先把范围切到「按清单指定人群ID」。"),
@@ -126,6 +193,7 @@ MODES: dict[str, ModeSpec] = {
     "ad_native": ModeSpec(
         make_runner=_runner_ad,
         build_template=_template_ad,
+        template_columns=_columns_ad,
     ),
     # ⚠ 抢会议室不读 Excel：任务清单在界面上直接填，存 config/prep/预定会议室.json。
     #   build_template 留空，界面上「生成模板」会拿 no_template_hint 提示改去哪儿填。
@@ -142,6 +210,7 @@ MODES: dict[str, ModeSpec] = {
     "price_panel": ModeSpec(
         make_runner=_runner_price_panel,
         build_template=_template_price_panel,
+        template_columns=_columns_price_panel,
     ),
     # 价格策略批量开启 / 关闭：翻转策略编辑页底部「价格配置」表里已有行的开关。
     # 不吃 Excel，也没有「延期范围」的默认表（选项写在两份 yaml 的 scopes: 里）。
@@ -156,6 +225,7 @@ MODES: dict[str, ModeSpec] = {
     # 模板不走 *_template.py —— 按 flow 的 data.columns 直接出一张空表（见 webapp.make_template）。
     "flow": ModeSpec(
         make_runner=_runner_flow,
+        template_columns=_columns_flow,
     ),
     "ab_extension": ModeSpec(
         make_runner=_runner_ab,
@@ -164,6 +234,7 @@ MODES: dict[str, ModeSpec] = {
             ("按清单指定实验ID", "id_list"),
         ],
         build_template=_template_ab,
+        template_columns=_columns_ab,
         no_template_hint=(
             "当前「延期范围」直接读取网页里「我的实验」下的实验，不需要 Excel 模板。\n\n"
             "要按实验ID指定的话，先把范围切到「按清单指定实验ID」。"),
@@ -171,7 +242,8 @@ MODES: dict[str, ModeSpec] = {
     ),
 }
 
-DEFAULT_SPEC = ModeSpec(make_runner=_runner_default, build_template=_template_default)
+DEFAULT_SPEC = ModeSpec(make_runner=_runner_default, build_template=_template_default,
+                        template_columns=_columns_default)
 
 
 def spec_for(mode: Optional[str]) -> ModeSpec:
@@ -188,3 +260,19 @@ def scopes_for(cfg: dict) -> list:
     if own:
         return [(item[0], item[1]) for item in own]
     return spec_for(cfg.get("mode")).scopes
+
+
+def expected_columns(cfg: dict, opts: dict | None = None) -> dict:
+    """这个配置类型的 Excel 模板该有哪几列。{sheet名: [列名]}；不吃 Excel 就是 {}。
+
+    读不出来时（比如策略还没配、资源位没选）返回 {} —— 缺列检查跳过,不误报。
+    """
+    fn = spec_for(cfg.get("mode")).template_columns
+    if not fn:
+        return {}
+    try:
+        return fn(cfg, opts or {}) or {}
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("算模板预期列失败,跳过缺列检查", exc_info=True)
+        return {}

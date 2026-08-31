@@ -98,7 +98,7 @@ BY_MODE = {
         "buildings", "data_source", "grab",
     },
     "pt_toggle": {
-        "data_source", "direction", "ledger", "scopes", "toggle", "ui",
+        "data_source", "direction", "ledger", "reversible", "scopes", "toggle", "ui",
     },
     # 自制配置类型的 cfg 是 flow_data.synthetic_cfg 拼出来的，不是手写的 yaml，
     # 但走同一套校验 —— _flow 是那份 config/flows/*.json 的原件。

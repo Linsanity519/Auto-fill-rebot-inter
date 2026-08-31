@@ -122,6 +122,56 @@ def is_connected(cdp_url: str, timeout: float = 1.5) -> bool:
         return False
 
 
+def diagnose(cdp_url: str, want_host: str | None = None) -> dict:
+    """「浏览器为什么连不上」的一句人话。
+
+    ⚠ 界面上原来到处硬编码「浏览器没连上，请先启动浏览器并登录」—— 但连不上有好几种,
+      每种的下一步动作都不一样(没装 / 装了没带调试端口 / 开着但停在登录页 / 都好了)。
+      这里把现成的几个探针(is_connected / find_browser / list_pages / on_login_page)
+      合起来,只多产出一个 `hint` 字段:该跟用户说的那一句。
+
+    want_host  传了就顺带看一眼「有没有打开过这个域名的页面」(host_seen);
+               None 时 host_seen 恒为 None(没问就不答)。
+    """
+    port_open = is_connected(cdp_url, timeout=1.0)
+    exe = find_browser()
+    pages = list_pages(cdp_url) if port_open else []
+    real = [p.get("url", "") for p in pages if p.get("url", "").startswith("http")]
+    on_login = on_login_page(cdp_url) if port_open else None
+
+    host_seen = None
+    if want_host:
+        h = want_host.lower().lstrip("*.")
+        host_seen = any(h in u.lower() for u in real)
+
+    if not port_open:
+        if not exe:
+            hint = ("没找到 Chrome / Edge。装一个,或手动指定路径。"
+                    "找过这些位置：" + "、".join(CANDIDATES))
+        else:
+            hint = ("调试端口不通。多半是 Chrome 开着、但没带调试端口启动 —— "
+                    "点「启动浏览器并登录」用带端口的方式重开一个(不影响你平时那个 Chrome)。")
+    elif on_login is True:
+        hint = "浏览器连上了,但还停在登录页 —— 先在弹出的窗口里扫码登录内网系统。"
+    elif want_host and host_seen is False:
+        hint = (f"浏览器连上了、也登录了,但没有打开 {want_host} 的页面 —— "
+                "点「启动浏览器并登录」直达对应的配置页,或自己在浏览器里打开它。")
+    elif not real:
+        hint = "浏览器连上了,但一个正经页面都没开 —— 点「启动浏览器并登录」打开配置页。"
+    else:
+        hint = ""            # 一切正常
+
+    return {
+        "port_open": port_open,
+        "exe_found": bool(exe),
+        "exe_path": exe or "",
+        "page_count": len(real),
+        "on_login_page": on_login,
+        "host_seen": host_seen,
+        "hint": hint,
+    }
+
+
 def launch(cdp_url: str, profile_dir: str | Path, start_url: str | None = None) -> str:
     """启动带调试端口的浏览器，并直接打开目标页面。
 

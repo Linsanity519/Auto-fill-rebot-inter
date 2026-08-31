@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import socket
 import sys
@@ -169,6 +170,46 @@ def fail_detail(results) -> dict:
         out["fail_kinds"] = kinds
     if stages:
         out["fail_stages"] = stages
+    return out
+
+
+# ---------------------------------------------------------------- 卡在哪个字段
+# ⚠ 和 fail_detail 一样：这里会读错误原文，但**只输出字段 label + 失败类别**，
+#   原文不落盘。字段 label 等于模板表头(「人群标签」「pid」…)，不是业务值。
+#   为了不误伤,只认 fill_core 那几个**定长句式**的开头一个「…」——
+#   句式见 src/fill_core.py 的 field_error / option_error / missing_error / verify_error。
+#   `「人群标签」的下拉里没有「年度大会员」` 这种,只取「人群标签」,绝不碰「年度大会员」。
+_FIELD_PATTERNS = [
+    # (正则, 该算哪一类)。regex 第 1 组就是字段 label。
+    (re.compile(r"页面上找不到字段「([^」]{1,24})」"), "selector_miss"),
+    (re.compile(r"^「([^」]{1,24})」的\S*?里(?:没有|一条候选都没有)"), "selector_miss"),
+    (re.compile(r"^「([^」]{1,24})」要选的.+在页面上没有"), "selector_miss"),
+    (re.compile(r"^「([^」]{1,24})」填完之后是.+没生效"), "verify_error"),
+]
+
+
+def fail_fields(results) -> dict:
+    """失败卡在哪个字段上,按「类别@字段」计数。没有可辨认的就返回空 dict。
+
+    形如 {"selector_miss@人群标签": 3, "verify_error@生效平台": 1}。
+    维护者据此一眼看出「价格面板配置 的 pid 下拉这周崩了 12 次」,
+    不用等有人手动点反馈。
+    """
+    out: dict[str, int] = {}
+    for r in results or []:
+        if str((r or {}).get("状态", "")).strip() != "failed":
+            continue
+        text = str((r or {}).get("错误") or r.get("说明") or "").strip()
+        for pat, kind in _FIELD_PATTERNS:
+            m = pat.search(text)
+            if not m:
+                continue
+            label = m.group(1).strip()
+            if not label or len(label) > 24:
+                label = "(其他)"
+            key = f"{kind}@{label}"
+            out[key] = out.get(key, 0) + 1
+            break
     return out
 
 
@@ -699,6 +740,30 @@ def weekly_buckets(settings: dict) -> dict:
         b["forms"][name] = b["forms"].get(name, 0) + _num(r.get("ok"))
         b["last"] = max(b["last"], str(r.get("ts") or ""))
     return buckets
+
+
+def weekly_fail_summary(settings: dict) -> dict:
+    """本机每周的失败明细：fail_kinds + fail_fields 逐周累加。
+
+    ⚠ 这份是给周报「捎带」用的,不进 team.json 的正表 —— 维护者据此发现
+      「价格面板配置 的 pid 下拉这周崩了 12 次」,不用等有人手动点反馈。
+    ⚠ 脱敏口径和 fail_detail / fail_fields 完全一致:只有定长枚举(selector_miss…)
+      和字段 label(=模板表头),没有任何业务值。空周不出。
+    """
+    me = _uid()
+    mine = [r for r in (read_events(settings) or [])
+            if isinstance(r, dict) and r.get("event") == "run_finished"
+            and r.get("uid") == me and not r.get("retry_of") and r.get("mode") != "dry"]
+    out: dict[str, dict] = {}
+    for r in mine:
+        wk = week_of(str(r.get("ts") or ""))
+        if not wk:
+            continue
+        b = out.setdefault(wk, {"fail_kinds": {}, "fail_fields": {}})
+        for sect in ("fail_kinds", "fail_fields"):
+            for k, v in (r.get(sect) or {}).items():
+                b[sect][k] = b[sect].get(k, 0) + _num(v)
+    return {wk: b for wk, b in out.items() if b["fail_kinds"] or b["fail_fields"]}
 
 
 def report_rows(settings: dict, form_names, nickname: str = "",

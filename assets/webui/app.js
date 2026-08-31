@@ -29,15 +29,15 @@
   //   加了配置类型或改了 _caps 之后，重新生成一遍：
   //     python tools\gen_stub_forms.py
   const STUB_FORMS = [
-    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
-    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
-    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
-    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
-    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
-    {"name": "价格策略批量开关", "mode": "pt_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"}, "group": "价格", "group_order": 3, "label": "价格策略批量开关", "order": 3, "desc": "策略中心 - 把「价格配置」表里已配好的行批量开启 / 关闭（界面上切方向）", "scopes": [["按名称关键词", "keyword"], ["本工具配置过的", "ledger"], ["按清单", "list"]]},
-    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
-    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
-    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false, "flow": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
+    {"name": "DMP延期", "mode": "dmp_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群延期", "order": 1, "desc": "大会员 DMP 人群管理 - 批量把人群有效期延长", "scopes": [["全部生效中 → 最晚日期", "active"], ["我创建的 → 最晚日期", "mine"], ["按清单指定人群ID", "id_list"]]},
+    {"name": "DMP人群新建", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "DMP人群包", "group_order": 1, "label": "DMP人群新建", "order": 2, "desc": "大会员 DMP 人群管理 - 按 Excel 批量用「临时表创建」新建人群包", "scopes": []},
+    {"name": "AB实验延期", "mode": "ab_extension", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "AB实验", "group_order": 2, "label": "AB实验延期", "order": 1, "desc": "AB 实验平台 - 把「我的实验」里所有「实验中」的实验续期到平台允许的最晚日期", "scopes": [["我的实验 → 最晚日期", "mine"], ["按清单指定实验ID", "id_list"]]},
+    {"name": "价格配置", "mode": null, "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格策略配置", "order": 1, "desc": "策略中心 - 算法价格人群配置", "scopes": []},
+    {"name": "价格面板配置", "mode": "price_panel", "caps": {"strategy": true, "prep": true, "positions": false, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、收银台类型、面板设置、每个 SKU 的搭售…… 配在这里，Excel 里就只剩活动和这个面板放哪几个 SKU", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "价格", "group_order": 3, "label": "价格面板配置", "order": 2, "desc": "大会员投放系统（老后台）- 收银台价格面板单元配置", "scopes": []},
+    {"name": "价格策略批量开关", "mode": "pt_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true, "flow": false, "health": true, "reversible": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"}, "group": "价格", "group_order": 3, "label": "价格策略批量开关", "order": 3, "desc": "策略中心 - 把「价格配置」表里已配好的行批量开启 / 关闭（界面上切方向）", "scopes": [["按名称关键词", "keyword"], ["本工具配置过的", "ledger"], ["按清单", "list"]]},
+    {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": false, "reversible": false}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
+    {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
+    {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false, "flow": false, "health": false, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
   ];
 
   // 没有后端时的假抢占任务数据：只够看清任务行的排版，真实楼栋清单来自
@@ -151,6 +151,14 @@
     // 没有 Python 后端时的假数据，只为了能在普通浏览器里核对样式
     if (name === "list_forms") return Promise.resolve(STUB_FORMS);
     if (name === "browser_status") return Promise.resolve(false);
+    if (name === "browser_diagnose") return Promise.resolve({ hint: "（无后端）", port_open: false });
+    if (name === "health_check") return Promise.resolve({ ok: true, checked: 0, bad: 0, rows: [] });
+    if (name === "check_template") return Promise.resolve({ ok: true, diff: null });
+    if (name === "open_manifest") return Promise.resolve({ ok: true, path: "" });
+    if (name === "pt_rollback") return Promise.resolve({ ok: true, total: 0 });
+    if (name === "config_share") return Promise.resolve({ ok: true, where: "wecom", url: "" });
+    if (name === "config_pull") return Promise.resolve({ ok: true, backup: "" });
+    if (name === "config_remote_list") return Promise.resolve({ ok: true, items: [] });
     if (name === "wizard_meta") return Promise.resolve(STUB_WIZARD);
     if (name === "ad_meta") return Promise.resolve(STUB_AD);
     if (name === "meeting_meta") return Promise.resolve(STUB_MEETING);
@@ -183,6 +191,7 @@
     logCount: 0,
     logErrors: 0,
     runMode: "confirm",
+    sampleN: 3,             // 抽样确认的 N，来自 app_info
     scopeValue: null,
     toggleDir: "on",       // 价格策略批量开关：on=开启 / off=关闭
     tgScope: "keyword",    // 选哪些行：keyword / ledger / list
@@ -250,6 +259,8 @@
   function hasToggle() { return !!caps().toggle; }
   // 自制配置类型（录制生成的工作流）：准备页显示步骤卡
   function hasFlow() { return !!caps().flow; }
+  // 能不能「体检当前页」（yaml 里有字段或弹窗判据）
+  function hasHealth() { return !!caps().health; }
   // 跑法：grab=抢占（只找不订／开抢），fill=填表（空跑／逐条确认／全自动）
   function isGrabRun() { return uiText().run_kind === "grab"; }
 
@@ -329,7 +340,9 @@
   function renderVersion() {
     callApi("app_info").then((info) => {
       state.version = (info && info.version) || "";
+      if (info && info.confirm_sample_n) state.sampleN = info.confirm_sample_n;
       $("#appVersion").textContent = state.version ? `版本 ${state.version}` : "";
+      syncModeSegmented();
     });
   }
 
@@ -728,6 +741,9 @@
     state.previewRows = [];
     state.reviewFilter = "all";
     $("#dataFileInput").value = "";
+    { const tb = $("#templateDiffBox"); if (tb) { tb.classList.add("hidden"); tb.innerHTML = ""; } }
+    { const b = $("#btnOpenManifest"); if (b) b.classList.add("hidden"); }
+    { const b = $("#btnRollback"); if (b) b.classList.add("hidden"); }
     $("#failedSection").classList.add("hidden");
     // 从首页跳过来时要把它所在的组打开，不然选中了却看不见；
     // 启动时那次「铺状态」不展开（expand:false）—— 人还停在首页
@@ -740,6 +756,8 @@
     renderMeetingCard();
     renderToggleCard();
     renderFlowCard();
+    renderHealthButton();
+    renderConfigShareRow();
     syncModeSegmented();
     renderReviewTable();
     goToStep("prepare");
@@ -2255,6 +2273,12 @@
     item("dry").textContent = grab ? "空跑（只找不订）" : "空跑（只填不提交）";
     item("auto").textContent = grab ? "开抢" : "全自动";
     item("confirm").classList.toggle("hidden", grab);
+    // 「抽样确认」：抢会议室没有，自制配置类型跑「逐步」时也不掺一档
+    if (item("sample")) {
+      item("sample").textContent = `抽样确认（前 ${state.sampleN} 条）`;
+      item("sample").classList.toggle("hidden", grab);
+      if (grab && state.runMode === "sample") { item("sample").classList.remove("active"); state.runMode = "auto"; }
+    }
     // 「逐步试跑」只在自制配置类型出现
     if (item("step")) item("step").classList.toggle("hidden", !hasFlow());
     if (grab && state.runMode === "confirm") {
@@ -2940,6 +2964,7 @@
     });
 
     $("#btnLoadCheck").addEventListener("click", doLoadCheck);
+    { const hb = $("#btnHealthCheck"); if (hb) hb.addEventListener("click", doHealthCheck); }
   }
 
   function handleTemplateResult(res) {
@@ -2967,6 +2992,69 @@
         activity_id: state.activityId,
       },
     };
+  }
+
+  // ---------------- 选择器体检 ----------------
+  function renderHealthButton() {
+    const btn = $("#btnHealthCheck");
+    if (btn) btn.classList.toggle("hidden", !hasHealth());
+    const box = $("#healthResult");
+    if (box) { box.classList.add("hidden"); box.innerHTML = ""; }
+  }
+
+  const HEALTH_MARK = { ok: "✓", missing: "✗", error: "✗", ambiguous: "⚠", hidden: "·", closed: "·" };
+
+  function renderHealthResult(res) {
+    const box = $("#healthResult");
+    if (!box) return;
+    box.classList.remove("hidden");
+    if (res && res.error) {
+      box.innerHTML = `<b style="color:var(--bad)">体检没跑成</b><br>${escapeHtml(res.error)}`;
+      return;
+    }
+    const rows = (res && res.rows) || [];
+    if (!rows.length) { box.innerHTML = "这个配置类型没有可体检的定位目标。"; return; }
+    const bad = rows.filter((r) => r.status === "missing" || r.status === "error");
+    const head = bad.length
+      ? `<b style="color:var(--bad)">${bad.length} 个定位目标在当前页面上找不到</b> —— 后台可能改版了，别急着批量跑`
+      : `<b style="color:var(--ok)">${res.checked} 项都能定位</b>（命中≠点得中，仍以实跑为准）`;
+    const lines = rows.map((r) => {
+      const m = HEALTH_MARK[r.status] || "?";
+      const col = (r.status === "missing" || r.status === "error") ? "var(--bad)"
+        : r.status === "ambiguous" ? "var(--warn)" : "var(--mu)";
+      const cnt = r.visible !== r.count ? `命中${r.count}/可见${r.visible}` : `命中${r.count}`;
+      return `<div style="color:${col}">${m} ${escapeHtml(r.name)} <span style="opacity:.7">[${escapeHtml(r.where)}] ${cnt}${r.note ? " — " + escapeHtml(r.note) : ""}</span></div>`;
+    });
+    box.innerHTML = head + '<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">' + lines.join("") + "</div>";
+  }
+
+  function doHealthCheck() {
+    if (!state.activeForm) return;
+    const btn = $("#btnHealthCheck");
+    btn.disabled = true;
+    appendLog("正在体检当前页的选择器…", "info");
+    return callApi("health_check", state.activeForm)
+      .then((res) => {
+        btn.disabled = false;
+        renderHealthResult(res);
+        if (res && res.error) appendLog(`体检没跑成：${res.error}`, "error");
+        else appendLog(`体检完成：检查 ${res.checked} 项，${res.bad} 项待看`, res.bad ? "warn" : "ok");
+      })
+      .catch((err) => { btn.disabled = false; appendLog(`体检出错：${err}`, "error"); });
+  }
+
+  function renderTemplateDiff(diff) {
+    const box = $("#templateDiffBox");
+    if (!box) return;
+    const sheets = diff && diff.sheets ? Object.entries(diff.sheets).filter(([, d]) => d.missing && d.missing.length) : [];
+    if (!sheets.length) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+    box.classList.remove("hidden");
+    const lines = sheets.map(([name, d]) => {
+      let s = `<b>「${escapeHtml(name)}」缺列：</b>${d.missing.map(escapeHtml).join("、")}`;
+      if (d.extra && d.extra.length) s += `<br><span style="opacity:.75">多出（不会被读）：${d.extra.map(escapeHtml).join("、")}</span>`;
+      return `<div>${s}</div>`;
+    });
+    box.innerHTML = "你的表和这个配置类型的模板对不上，缺的列会被静默漏填 —— 重新「生成 Excel 模板」把列补齐再填。<div style='margin-top:6px;display:flex;flex-direction:column;gap:4px'>" + lines.join("") + "</div>";
   }
 
   function doLoadCheck() {
@@ -3003,6 +3091,8 @@
         state.previewRows = res.rows;
         state.loaded = true;
         state.reviewFilter = "all";
+        renderTemplateDiff(res.template_diff);
+        if (res.template_diff) appendLog("你的 Excel 和模板列对不上（缺列会被静默漏填），详见「配置来源」卡片提示", "warn");
         appendLog(
           `载入 ${res.total} 条配置，${res.total - res.bad} 条通过校验` + (res.bad ? `，${res.bad} 条有问题` : ""),
           res.bad ? "warn" : "ok");
@@ -3206,9 +3296,80 @@
     });
   }
 
+  // ---------------- 策略 / 准备页配置：分享给同事 ----------------
+  function configKinds() {
+    const k = [];
+    if (caps().strategy) k.push("strategy");
+    if (caps().prep) k.push("prep");
+    return k;
+  }
+  const CONFIG_KIND_CN = { strategy: "策略中心", prep: "准备页参数" };
+
+  function renderConfigShareRow() {
+    const row = $("#configShareRow");
+    if (row) row.classList.toggle("hidden", !configKinds().length);
+  }
+
+  function doConfigShare() {
+    const kinds = configKinds();
+    if (!kinds.length || !state.activeForm) return;
+    kinds.forEach((kind) => {
+      callApi("config_share", kind, state.activeForm).then((res) => {
+        if (res && res.ok) appendLog(`${CONFIG_KIND_CN[kind]}已分享（${res.where === "github" ? res.url : "已发企微通知"}）`, "ok");
+        else appendLog(`分享${CONFIG_KIND_CN[kind]}失败：${res ? res.error : "无法连接后端"}`, "error");
+      });
+    });
+  }
+
+  function doConfigPull() {
+    callApi("config_remote_list").then((res) => {
+      if (!res || !res.ok) { appendLog(`拉取列表失败：${res ? res.error : "无法连接后端"}`, "error"); return; }
+      const items = (res.items || []).filter((it) => it.name === state.activeForm);
+      if (!items.length) { appendLog("没有同事分享过这个配置类型的配置", "warn"); return; }
+      showModal({
+        title: "拉取同事分享的配置",
+        desc: "拉下来会覆盖你本地这份（覆盖前自动备份到 output/config-backup/）。",
+        buttons: items.map((it) => ({
+          label: `${CONFIG_KIND_CN[it.kind] || it.kind}`, onClick: () => {
+            callApi("config_pull", it.kind, state.activeForm).then((r) => {
+              if (r && r.ok) appendLog(`已拉取 ${CONFIG_KIND_CN[it.kind]}${r.backup ? "，本地那份备份在 " + r.backup : ""}。重新载入生效`, "ok");
+              else appendLog(`拉取失败：${r ? r.error : "无法连接后端"}`, "error");
+            });
+          },
+        })).concat([{ label: "取消" }]),
+      });
+    });
+  }
+
+  function doRollback() {
+    showModal({
+      title: "把这批翻回去",
+      desc: "会读上一批的产物清单，把其中「成功翻转」的那些行反方向再点一遍（逐条确认，不自动提交）。确定？",
+      buttons: [
+        {
+          label: "确定", primary: true, onClick: () => {
+            callApi("pt_rollback").then((res) => {
+              if (res && res.ok) {
+                state.running = true; setRunButtons(true);
+                appendLog(`已开始翻回：${res.names || ""} 条，方向 ${res.direction === "on" ? "开启" : "关闭"}`, "info");
+              } else {
+                appendLog(`翻回失败：${res ? res.error : "无法连接后端"}`, "error");
+              }
+            });
+          },
+        },
+        { label: "取消" },
+      ],
+    });
+  }
+
   // ---------------- 侧栏底部：打开结果目录 / 清除断点 ----------------
   function initSidebarFooterActions() {
     $("#btnOpenOutput").addEventListener("click", () => callApi("open_output_dir"));
+    { const b = $("#btnOpenManifest"); if (b) b.addEventListener("click", () => callApi("open_manifest")); }
+    { const b = $("#btnRollback"); if (b) b.addEventListener("click", doRollback); }
+    { const b = $("#btnConfigShare"); if (b) b.addEventListener("click", doConfigShare); }
+    { const b = $("#btnConfigPull"); if (b) b.addEventListener("click", doConfigPull); }
     $("#btnCheckUpdate").addEventListener("click", () => checkForUpdate(true));
     $("#btnInstallUpdate").addEventListener("click", downloadAndInstallUpdate);
     $("#btnClearState").addEventListener("click", () => {
@@ -4156,6 +4317,12 @@
       } else {
         renderFailedList(summary.failed);
       }
+      // 产物清单 / 「把这批翻回去」
+      const mp = summary.manifest_path;
+      const omBtn = $("#btnOpenManifest");
+      if (omBtn) omBtn.classList.toggle("hidden", !mp);
+      const rbBtn = $("#btnRollback");
+      if (rbBtn) rbBtn.classList.toggle("hidden", !(mp && !!caps().reversible && state.runMode !== "dry"));
     },
   };
 

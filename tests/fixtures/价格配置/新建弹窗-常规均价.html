@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>价格配置 · 合成快照</title></head>
+<body>
+<!--
+  合成快照（不是真页面）：只为让 tools/test_filler_locate.py 的骨架有东西可跑。
+  真快照按 tests/fixtures/README.md 抓一份来替换掉它。
+  结构对齐 config/forms/价格配置.yaml：新建弹窗打开、限制类型=常规均价。
+-->
+<button type="button" class="ant-btn"><span>新建</span></button>
+
+<div class="ant-modal-wrap">
+  <div class="ant-modal">
+    <div class="ant-modal-body">
+      <form>
+        <div class="ant-form-item">
+          <label>价格人群名称</label>
+          <input id="crowd_name" class="ant-input" />
+        </div>
+        <div class="ant-form-item">
+          <label>人群选组</label>
+          <div id="user_config_type" class="ant-select"><span class="ant-select-selection-item">不限</span></div>
+        </div>
+        <div class="ant-form-item">
+          <label>平台</label>
+          <div class="ant-checkbox-group">
+            <label class="ant-checkbox-wrapper"><input type="checkbox" />iPhone</label>
+            <label class="ant-checkbox-wrapper"><input type="checkbox" />Android</label>
+            <label class="ant-checkbox-wrapper"><input type="checkbox" />pc</label>
+          </div>
+        </div>
+        <div class="ant-form-item">
+          <label>优先级</label>
+          <input id="weight_value" class="ant-input" />
+        </div>
+        <div class="ant-form-item">
+          <label>限制类型</label>
+          <div id="intervene_type" class="ant-select"><span class="ant-select-selection-item">常规均价</span></div>
+        </div>
+      </form>
+    </div>
+    <div class="ant-modal-footer">
+      <button class="ant-btn ant-btn-default"><span>取 消</span></button>
+      <button class="ant-btn ant-btn-primary"><span>确 定</span></button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

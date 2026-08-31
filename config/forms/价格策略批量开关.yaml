@@ -31,6 +31,10 @@ direction: "on"
 # 「按本工具配置过的」范围读的就是它。台账文件：output/ 下，见 src/pt_ledger.py。
 ledger: 价格策略开关
 
+# 这个配置类型是**可逆**的：跑完一批「开启/关闭」之后，界面上会出现「把这批翻回去」，
+# 按产物清单里那批人群、反方向再点一遍。webapp.Api.pt_rollback + caps.reversible。
+reversible: true
+
 # 「选哪些行」——界面上是一排 segmented，不是共用的「延期范围」那一行。
 # 后端仍按 scope 值走（keyword / ledger / list）。第一项是默认。
 scopes:

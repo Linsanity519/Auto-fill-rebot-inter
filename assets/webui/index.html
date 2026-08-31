@@ -234,6 +234,7 @@
             <button class="btn" id="btnBrowseFile">浏览…</button>
             <button class="btn" id="btnMakeTemplate">生成 Excel 模板</button>
           </div>
+          <div id="templateDiffBox" class="hidden" style="font-size:12px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 10px"></div>
 
           <div class="row col hidden" id="scopeRow" style="align-items:flex-start;gap:6px">
             <div class="row" style="gap:10px;width:100%">
@@ -301,7 +302,15 @@
           </div>
 
           <div class="row">
+            <button class="btn hidden" id="btnHealthCheck" title="拿 yaml 里的定位目标到当前浏览器页面上点一遍名，看后台改版没有">体检当前页</button>
             <button class="btn btn-blue" style="margin-left:auto" id="btnLoadCheck">载入并检查</button>
+          </div>
+          <div id="healthResult" class="hidden" style="font-size:12px;border:1px solid var(--bd);border-radius:8px;padding:8px 10px;max-height:240px;overflow:auto"></div>
+
+          <div class="row hidden" id="configShareRow" style="gap:8px;font-size:12px;color:var(--mu)">
+            <span>把配好的策略 / 准备参数分享给同事：</span>
+            <button class="btn btn-sm" id="btnConfigShare">分享给同事</button>
+            <button class="btn btn-sm" id="btnConfigPull">拉取同事的…</button>
           </div>
         </div>
       </section>
@@ -332,6 +341,7 @@
               <!-- 只有自制配置类型（录制生成的工作流）显示：每步停下、页面上高亮当前元素 -->
               <div class="seg-item hidden" data-mode="step">逐步试跑</div>
               <div class="seg-item active" data-mode="confirm">逐条确认</div>
+              <div class="seg-item" data-mode="sample" id="modeSample">抽样确认</div>
               <div class="seg-item" data-mode="auto">全自动</div>
             </div>
             <label class="row" style="gap:6px;color:var(--sub);cursor:pointer">
@@ -350,6 +360,8 @@
           <div class="row" style="gap:12px">
             <span class="pbar"><i id="runProgressBar"></i></span>
             <span style="color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap" id="runStat">未开始</span>
+            <button class="btn btn-sm hidden" id="btnOpenManifest" title="这批到底建了 / 翻转了哪些东西，逐条列在里面，给人工清理当对照表">产物清单</button>
+            <button class="btn btn-sm hidden" id="btnRollback" title="按产物清单里成功翻转的那批人群，反方向再点一遍">把这批翻回去</button>
             <button class="btn btn-sm" style="margin-left:auto" id="btnOpenOutput">打开结果目录</button>
           </div>
 

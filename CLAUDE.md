@@ -18,8 +18,10 @@ Python + Playwright，挂到用户**已登录**的 Chrome，读 Excel / 界面�
 |---|---|---|
 | `python main.py` | `src/webapp.py` + `assets/webui/` | **默认界面**，pywebview 壳 + HTML/JS。日常改界面改这里 |
 | `python main.py --cli` | `src/ui.py` ConsoleUI | 命令行跑 |
-| `python main.py --tk` | `src/gui.py` | 老 Tk 界面，还在但不是主力 |
 | 打包后的 exe | `launcher.py` | **故意不 import src**，src/ 要留在磁盘上才能被 300KB 代码包更新掉 |
+
+> 老的 `--tk` tkinter 界面（`src/gui.py` / `src/theme.py`）1.1.2 起删掉了：它配不了策略中心 /
+> 「准备」页 / 活动选择，三套 UI 并存维护不划算。要退回旧界面就看 git 历史。
 
 ---
 
@@ -185,7 +187,7 @@ python tools\new_mode.py 新配置类型名 --prefix xx
 
 ## 不要通读的文件（很贵，按需 grep 就行）
 
-`src/pp_filler.py`(1129) `src/dmp_runner.py`(926) `src/gui.py`(918)
+`src/pp_filler.py`(1129) `src/dmp_runner.py`(926)
 `src/ab_runner.py`(908) `src/usage.py`(897) `assets/webui/app.js`(3123)
 `config/forms/价格面板配置.yaml`(700+) `config/forms/资源位投放.yaml`(600+)
 

@@ -67,7 +67,7 @@ def enabled(settings: dict) -> bool:
     return bool(webhook_url(settings))
 
 
-def _payload(header: list, row: list, form_names) -> dict:
+def _payload(header: list, row: list, form_names, extra: dict | None = None) -> dict:
     """一行（列顺序见 usage.report_header）→ 发出去的那个 JSON。
 
     ⚠ 发的是「本机到目前为止的累计」，不是增量。收集端只取每人最近一条就够，
@@ -92,8 +92,20 @@ def _payload(header: list, row: list, form_names) -> dict:
         "最后活跃": d.get("最后活跃", ""),
         "分类型": forms,
     }
-    # ⚠ 配置类型多了会顶到长度上限。宁可丢掉明细也要把总数发出去。
-    if len(json.dumps(out, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:
+    # 失败明细（fail_kinds / fail_fields，全是定长枚举 + 字段名，无业务值）。
+    # 有就带上，没有就不占位。
+    if extra:
+        out["失败明细"] = extra
+
+    def _too_big() -> bool:
+        return len(json.dumps(out, ensure_ascii=False).encode("utf-8")) > MAX_BYTES
+
+    # ⚠ 顶到长度上限时按重要性依次丢：失败明细 < 分类型明细 < 总数。
+    #   总数（次数/成功/失败/秒）永远发得出去。
+    if _too_big() and out.get("失败明细"):
+        out["失败明细"] = {}
+        log.warning("上报内容超长，这一条不带失败明细")
+    if _too_big():
         out["分类型"] = {}
         log.warning("上报内容超长，这一条只发总数不发分类型明细")
     return out
@@ -177,9 +189,13 @@ def push(settings: dict, form_names, nickname: str = "") -> dict:
     if not rows:
         return {"sent": 0, "failed": 0, "error": ""}
 
+    fails = usage.weekly_fail_summary(settings)      # {周: {fail_kinds, fail_fields}}
+
     ok, bad, first_err = [], 0, ""
     for row in rows:
-        line = json.dumps(_payload(header, row, form_names), ensure_ascii=False)
+        line = json.dumps(
+            _payload(header, row, form_names, fails.get(str(row[0]))),
+            ensure_ascii=False)
         try:
             _post(url, line)
             ok.append(row)

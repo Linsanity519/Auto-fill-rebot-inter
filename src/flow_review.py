@@ -19,15 +19,17 @@ import json
 import logging
 import os
 import urllib.error
-import urllib.request
 from datetime import datetime
 
-from . import report
+from . import gh, report
 from .paths import user_path
 
 log = logging.getLogger(__name__)
 
 TIMEOUT = 6
+
+# GitHub Contents API 的调用收敛到 src/gh.py（config_sync 也用同一份）。
+_gh = gh.request
 
 
 def _pack(flow: dict, result_csv: str, version: str, uid: str) -> dict:
@@ -74,18 +76,6 @@ def _gh_conf(settings: dict) -> tuple[str, str]:
     token = (os.environ.get("FLOW_REVIEW_TOKEN")
              or ((settings.get("usage") or {}).get("flow_review_token") or "")).strip()
     return repo, token
-
-
-def _gh(url: str, token: str, method: str = "GET", payload: dict | None = None) -> dict:
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "ConfigAssistant-FlowReview",
-        "X-GitHub-Api-Version": "2022-11-28",
-    })
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        return json.loads(r.read().decode("utf-8") or "{}")
 
 
 def _to_github(repo: str, token: str, pack: dict) -> str:
