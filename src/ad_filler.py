@@ -137,7 +137,7 @@ class AdFiller:
 
     def _card_radio(self, f, value, values):
         """label 圈出的表单项里，点文字等于 value 的那张卡片。"""
-        self._click_card(self._item(f["label"]), value, f["label"])
+        self._click_card(self._item(f["label"]), value, f["label"], force=bool(f.get("force")))
 
     def _card_by_text(self, f, value, values):
         """没有 label 可依附的卡片组（竞价策略）—— 全页按文字找。
@@ -154,7 +154,18 @@ class AdFiller:
             card.click()
             self.page.wait_for_timeout(300)
 
-    def _click_card(self, scope, value: str, label: str):
+    def _card_texts(self, scope) -> list[str]:
+        cards = scope.locator(CARD)
+        return [(cards.nth(i).inner_text() or "").strip().split("\n")[0].strip()
+                for i in range(cards.count())]
+
+    def _click_card(self, scope, value: str, label: str, force: bool = False):
+        # ⚠ 联动卡片组（常规商广的「推广内容」跟着「推广目的」变）：上游刚点完，
+        #   这一组可能还在重渲染，选项一时读不到。给它一点时间出现再找。
+        #   非联动的组（原生商广全是）第一轮就命中，不会有额外等待。
+        from .fill_core import wait_until
+        wait_until(self.page, lambda: value in self._card_texts(scope), 5000)
+
         cards = scope.locator(CARD)
         seen = []
         for i in range(cards.count()):
@@ -166,9 +177,11 @@ class AdFiller:
             cls = c.get_attribute("class") or ""
             if "disabled" in cls:
                 raise FillError(f"「{label}」的选项「{value}」是禁用状态，点不了")
-            if not ACTIVE_RE.search(cls):
+            # ⚠ force：「推广目的」就算已经是选中态也要再点一次 —— 下游「推广内容」
+            #   的选项只在真正 click 时才重算，不点就是上一轮的旧列表。
+            if force or not ACTIVE_RE.search(cls):
                 c.click()
-                self.page.wait_for_timeout(300)
+                self.page.wait_for_timeout(500)
             return
         raise FillError(f"「{label}」下没有选项「{value}」。实际有：{seen}")
 
@@ -196,6 +209,10 @@ class AdFiller:
         self.page.wait_for_timeout(600)
         opts = self.page.locator(".ivu-select-dropdown:visible li")
         hit = opts.filter(has_text=re.compile(rf"^\s*{re.escape(value)}\s*$")).first
+        # 联动下拉（常规商广的转化目标跟着推广目的/内容变）：选项可能还在拉，等一下
+        if not hit.count():
+            from .fill_core import wait_until
+            wait_until(self.page, lambda: hit.count() > 0, 5000)
         if not hit.count():
             avail = opts.all_inner_texts()
             self.page.keyboard.press("Escape")

@@ -105,6 +105,13 @@ def _template_ad(name: str) -> str:
     return ad_template.build(formcfg.load(name))
 
 
+def _template_ad_regular(name: str) -> str:
+    from . import ad_reg_template
+    from . import formcfg
+
+    return ad_reg_template.build(formcfg.load(name))
+
+
 def _template_adv2(name: str) -> str:
     from . import adv2_template
     from . import formcfg
@@ -137,6 +144,11 @@ def _columns_default(cfg: dict, opts: dict | None = None) -> dict:
 
 def _columns_ad(cfg: dict, opts: dict | None = None) -> dict:
     from . import ad_data as D
+    return {"素材": [c["name"] for c in D.columns(cfg)]}
+
+
+def _columns_ad_regular(cfg: dict, opts: dict | None = None) -> dict:
+    from . import ad_reg_data as D
     return {"素材": [c["name"] for c in D.columns(cfg)]}
 
 
@@ -217,14 +229,12 @@ MODES: dict[str, ModeSpec] = {
         build_template=_template_ad,
         template_columns=_columns_ad,
     ),
-    # 常规商广：和原生同一个页面，但不吃 Excel（视频数量/文案都在准备页填），
-    # 所以没有 build_template，也没有「延期范围」。
+    # 常规商广：和原生老同一个页面。视频数量/跳过几个/目的内容转化在准备页，
+    # 每条创意的 素材标题/描述/落地页 在 Excel。
     "ad_regular": ModeSpec(
         make_runner=_runner_ad_regular,
-        no_template_hint=("常规商广不用 Excel 模板。\n\n"
-                          "在「准备」页填「视频数量 / 跳过前几个 / 6 条文案」等参数，"
-                          "点保存，再「载入并检查」。"),
-        no_template_hint_cli="常规商广不用 Excel 模板，参数都在准备页填",
+        build_template=_template_ad_regular,
+        template_columns=_columns_ad_regular,
     ),
     # 原生商广新：ad.bilibili.co 新版投放页（#/promote/auto-v2，bd- 组件，项目→素材两层）。
     "ad_v2": ModeSpec(

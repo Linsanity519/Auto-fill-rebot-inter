@@ -2,32 +2,26 @@
 # 常规商广投放（计划 → 单元 → 创意，「三连」一页建完）
 # 结构抓取：见 docs/常规商广-配置项抓取.md ——【改这个文件之前先看那份】
 # ============================================================
-# ⚠ 和「原生商广」是**同一套页面 / 同一个 iView 框架**（ad.bilibili.co #/promote/auto）。
-#   区别只在：
-#     · 原生把 推广目的/推广内容/转化目标 写死；常规商广让用户在准备页选
-#     · 原生按 avid 搜稿件；常规商广从「我的视频」列表按位置取，一个视频一个单元
-#     · 创意的 6 条文案在准备页填一次，全批共用
-#   计划层 / 单元层的控件类型和原生一致，复用 src/ad_filler.py 那套。
+# ⚠ 和「原生商广老」是**同一套页面 / 同一个 iView 框架**（ad.bilibili.co #/promote/auto）。
+#   区别：
+#     · 原生把 推广目的/推广内容/转化目标 写死；常规商广让用户在准备页选（联动下拉）
+#     · 原生按 avid 搜稿件；常规商广从「我的视频」列表按位置取（跳过前 K 个、取 N 个）
+#     · 每 10 个视频归一个单元，每个视频一条创意
+#     · 每条创意的 素材标题/素材描述/落地页 在 Excel 里逐行填
+#   计划层 / 单元层的控件类型和原生一致，复用 src/ad_filler.py。
 #
 # ⚠ 往这里加新的顶层键时，回 src/formcfg.py 的 BY_MODE["ad_regular"] 里登记一下。
-#
-# ⚠ 「我的视频」抽屉、「批量添加标题」、「编辑定向」这三段在写这份 yaml 时
-#   内网连不上没能实跑验证，选择器按已抓到的 DOM + 原生同类控件填的，
-#   第一次实跑要盯着这三步（见 docs 末尾「还没定 / 待验证」）。
 
 name: 常规商广
-description: 常规商广投放 - 三层商广，一个视频一个单元，视频取自「我的视频」
+description: 常规商广投放 - 三层商广，每 10 个视频一个单元，视频取自「我的视频」
 
 nav:
   group: 商业化广告
   group_order: 5
   label: 常规商广
-  order: 2
+  order: 3
 
 mode: ad_regular
-
-# 不吃 Excel：单元数量、跳过几个、6 条文案、目的/内容/转化 都在准备页填
-data_source: none
 
 form_url: 'https://ad.bilibili.co/#/promote/auto?type=1'
 
@@ -43,7 +37,7 @@ create_url_marker: 'promote/auto'
 
 ui:
   deliver_label: 投放配置
-  deliver_hint: 填准备参数 → 保存 → 载入并检查 → 跑
+  deliver_hint: 填准备参数 → 生成模板 → 填好 Excel → 载入并检查 → 跑
   run_kind: fill
 
 # ============================================================
@@ -53,7 +47,7 @@ prep_fields:
   - name: 计划名称
     type: text
     required: true
-    ph: '如【26年9月】常规商广-带货整合'
+    ph: '如【26年9月】常规商广-电商整合'
     note: '本批新建的计划名。已经建好想复用就填下面的「已有计划ID」'
 
   - name: 已有计划ID
@@ -61,10 +55,8 @@ prep_fields:
     ph: '如 51445292，留空 = 本次新建计划'
     note: '填了就不建新计划，所有单元直接挂到这个计划下'
 
-  # 下面三项是联动下拉：推广内容跟着推广目的走，转化目标跟着「目的+内容」走。
-  # ⚠ 页面上组合很多，这里**只保留 3 组常用的**（用户指定 2026-09-03）：
-  #     交易经营 → 电商链接 ／ 内容种草 → 内容投放 ／ 销售线索收集 → 线索
-  #   要加别的组合，回 docs/常规商广-配置项抓取.md 的全量矩阵表抄进来。
+  # 三级联动下拉：推广内容跟着推广目的，转化目标跟着「目的+内容」。
+  # ⚠ 只保留 3 组常用组合（用户指定 2026-09-03）。要加别的回 docs 的全量矩阵表。
   - name: 推广目的
     type: select
     required: true
@@ -85,7 +77,6 @@ prep_fields:
     type: select
     required: true
     default: 订单提交
-    # key = 「推广目的 | 推广内容」
     options_by: [推广目的, 推广内容]
     options_join: ' | '
     options_map:
@@ -128,8 +119,8 @@ prep_fields:
   - name: 视频数量
     type: number
     required: true
-    default: '5'
-    note: '建几个单元 = 从「我的视频」里取几个视频（跳过前面那几个之后往下顺延）'
+    default: '10'
+    note: '一共取几个视频（= Excel 要填几行）。每 10 个归一个单元 —— 填 50 = 5 个单元'
 
   - name: 跳过前几个
     type: number
@@ -137,37 +128,34 @@ prep_fields:
     default: '0'
     note: '「我的视频」列表最前面这几个不用（大会员固定素材那批），从第 N+1 个开始取'
 
-  - name: 文案1
-    type: text
+# ============================================================
+# Excel：一行 = 一个视频 = 一条创意。行序对应视频顺序（跳过前 K 个之后第 1、2、3…个）
+# ============================================================
+columns:
+  - name: 素材标题
     required: true
-    note: '创意的「素材标题」，2~40 字。6 条全批共用，每个单元都填这 6 条（页面上限就是 6 条）'
-  - {name: 文案2, type: text}
-  - {name: 文案3, type: text}
-  - {name: 文案4, type: text}
-  - {name: 文案5, type: text}
-  - {name: 文案6, type: text}
-
+    _note: '这条创意的标题，一个单元格里换行写多条，最多 6 条，每条 2~40 字'
   - name: 素材描述
-    type: text
     required: true
-    default: ''
-    ph: '2~10 字，广告卡片上 UP 主名称位置的外显文案'
-    note: '页面必填项，全批共用一条'
+    _note: '2~10 字，广告卡片上 UP 主名称位置的外显文案'
+  - name: 落地页
+    required: true
+    _note: 'https 开头的落地页链接（走「自定义链接」）'
 
 # ============================================================
-# 单元/单元名
+# 单元名
 # ============================================================
 grouping:
-  # 一个视频 = 一个单元；不聚类、不按 10 条拆
-  max_creatives: 1
-  # {日期}=跑的当天 YYYYMMDD，{序号}=本批第几个（从 1 起），{标题}=视频标题
-  name_template: '常规商广_{日期}_{序号}'
+  max_creatives: 10          # 页面上限：一个单元 ≤10 条创意
+  name_template: '常规商广_{日期}_{序号}'   # {序号} = 第几个单元，从 1 起
 
 # ============================================================
 # 计划层（只有走 ?type=1 新建计划时才填）
 # ============================================================
 plan_fields:
-  - {name: 推广目的, label: 推广目的, type: card_radio, from_prep: 推广目的, required: true}
+  # ⚠ force: 就算这张卡已经是选中态也要再点一次 —— 「推广内容」的选项只在
+  #   真正点击「推广目的」时才重算，不点就是上一次的旧列表。
+  - {name: 推广目的, label: 推广目的, type: card_radio, from_prep: 推广目的, required: true, force: true}
   - {name: 广告类型, label: 广告类型, type: card_radio, value: 所有广告}
   - {name: 计划名称, ph: 请输入计划名称, type: fill_ph, from_prep: 计划名称, required: true}
   - {name: 计划预算, label: 计划预算, type: card_radio, value: 不限预算}
@@ -224,42 +212,59 @@ unit_fields:
   - {name: 广告投放位置, label: 广告投放位置, type: card_radio, value: 全部}
 
 # ============================================================
-# 创意层：从「我的视频」按位置取一个视频，填 6 条素材标题 + 素材描述
-# 选择器 2026-09-03 实抓验证过（见 docs/常规商广-配置项抓取.md）
+# 创意层：一个单元从「我的视频」勾 ≤10 个视频，每个视频一条创意。
+# 每条创意的 素材标题/素材描述/落地页 取自 Excel 对应行。
+# 选择器 2026-09-03 实抓（见 docs/常规商广-配置项抓取.md）
 # ============================================================
 creative:
-  # 「添加稿件/视频」抽屉里的「我的视频」Tab
+  # 左侧「创意1 / 创意2 …」切换卡，点它把对应那条创意的表单切出来（同原生）
+  switch_selector: '.every-card .material-card'
+
   video_picker:
     open_button: 添加稿件/视频
     tab: 我的视频
-    # 抽屉顶部子账户切换（品牌银行 / 三连账户），选「三连账户」才看得到我的视频
-    sub_account: 三连账户
+    sub_account: 三连账户       # 抽屉顶部子账户，选「三连账户」才看得到我的视频
     card_selector: '.video-select-item'
-    # 点这个（不是点卡片本身）；点 .video-checkbox 外壳有时不生效，点里面的 wrapper
     check_selector: '.video-checkbox .ivu-checkbox-wrapper'
     page_selector: '.ivu-page'
     page_item_selector: '.ivu-page-item'
     per_page: 20
-    sort_default: 发布时间从近到远
     count_text: 已选
     confirm_button: 确定
     cancel_button: 取消
 
-  # 6 条素材标题：点创意块里的「批量添加」开抽屉，逐条打字 + 回车确认，再点保存
+  # 素材标题：创意块里点「批量添加」→ .batch-title-drawer → 逐条打字 + 回车 → 保存
   titles:
     open_button: 批量添加
     drawer_selector: '.batch-title-drawer'
     textarea_selector: '.batch-title-drawer textarea'
-    # 每条：填进 textarea → 按回车确认（抽屉里是标签式输入，不是一行一条的粘贴）
     confirm_key: Enter
     added_text: 已添加
     save_button: 保存
     max: 6
 
-  # 素材描述：创意块里的一个输入框，页面必填
+  # 素材描述：创意块里 placeholder 含这段的输入框
   desc:
     ph: 请输入2 ~ 10个字
-    from_prep: 素材描述
+
+  # 落地页：radio-item 选「自定义链接」，再填 URL
+  landing:
+    label: 落地页
+    type_option: 自定义链接
+    url_ph: 请使用https链接开头的URL
+
+  # 空间设置：radio-item 选第一个「稿件UP主空间」
+  space:
+    label: 空间设置
+    option: 稿件UP主空间
+
+  # Story转化组件：点「选择」开弹层，挑第一个，确认。⚠ 弹层内部结构第一次实跑要盯
+  story_component:
+    label: Story转化组件
+    open_button: 选择
+    picker_selector: '.ivu-modal, .ivu-drawer'
+    item_selector: 'tr, .ivu-radio-wrapper, [class*="list-item"]'
+    confirm_button: 确定
 
   block_selector: '.single-creative-wrapper'
   block_avid_attr: 'data-id'

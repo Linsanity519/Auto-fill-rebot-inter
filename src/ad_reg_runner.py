@@ -1,7 +1,8 @@
-"""常规商广主流程：一个视频一个单元，视频取自「我的视频」，6 条文案全批共用。
+"""常规商广主流程：每 10 个视频一个单元，视频取自「我的视频」，
+每条创意的 素材标题/描述/落地页 取自 Excel 对应行。
 
 ⚠ 和 ad_runner（原生商广）是两套。页面 DOM 一样（都用 ad_filler 填计划/单元层），
-  但：不吃 Excel、创意按列表位置取视频、文案整批共用。
+  但创意按「我的视频」列表位置取，逐行配 Excel。
 
 流程和原生一样是「一页建三层」：
   第 1 个单元  → ?type=1            建计划 + 单元 + 创意，保存后回列表页捞计划ID
@@ -51,15 +52,18 @@ class AdRegRunner(StateMixin):
     # ---------------- 预检 ----------------
     def preview(self) -> list[PreviewRow]:
         prep = self.s.get("ad_prep") or P.load(self.f)
-        data = D.build(self.f, prep)
+        data = D.load(self.s["data_file"], self.f, self.s)
         issues = D.validate(self.f, data, prep)
         head = P.validate(self.f, prep)
 
         rows = []
         for i, u in enumerate(data["units"]):
+            cs = u["creatives"]
+            idx = [c["video_index"] for c in cs]
+            span = f"第{idx[0] + 1}~{idx[-1] + 1}个" if len(idx) > 1 else f"第{idx[0] + 1}个"
             rows.append(PreviewRow(
-                index=i + 1, name=u["name"], kind=f"我的视频 第{u['video_index'] + 1}个",
-                detail_count=len(data["titles"]), issues=[],
+                index=i + 1, name=u["name"], kind=f"我的视频 {span}（{len(cs)} 条创意）",
+                detail_count=len(cs), issues=[],
                 done=self.state.is_done(u["name"]), payload=u,
             ))
         if rows:
@@ -75,12 +79,12 @@ class AdRegRunner(StateMixin):
     # ---------------- 主流程 ----------------
     def run(self, units: list[dict] | None = None):
         prep = getattr(self, "_prep", None) or self.s.get("ad_prep") or P.load(self.f)
-        data = getattr(self, "_data", None) or D.build(self.f, prep)
+        data = getattr(self, "_data", None) or D.load(self.s["data_file"], self.f, self.s)
         units = units if units is not None else data["units"]
-        titles = data["titles"]
 
         dry = self.s.get("dry_run")
         total = len(units)
+        n_vid = sum(len(u["creatives"]) for u in units)
         stats = {"ok": 0, "failed": 0, "skipped": 0, "dry": 0}
         results = []
 
@@ -88,7 +92,7 @@ class AdRegRunner(StateMixin):
         campaign_id = str(prep.get("已有计划ID", "")).strip()
         plan_name = str(prep.get("计划名称", "")).strip()
 
-        self.ui.log(f"「{self.f['name']}」共 {total} 个单元、每个单元 1 个视频 + {len(titles)} 条文案"
+        self.ui.log(f"「{self.f['name']}」共 {total} 个单元、{n_vid} 个视频（≤10/单元）"
                     + ("（试跑：只填不保存）" if dry else ""))
         if campaign_id:
             self.ui.log(f"挂到已有计划（ID {campaign_id}），不新建计划")
@@ -107,7 +111,10 @@ class AdRegRunner(StateMixin):
                     label = f"[{i + 1}/{total}]"
                     name = u["name"]
                     new_plan = not campaign_id
-                    self.ui.log(f"{label} {name} —— 填写中（我的视频 第 {u['video_index'] + 1} 个）"
+                    cs = list(u["creatives"])
+                    vids = [c["video_index"] for c in cs]
+                    self.ui.log(f"{label} {name} —— 填写中（{len(vids)} 个视频，"
+                                f"第 {vids[0] + 1}~{vids[-1] + 1} 个）"
                                 + ("，并新建计划" if new_plan else ""))
                     try:
                         self._open(b.page, campaign_id)
@@ -119,18 +126,14 @@ class AdRegRunner(StateMixin):
                         af.fill(self.f.get("unit_fields") or [], values, scope="单元层 ")
 
                         creative = self.f.get("creative") or {}
-                        vtitle = cr.add_video_by_index(creative.get("video_picker") or {},
-                                                       int(u["video_index"]))
-                        cr.fill_titles(creative.get("titles") or {}, titles)
-                        desc_cfg = creative.get("desc") or {}
-                        desc = str(prep.get(desc_cfg.get("from_prep", "素材描述"), "")).strip()
-                        cr.fill_desc(desc_cfg, desc)
-                        u["video_title"] = vtitle
+                        got = cr.add_videos(creative.get("video_picker") or {}, vids)
+                        cr.fill_creatives(creative, cs)
+                        note = f"{got} 条创意"
                         self._shot(b.page, i + 1, "filled")
 
                         if dry:
                             stats["dry"] += 1
-                            results.append(self._row(i, name, "dry_run", f"试跑未保存（{vtitle}）"))
+                            results.append(self._row(i, name, "dry_run", f"试跑未保存（{note}）"))
                             self.ui.log(f"{label} 已填好，试跑不保存", "ok")
                             self.ui.progress(i + 1, total, stats)
                             continue
@@ -146,9 +149,9 @@ class AdRegRunner(StateMixin):
 
                         self._submit(af, b.page)
                         stats["ok"] += 1
-                        results.append(self._row(i, name, "ok", vtitle))
+                        results.append(self._row(i, name, "ok", note))
                         self.state.mark_done(name)
-                        self.created.append((name, vtitle))
+                        self.created.append((name, note))
                         self.ui.log(f"{label} 已保存", "ok")
 
                         if new_plan:
@@ -223,6 +226,22 @@ class AdRegRunner(StateMixin):
                 log.warning("打开 %s 后没等到 %s，页面在 %s，重开一次", url, ready, page.url)
                 page.wait_for_timeout(2000)
         page.wait_for_timeout(2000)
+        self._dismiss_info_modals(page)
+
+    @staticmethod
+    def _dismiss_info_modals(page):
+        """新页面加载后会弹一两个「新增XX功能！…我知道了」的说明弹窗，盖住表单。
+        全关掉，不然点「推广目的」会点到遮罩上、下游联动也不触发。"""
+        for _ in range(4):
+            try:
+                btn = page.locator('.ivu-modal-wrap:visible').get_by_text(
+                    "我知道了", exact=True).first
+                if not btn.count():
+                    break
+                btn.click()
+                page.wait_for_timeout(500)
+            except Exception:
+                break
 
     def _submit(self, af: AdFiller, page):
         create_marker = self.f.get("create_url_marker", "promote/auto")
