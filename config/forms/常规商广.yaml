@@ -258,12 +258,14 @@ creative:
     label: 空间设置
     option: 稿件UP主空间
 
-  # Story转化组件：点「选择」开弹层，挑第一个，确认。⚠ 弹层内部结构第一次实跑要盯
+  # Story转化组件：点「选择」开抽屉（.library-wrap），挑第一个组件卡（.library-item），确定。
+  # 实抓 2026-09-03：抽屉里 9 张 .library-item / .component-card，各带一个 .ivu-radio
   story_component:
     label: Story转化组件
     open_button: 选择
-    picker_selector: '.ivu-modal, .ivu-drawer'
-    item_selector: 'tr, .ivu-radio-wrapper, [class*="list-item"]'
+    picker_selector: '.library-wrap'
+    item_selector: '.library-item'
+    radio_in_item: '.ivu-radio'
     confirm_button: 确定
 
   block_selector: '.single-creative-wrapper'

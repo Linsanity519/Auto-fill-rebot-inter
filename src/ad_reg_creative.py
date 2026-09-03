@@ -134,38 +134,40 @@ class AdRegCreative:
             self.page.wait_for_timeout(400)
 
     def _pick_story(self, cfg: dict):
-        """Story 转化组件：点「选择」开弹层，挑第一个可选项，确认。
-
-        ⚠ 弹层内部结构没实抓过，item_selector 是启发式的，第一次实跑要盯。
-        """
+        """Story 转化组件：点「选择」开抽屉，挑第一个组件卡，确定。"""
         w = self._wrapper()
         fi = w.locator(".ivu-form-item", has_text=cfg.get("label", "Story转化组件")).first
         if not fi.count():
             return
-        # 已经选过就不动
-        if fi.locator(".ivu-select-selected-value, [class*=selected]").count():
-            txt = (fi.inner_text() or "")
-            if "请选择" not in txt:
-                return
+        if "请选择" not in (fi.inner_text() or ""):
+            return          # 已经有值了，不动
+
         opener = fi.get_by_text(cfg.get("open_button", "选择"), exact=True).first
         if not opener.count():
             raise FillError("Story转化组件里没有「选择」按钮")
         opener.click()
         self.page.wait_for_timeout(1500)
-        picker = self.page.locator(cfg.get("picker_selector", ".ivu-modal, .ivu-drawer")).filter(
-            visible=True).last
-        if not wait_until(self.page, lambda: picker.count() > 0, self.timeout):
-            raise FillError("点了「选择」但 Story 组件弹层没出来")
-        item = picker.locator(cfg.get("item_selector", "tr, .ivu-radio-wrapper, [class*=list-item]")).filter(
-            visible=True).first
-        if not item.count():
-            raise FillError("Story 组件弹层里没有可选项")
-        item.click()
+
+        psel = cfg.get("picker_selector", ".library-wrap")
+        picker = self.page.locator(psel).filter(visible=True).first
+        isel = cfg.get("item_selector", ".library-item")
+        if not wait_until(self.page, lambda: picker.locator(isel).count() > 0, self.timeout):
+            raise FillError("点了「选择」但 Story 组件抽屉没出来 / 里面没有可选组件")
+
+        item = picker.locator(isel).first
+        radio = item.locator(cfg.get("radio_in_item", ".ivu-radio")).first
+        (radio if radio.count() else item).click()
         self.page.wait_for_timeout(500)
-        ok = picker.get_by_text(cfg.get("confirm_button", "确定"), exact=True).first
-        if ok.count():
-            ok.click()
-            self.page.wait_for_timeout(800)
+
+        ok = picker.get_by_text(cfg.get("confirm_button", "确定"), exact=True).last
+        if not ok.count():
+            raise FillError("Story 组件抽屉里没有「确定」按钮")
+        ok.click()
+        try:
+            picker.wait_for(state="hidden", timeout=self.timeout)
+        except Exception:
+            log.warning("Story 组件抽屉没检测到关闭，继续")
+        self.page.wait_for_timeout(600)
 
     def _switch_to(self, creative_cfg: dict, i: int):
         """点左边第 i 张「创意N」卡，把那条创意的表单切出来。"""

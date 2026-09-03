@@ -230,8 +230,10 @@ class AdRegRunner(StateMixin):
 
     @staticmethod
     def _dismiss_info_modals(page):
-        """新页面加载后会弹一两个「新增XX功能！…我知道了」的说明弹窗，盖住表单。
-        全关掉，不然点「推广目的」会点到遮罩上、下游联动也不触发。"""
+        """新页面加载后的两种打扰，都清掉：
+        ① 「新增XX功能！…我知道了」说明弹窗（盖住表单，点推广目的会点到遮罩、联动也不触发）
+        ② 「监测到上次广告创意未提交，是否自动填写」横幅（.ivu-alert.help-edit，挤表单布局）
+        """
         for _ in range(4):
             try:
                 btn = page.locator('.ivu-modal-wrap:visible').get_by_text(
@@ -242,6 +244,13 @@ class AdRegRunner(StateMixin):
                 page.wait_for_timeout(500)
             except Exception:
                 break
+        try:
+            x = page.locator('.ivu-alert.help-edit .ivu-alert-close').first
+            if x.count():
+                x.click()
+                page.wait_for_timeout(400)
+        except Exception:
+            pass
 
     def _submit(self, af: AdFiller, page):
         create_marker = self.f.get("create_url_marker", "promote/auto")
