@@ -104,6 +104,24 @@ def save(cfg: dict, values: dict) -> str:
     return str(p)
 
 
+def resolve_options(f: dict, values: dict) -> list | None:
+    """这一项当前的可选项。
+
+    普通字段就是 yaml 里的 options；联动字段（写了 options_map）按 options_by
+    指定的那些字段的当前值拼出 key，去 options_map 里查。查不到返回 []
+    （上游还没选 / 选了个没有下游的值），界面上就是个空下拉。
+
+    ⚠ 必须和 app.js 的 prepOptions() 一套算法，否则「界面能选、保存报不在选项里」。
+    """
+    omap = f.get("options_map")
+    if not omap:
+        return f.get("options")
+    by = f.get("options_by") or []
+    sep = f.get("options_join", " | ")
+    key = sep.join(str(values.get(n, "")).strip() for n in by)
+    return list(omap.get(key, []))
+
+
 def shown(f: dict, values: dict) -> bool:
     """这一项当前该不该出现（when 没满足的字段界面上是隐藏的）。
 
@@ -137,7 +155,10 @@ def validate(cfg: dict, values: dict) -> list[str]:
             if f.get("required"):
                 issues.append(f"[准备阶段] 「{name}」没填")
             continue
-        opts = f.get("options")
+        opts = resolve_options(f, values)
+        if f.get("options_map") and not opts:
+            issues.append(f"[准备阶段] 「{name}」的上游还没选好，这一项没有可选项")
+            continue
         if opts:
             # 多选字段存的是「A,B,C」，得逐个比；按整串比会把合法值判成非法
             t = str(f.get("type", ""))

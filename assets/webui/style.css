@@ -453,6 +453,9 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .content { flex: 1; min-height: 0; padding: 14px 18px; display: flex; flex-direction: column; overflow: hidden; }
 .step-panel { flex: 1; min-height: 0; display: none; flex-direction: column; }
 .step-panel.active { display: flex; }
+/* 「准备」页字段可能很多（常规商广有 18 项 + 6 条文案），整页要能上下滚，
+   不然 .content 的 overflow:hidden 会把下半截字段直接切掉、点都点不到。 */
+.step-panel[data-panel="prepare"].active { overflow-y: auto; padding-right: 2px; }
 /* 宽屏上别把表格和网格铺满整屏，行太长读不动 */
 .step-panel.active > * { width: 100%; max-width: 1160px; margin-inline: auto; }
 

@@ -1,0 +1,265 @@
+# ============================================================
+# 常规商广投放（计划 → 单元 → 创意，「三连」一页建完）
+# 结构抓取：见 docs/常规商广-配置项抓取.md ——【改这个文件之前先看那份】
+# ============================================================
+# ⚠ 和「原生商广」是**同一套页面 / 同一个 iView 框架**（ad.bilibili.co #/promote/auto）。
+#   区别只在：
+#     · 原生把 推广目的/推广内容/转化目标 写死；常规商广让用户在准备页选
+#     · 原生按 avid 搜稿件；常规商广从「我的视频」列表按位置取，一个视频一个单元
+#     · 创意的 6 条文案在准备页填一次，全批共用
+#   计划层 / 单元层的控件类型和原生一致，复用 src/ad_filler.py 那套。
+#
+# ⚠ 往这里加新的顶层键时，回 src/formcfg.py 的 BY_MODE["ad_regular"] 里登记一下。
+#
+# ⚠ 「我的视频」抽屉、「批量添加标题」、「编辑定向」这三段在写这份 yaml 时
+#   内网连不上没能实跑验证，选择器按已抓到的 DOM + 原生同类控件填的，
+#   第一次实跑要盯着这三步（见 docs 末尾「还没定 / 待验证」）。
+
+name: 常规商广
+description: 常规商广投放 - 三层商广，一个视频一个单元，视频取自「我的视频」
+
+nav:
+  group: 商业化广告
+  group_order: 5
+  label: 常规商广
+  order: 2
+
+mode: ad_regular
+
+# 不吃 Excel：单元数量、跳过几个、6 条文案、目的/内容/转化 都在准备页填
+data_source: none
+
+form_url: 'https://ad.bilibili.co/#/promote/auto?type=1'
+
+urls:
+  new_plan: 'https://ad.bilibili.co/#/promote/auto?type=1'
+  under_plan: 'https://ad.bilibili.co/#/promote/auto?campaign_id={campaign_id}'
+  campaign_list: 'https://ad.bilibili.co/#/promote/campaign'
+  unit_list: 'https://ad.bilibili.co/#/promote/campaign/unit'
+
+ready_selector: 'input[placeholder="请输入单元名称"]'
+submit_button: '保存'
+create_url_marker: 'promote/auto'
+
+ui:
+  deliver_label: 投放配置
+  deliver_hint: 填准备参数 → 保存 → 载入并检查 → 跑
+  run_kind: fill
+
+# ============================================================
+# 准备页字段（一次投放共用，不进 Excel）
+# ============================================================
+prep_fields:
+  - name: 计划名称
+    type: text
+    required: true
+    ph: '如【26年9月】常规商广-带货整合'
+    note: '本批新建的计划名。已经建好想复用就填下面的「已有计划ID」'
+
+  - name: 已有计划ID
+    type: text
+    ph: '如 51445292，留空 = 本次新建计划'
+    note: '填了就不建新计划，所有单元直接挂到这个计划下'
+
+  # 下面三项是联动下拉：推广内容跟着推广目的走，转化目标跟着「目的+内容」走。
+  # ⚠ 页面上组合很多，这里**只保留 3 组常用的**（用户指定 2026-09-03）：
+  #     交易经营 → 电商链接 ／ 内容种草 → 内容投放 ／ 销售线索收集 → 线索
+  #   要加别的组合，回 docs/常规商广-配置项抓取.md 的全量矩阵表抄进来。
+  - name: 推广目的
+    type: select
+    required: true
+    default: 交易经营
+    options: ['交易经营', '内容种草', '销售线索收集']
+
+  - name: 推广内容
+    type: select
+    required: true
+    default: 电商链接
+    options_by: [推广目的]
+    options_map:
+      交易经营: ['电商链接']
+      内容种草: ['内容投放']
+      销售线索收集: ['线索']
+
+  - name: 转化目标
+    type: select
+    required: true
+    default: 订单提交
+    # key = 「推广目的 | 推广内容」
+    options_by: [推广目的, 推广内容]
+    options_join: ' | '
+    options_map:
+      交易经营 | 电商链接: ['订单提交', '应用内访问', '应用唤起', '评论链接点击', '组件点击']
+      内容种草 | 内容投放: ['稿件播放', '用户关注', '图文/动态详情页浏览', '稿件点赞', '稿件互动']
+      销售线索收集 | 线索: ['表单提交', '有效线索', '表单付费', '评论链接点击', '微信复制', '完件', '授信', '组件点击']
+
+  - name: 出价
+    type: number
+    required: true
+    default: '200'
+    unit: 元/转化
+    note: '页面会提示同类广告的建议区间，超了只是提示、不拦提交'
+
+  - name: 投放时间
+    type: segmented
+    required: true
+    default: 长期投放
+    options: ['长期投放', '设置起止时间']
+    note: '长期投放 = 只有开始日期；选设置起止时间才需要填下面那栏'
+
+  - name: 投放起止时间
+    type: text
+    when: [投放时间, 设置起止时间]
+    default: '{今天} - 2026-12-31'
+    ph: '如 2026-09-03 - 2026-12-31'
+    note: '写成「开始 - 结束」；{今天} 会替换成跑的当天'
+
+  - name: 指定人群
+    type: text
+    ph: '人群包名称，留空 = 不指定'
+    note: '填页面「人群包」列表里的名字，支持只填一段'
+
+  - name: 排除人群
+    type: text
+    default: '【大会员】极度敏感用户'
+    ph: '人群包名称，留空 = 不排除'
+    note: '默认排除「【大会员】极度敏感用户」'
+
+  - name: 视频数量
+    type: number
+    required: true
+    default: '5'
+    note: '建几个单元 = 从「我的视频」里取几个视频（跳过前面那几个之后往下顺延）'
+
+  - name: 跳过前几个
+    type: number
+    required: true
+    default: '0'
+    note: '「我的视频」列表最前面这几个不用（大会员固定素材那批），从第 N+1 个开始取'
+
+  - name: 文案1
+    type: text
+    required: true
+    note: '创意的「素材标题」，2~40 字。6 条全批共用，每个单元都填这 6 条（页面上限就是 6 条）'
+  - {name: 文案2, type: text}
+  - {name: 文案3, type: text}
+  - {name: 文案4, type: text}
+  - {name: 文案5, type: text}
+  - {name: 文案6, type: text}
+
+  - name: 素材描述
+    type: text
+    required: true
+    default: ''
+    ph: '2~10 字，广告卡片上 UP 主名称位置的外显文案'
+    note: '页面必填项，全批共用一条'
+
+# ============================================================
+# 单元/单元名
+# ============================================================
+grouping:
+  # 一个视频 = 一个单元；不聚类、不按 10 条拆
+  max_creatives: 1
+  # {日期}=跑的当天 YYYYMMDD，{序号}=本批第几个（从 1 起），{标题}=视频标题
+  name_template: '常规商广_{日期}_{序号}'
+
+# ============================================================
+# 计划层（只有走 ?type=1 新建计划时才填）
+# ============================================================
+plan_fields:
+  - {name: 推广目的, label: 推广目的, type: card_radio, from_prep: 推广目的, required: true}
+  - {name: 广告类型, label: 广告类型, type: card_radio, value: 所有广告}
+  - {name: 计划名称, ph: 请输入计划名称, type: fill_ph, from_prep: 计划名称, required: true}
+  - {name: 计划预算, label: 计划预算, type: card_radio, value: 不限预算}
+
+# ============================================================
+# 单元层
+# ============================================================
+unit_fields:
+  - {name: 单元名称, ph: 请输入单元名称, type: fill_ph, required: true}
+  - {name: 推广内容, label: 推广内容, type: card_radio, from_prep: 推广内容, required: true}
+
+  # ---- 定向：只动人群包，其余保持「不限」（同原生）----
+  - name: 定向人群包
+    type: audience
+    open_button: 编辑定向
+    confirm_button: 确认
+    include_option: 指定人群包
+    exclude_option: 排除人群包
+    unlimited_option: 不限
+    from_prep: {include: 指定人群, exclude: 排除人群}
+
+  - {name: 关联产品, label: 关联产品, type: card_radio, value: 不启用}
+
+  # ---- 投放日期 ----
+  - {name: 投放日期方式, label: 投放日期, type: card_radio, from_prep: 投放时间, required: true}
+  - name: 投放日期
+    ph: 选择开始结束日期
+    type: date_range
+    when: [投放时间, 设置起止时间]
+    from_prep: 投放起止时间
+    required: true
+
+  - {name: 竞价策略, type: card_by_text, value: 稳定成本投放}
+  - {name: 付费方式, label: 付费方式, type: card_radio, value: oCPM}
+
+  - {name: 转化目标, label: 转化目标及出价, type: select_ivu, from_prep: 转化目标, required: true}
+  - {name: 出价, ph: 请输入出价(元), type: fill_ph, from_prep: 出价, required: true}
+
+  - {name: 单元预算, label: 单元预算, type: radio_ivu, value: 不限预算}
+
+  # ---- 监测链接（三个框 placeholder 一样，按顺序 0/1 取）----
+  - {name: 监测链接方式, label: 监测链接, type: card_radio, value: 自定义}
+  - name: 展示监控
+    ph: 请输入https链接开头的URL
+    ph_index: 0
+    type: fill_ph
+    default: 'https://api.bilibili.com/x/vas_ads_open/ads/callback?type=show&track_id=__TRACKID__&account_id=__ACCOUNTID__&mid=__UID__&campaign_id=__CAMPAIGNID__&unit_id=__UNITID__&creative_id=__CREATIVEID__&os=__OS__&model=__MODEL__&ts=__TS__'
+  - name: 点击监控
+    ph: 请输入https链接开头的URL
+    ph_index: 1
+    type: fill_ph
+    default: 'https://api.bilibili.com/x/vas_ads_open/ads/callback?type=click&track_id=__TRACKID__&account_id=__ACCOUNTID__&mid=__UID__&campaign_id=__CAMPAIGNID__&unit_id=__UNITID__&creative_id=__CREATIVEID__&os=__OS__&model=__MODEL__&ts=__TS__'
+
+  - {name: 广告投放位置, label: 广告投放位置, type: card_radio, value: 全部}
+
+# ============================================================
+# 创意层：从「我的视频」按位置取一个视频，填 6 条素材标题 + 素材描述
+# 选择器 2026-09-03 实抓验证过（见 docs/常规商广-配置项抓取.md）
+# ============================================================
+creative:
+  # 「添加稿件/视频」抽屉里的「我的视频」Tab
+  video_picker:
+    open_button: 添加稿件/视频
+    tab: 我的视频
+    # 抽屉顶部子账户切换（品牌银行 / 三连账户），选「三连账户」才看得到我的视频
+    sub_account: 三连账户
+    card_selector: '.video-select-item'
+    # 点这个（不是点卡片本身）；点 .video-checkbox 外壳有时不生效，点里面的 wrapper
+    check_selector: '.video-checkbox .ivu-checkbox-wrapper'
+    page_selector: '.ivu-page'
+    page_item_selector: '.ivu-page-item'
+    per_page: 20
+    sort_default: 发布时间从近到远
+    count_text: 已选
+    confirm_button: 确定
+    cancel_button: 取消
+
+  # 6 条素材标题：点创意块里的「批量添加」开抽屉，逐条打字 + 回车确认，再点保存
+  titles:
+    open_button: 批量添加
+    drawer_selector: '.batch-title-drawer'
+    textarea_selector: '.batch-title-drawer textarea'
+    # 每条：填进 textarea → 按回车确认（抽屉里是标签式输入，不是一行一条的粘贴）
+    confirm_key: Enter
+    added_text: 已添加
+    save_button: 保存
+    max: 6
+
+  # 素材描述：创意块里的一个输入框，页面必填
+  desc:
+    ph: 请输入2 ~ 10个字
+    from_prep: 素材描述
+
+  block_selector: '.single-creative-wrapper'
+  block_avid_attr: 'data-id'

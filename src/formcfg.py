@@ -79,6 +79,11 @@ BY_MODE = {
         "columns", "create_url_marker", "creative", "grouping", "plan_fields", "prep_fields",
         "submit_button", "unit_fields", "urls",
     },
+    # 常规商广：和原生同页，多了 data_source（不吃 Excel）和 ui（准备页文案）。
+    "ad_regular": {
+        "create_url_marker", "creative", "data_source", "grouping", "plan_fields",
+        "prep_fields", "submit_button", "ui", "unit_fields", "urls",
+    },
     "dmp_extension": {
         "active_status", "after_each_wait", "after_filter_wait", "after_open_wait",
         "after_pick_wait", "after_save_wait", "cancel_texts", "confirm_texts",

@@ -206,6 +206,8 @@ def _prep_kind(f: dict) -> str:
       只认 type 的话，后者所有字段都会渲染成纯文本框，下拉和分段全没了。
     """
     t = str(f.get("type") or "")
+    if f.get("options_map"):
+        return "select"               # 联动下拉（常规商广的推广内容 / 转化目标）
     if t in ("segmented", "select", "number", "file", "text"):
         return t                      # 自己就写的是长相（原生商广）
     if t == "pp_number":
@@ -901,8 +903,8 @@ class Api:
                 from . import wizard_strategy as S
                 s["wizard_activity"] = dict(options or {}).get("activity") or {}
                 s["wizard_strategy"] = S.active_payload(cfg)
-            # 原生商广专用：计划名称/转化目标/出价/投放时间/人群，界面上填一次全批共用
-            if cfg.get("mode") == "ad_native":
+            # 原生 / 常规商广：计划名称/转化目标/出价/投放时间/人群，界面上填一次全批共用
+            if cfg.get("mode") in ("ad_native", "ad_regular"):
                 from . import ad_prep as P
                 s["ad_prep"] = P.load(cfg)
             # 价格面板：投放配置页上的「生效渠道」（+ 定向时的 panel_type）。

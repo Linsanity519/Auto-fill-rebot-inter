@@ -37,6 +37,7 @@
     {"name": "价格策略批量开关", "mode": "pt_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true, "flow": false, "health": true, "reversible": true}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"}, "group": "价格", "group_order": 3, "label": "价格策略批量开关", "order": 3, "desc": "策略中心 - 把「价格配置」表里已配好的行批量开启 / 关闭（界面上切方向）", "scopes": [["按名称关键词", "keyword"], ["本工具配置过的", "ledger"], ["按清单", "list"]]},
     {"name": "资源位投放", "mode": "wizard", "caps": {"strategy": true, "prep": false, "positions": true, "activity": true, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": false, "reversible": false}, "ui": {"deliver_label": "资源位投放配置", "deliver_hint": "选资源位 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "生效平台、流量池、频次、人群、内容限制…… 配在这里，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位配置", "order": 1, "desc": "大会员投放系统 - 活动 / 单元 / 创意 三步配置", "scopes": []},
     {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "原生商广", "order": 1, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": []},
+    {"name": "常规商广", "mode": "ad_regular", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": false, "flow": false, "health": true, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "填准备参数 → 保存 → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "商业化广告", "group_order": 5, "label": "常规商广", "order": 2, "desc": "常规商广投放 - 三层商广，一个视频一个单元，视频取自「我的视频」", "scopes": []},
     {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false, "flow": false, "health": false, "reversible": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": ""}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": []},
   ];
 
@@ -1975,6 +1976,14 @@
       // 用列表是因为「价格面板pid」在搭售类型 = 买赠 和 买赠+0元购 时都要填。
       if (!prepShown(f)) return;
 
+      // 联动下拉：上游变了，当前值不在新选项里就顺到第一个（不然会留个非法值）
+      if (f.options_map) {
+        const opts = prepOptions(f);
+        if (opts.length && !opts.includes(String(state.prepValues[f.name] || ""))) {
+          state.prepValues[f.name] = opts[0];
+        }
+      }
+
       // 同一个 group 的字段归到一个小标题下（26 个 SKU 各自一组，不分组根本没法看）
       if (f.group && f.group !== lastGroup) {
         lastGroup = f.group;
@@ -2007,6 +2016,16 @@
   // when 的求值：[字段名, 值] 和 [字段名, [值1, 值2]] 两种写法都认。
   // ⚠ 必须和 Python 端 ad_prep.shown() 保持一致，否则会出现
   //   「界面上没有这一项、却一直提示没填」，人完全没法处理。
+  // 联动下拉的当前可选项。普通字段就是 f.options；写了 options_map 的按
+  // options_by 那几个字段的当前值拼 key 去查。
+  // ⚠ 必须和 Python 端 ad_prep.resolve_options() 一套算法。
+  function prepOptions(f) {
+    if (!f.options_map) return f.options || [];
+    const sep = f.options_join || " | ";
+    const key = (f.options_by || []).map((n) => String(state.prepValues[n] || "").trim()).join(sep);
+    return f.options_map[key] || [];
+  }
+
   function prepShown(f) {
     if (!f.when) return true;
     const cur = String(state.prepValues[f.when[0]] || "");
@@ -2045,13 +2064,17 @@
       return wrap;
     }
 
-    if (kind === "segmented" || (kind === "select" && (f.options || []).length <= 3)) {
+    const opts = prepOptions(f);
+
+    // 分段控件：只给「静态、3 项以内」的 select（投放时间那种）。联动下拉不用 ——
+    // 选项数随上游 1~8 个地变，分段控件宽度会忽宽忽窄很跳。
+    if (kind === "segmented" || (kind === "select" && !f.options_map && opts.length <= 3)) {
       const seg = el("div", "segmented");
-      (f.options || []).forEach((opt) => {
+      opts.forEach((opt) => {
         const it = el("div", "seg-item" + (opt === cur ? " active" : ""), opt);
         it.addEventListener("click", () => {
           state.prepValues[f.name] = opt;
-          renderPrepFields();      // 可能有 when 依赖它，整块重画
+          renderPrepFields();      // 可能有 when / options_by 依赖它，整块重画
         });
         seg.appendChild(it);
       });
@@ -2060,8 +2083,12 @@
 
     if (kind === "select") {
       const sel = el("select", "field");
-      sel.style.cssText = "width:220px;flex:none";
-      (f.options || []).forEach((opt) => {
+      sel.style.cssText = "width:240px;flex:none";
+      if (!opts.length) {
+        sel.appendChild(el("option", null, "（上游还没选好）"));
+        sel.disabled = true;
+      }
+      opts.forEach((opt) => {
         const o = el("option", null, opt);
         o.value = opt;
         if (opt === cur) o.selected = true;

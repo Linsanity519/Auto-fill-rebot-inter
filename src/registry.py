@@ -53,6 +53,11 @@ def _runner_ad(settings, cfg, ui):
     return AdRunner(settings, cfg, ui)
 
 
+def _runner_ad_regular(settings, cfg, ui):
+    from .ad_reg_runner import AdRegRunner
+    return AdRegRunner(settings, cfg, ui)
+
+
 def _runner_meeting(settings, cfg, ui):
     from .meeting_runner import MeetingRunner
     return MeetingRunner(settings, cfg, ui)
@@ -194,6 +199,15 @@ MODES: dict[str, ModeSpec] = {
         make_runner=_runner_ad,
         build_template=_template_ad,
         template_columns=_columns_ad,
+    ),
+    # 常规商广：和原生同一个页面，但不吃 Excel（视频数量/文案都在准备页填），
+    # 所以没有 build_template，也没有「延期范围」。
+    "ad_regular": ModeSpec(
+        make_runner=_runner_ad_regular,
+        no_template_hint=("常规商广不用 Excel 模板。\n\n"
+                          "在「准备」页填「视频数量 / 跳过前几个 / 6 条文案」等参数，"
+                          "点保存，再「载入并检查」。"),
+        no_template_hint_cli="常规商广不用 Excel 模板，参数都在准备页填",
     ),
     # ⚠ 抢会议室不读 Excel：任务清单在界面上直接填，存 config/prep/预定会议室.json。
     #   build_template 留空，界面上「生成模板」会拿 no_template_hint 提示改去哪儿填。
