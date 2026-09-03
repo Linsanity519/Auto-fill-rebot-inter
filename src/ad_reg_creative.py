@@ -120,17 +120,51 @@ class AdRegCreative:
         self.page.wait_for_timeout(200)
 
     def _pick_space(self, cfg: dict):
-        """空间设置：radio-item 选第一个（默认「稿件UP主空间」）。"""
+        """空间设置：选第一个「稿件UP主空间」。
+
+        ⚠ 这个选项对一部分视频（我的视频里没绑 UP 主空间的）是**禁用**的，
+          页面会自动落到「自定义」。禁用时就不强选，保持页面默认（已选中的那个）。
+        """
         w = self._wrapper()
         fi = w.locator(".ivu-form-item", has_text=cfg.get("label", "空间设置")).first
         if not fi.count():
-            return
+            raise FillError("创意块里没有「空间设置」这一项")
         want = cfg.get("option", "稿件UP主空间")
-        tab = fi.locator(".radio-item").filter(has_text=re.compile(rf"^\s*{re.escape(want)}\s*$")).first
-        if not tab.count():
-            tab = fi.locator(".radio-item").first
-        if tab.count() and not re.search(r"active", tab.get_attribute("class") or ""):
-            tab.click()
+        opts = fi.locator(".ivu-radio-wrapper, .radio-item")
+        opt = opts.filter(has_text=re.compile(rf"^\s*{re.escape(want)}\s*$")).first
+        if not opt.count():
+            raise FillError(f"「空间设置」里没有「{want}」。实际有：{opts.all_inner_texts()}")
+        cls = opt.get_attribute("class") or ""
+        if "disabled" in cls:
+            log.info("「空间设置」的「%s」不可选，落到「自定义」", want)
+        elif "checked" not in cls and "active" not in cls:
+            opt.click()
+            self.page.wait_for_timeout(400)
+
+        # 自定义时下面有个品牌下拉（.brand-select-wrap），选第一个（页面一般已默认选中第一个，
+        # 这里再点一遍保底）
+        self._pick_first_brand()
+
+    def _pick_first_brand(self):
+        w = self._wrapper()
+        bw = w.locator(".brand-select-wrap .ivu-select, .space-brand-select .ivu-select").first
+        if not bw.count():
+            return
+        # 已经选了就不动
+        if bw.locator(".ivu-select-item-selected").count():
+            cur = bw.locator("input[type=hidden]").first
+            try:
+                if (cur.input_value() or "").strip():
+                    return
+            except Exception:
+                pass
+        bw.locator(".ivu-select-selection").first.click()
+        self.page.wait_for_timeout(700)
+        item = self.page.locator(".ivu-select-dropdown:visible .ivu-select-item").first
+        if not item.count():
+            item = bw.locator(".ivu-select-item").first
+        if item.count():
+            item.click()
             self.page.wait_for_timeout(400)
 
     def _pick_story(self, cfg: dict):
@@ -149,22 +183,30 @@ class AdRegCreative:
         self.page.wait_for_timeout(1500)
 
         psel = cfg.get("picker_selector", ".library-wrap")
-        picker = self.page.locator(psel).filter(visible=True).first
         isel = cfg.get("item_selector", ".library-item")
+        picker = self.page.locator(f"{psel}:visible").first
+        if not picker.count():
+            picker = self.page.locator(psel).first
         if not wait_until(self.page, lambda: picker.locator(isel).count() > 0, self.timeout):
             raise FillError("点了「选择」但 Story 组件抽屉没出来 / 里面没有可选组件")
 
+        # 选第一张卡：勾它右上角的方块（.component-checkbox），不是点卡片本体（会开预览）
         item = picker.locator(isel).first
-        radio = item.locator(cfg.get("radio_in_item", ".ivu-radio")).first
-        (radio if radio.count() else item).click()
+        chk = item.locator(cfg.get("check_in_item", ".component-checkbox .ivu-checkbox-wrapper")).first
+        (chk if chk.count() else item).click()
         self.page.wait_for_timeout(500)
 
-        ok = picker.get_by_text(cfg.get("confirm_button", "确定"), exact=True).last
+        cb = cfg.get("confirm_button", "确定")
+        ok = self.page.locator(cfg.get("footer_confirm_selector",
+                                       ".library-wrap .footer .ivu-btn-primary")).first
+        if not ok.count():
+            ok = self.page.locator(f"{psel}:visible button").filter(
+                has_text=re.compile(rf"^\s*{re.escape(cb)}\s*$")).last
         if not ok.count():
             raise FillError("Story 组件抽屉里没有「确定」按钮")
         ok.click()
         try:
-            picker.wait_for(state="hidden", timeout=self.timeout)
+            self.page.locator(f"{psel}:visible").first.wait_for(state="hidden", timeout=self.timeout)
         except Exception:
             log.warning("Story 组件抽屉没检测到关闭，继续")
         self.page.wait_for_timeout(600)
