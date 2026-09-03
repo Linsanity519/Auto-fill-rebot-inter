@@ -25,8 +25,11 @@ description: 商广投放系统 - 一个内容一个单元，每单元最多 10 
 nav:
   group: 商业化广告
   group_order: 5
-  label: 原生商广
-  order: 1
+  # 侧栏叫「原生商广老」：ad.bilibili.co 的老页面（#/promote/auto，iView 三层）。
+  # 新的 auto-v2 两层页是另一个配置类型「原生商广新」（mode: ad_v2）。
+  # ⚠ 只改 label，不动 name / 文件名 —— 断点、config/prep/原生商广.json、埋点都认 name。
+  label: 原生商广老
+  order: 2
 mode: ad_native
 
 form_url: 'https://ad.bilibili.co/#/promote/auto?type=1'

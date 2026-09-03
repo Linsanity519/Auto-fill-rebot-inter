@@ -903,8 +903,9 @@ class Api:
                 from . import wizard_strategy as S
                 s["wizard_activity"] = dict(options or {}).get("activity") or {}
                 s["wizard_strategy"] = S.active_payload(cfg)
-            # 原生 / 常规商广：计划名称/转化目标/出价/投放时间/人群，界面上填一次全批共用
-            if cfg.get("mode") in ("ad_native", "ad_regular"):
+            # 原生商广老/新 + 常规商广：计划名称/转化目标/出价/投放时间/人群，
+            # 界面上填一次全批共用。这几个 mode 的 runner 都读 s["ad_prep"]。
+            if cfg.get("mode") in ("ad_native", "ad_v2", "ad_regular"):
                 from . import ad_prep as P
                 s["ad_prep"] = P.load(cfg)
             # 价格面板：投放配置页上的「生效渠道」（+ 定向时的 panel_type）。

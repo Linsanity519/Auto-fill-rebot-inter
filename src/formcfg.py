@@ -79,10 +79,16 @@ BY_MODE = {
         "columns", "create_url_marker", "creative", "grouping", "plan_fields", "prep_fields",
         "submit_button", "unit_fields", "urls",
     },
-    # 常规商广：和原生同页，多了 data_source（不吃 Excel）和 ui（准备页文案）。
+    # 常规商广：和原生同页（老 auto），多了 data_source（不吃 Excel）和 ui（准备页文案）。
     "ad_regular": {
         "create_url_marker", "creative", "data_source", "grouping", "plan_fields",
         "prep_fields", "submit_button", "ui", "unit_fields", "urls",
+    },
+    # 原生商广新：ad.bilibili.co 新版投放页（#/promote/auto-v2）。
+    # 两层：project_fields（项目层 bd- 表单）+ material（素材聚合池）。
+    "ad_v2": {
+        "columns", "create_url_marker", "material", "prep_fields", "project_fields",
+        "submit_button", "urls",
     },
     "dmp_extension": {
         "active_status", "after_each_wait", "after_filter_wait", "after_open_wait",

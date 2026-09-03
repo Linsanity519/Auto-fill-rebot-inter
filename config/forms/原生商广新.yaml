@@ -1,0 +1,208 @@
+# ============================================================
+# 原生商广（新）· 三连竞价推广 auto-v2 · 项目 → 素材 两层
+# 结构抓取：2026-09-02  ad.bilibili.co/#/promote/auto-v2  账户「大会员中心-营销活动推广」ID 4094
+# 见 docs/三连竞价推广auto-v2-配置项抓取.md
+# ============================================================
+# ⚠ 这是 ad.bilibili.co 新版投放页，和「原生商广老」（#/promote/auto，iView 三层）
+#   完全是两套 DOM，选择器不能互抄：
+#   · 项目层主表单是 B 站自研 bd- 组件：单选 label.bd-radio-button，选中看 is-active
+#   · 推广目的还是老的 .ppt-new-item 卡片（.ppt-title + active）
+#   · 「编辑定向」「添加稿件」两个抽屉没换框架，还是 iView（.ivu-*）
+#   · 素材层是「聚合配置」：整个项目 3 个池子（稿件≤200 / 标题≤50 / 封面≤100）+ 1 条描述，
+#     后台自己交叉组合成程序化创意
+#
+# ⚠ 批量模型：一次跑 = 建 1 个项目。Excel 每行一条素材，所有行的
+#   avid → 稿件池、素材标题 → 标题池、封面 → 封面池；描述在准备页填一个固定值。
+#   「内容」列只当人看的备注，不参与分组。
+#
+# ⚠ 常规商广投放（另一个配置类型）跑的也是这个页面 / 这个 mode，只是推广目的 /
+#   推广内容不同 —— 那份 yaml 单独写，共用 src/adv2_* 代码。
+
+name: 原生商广新
+description: 三连竞价推广(auto-v2) - 一次建一个项目，Excel 的 avid/标题/封面汇进素材池
+
+nav:
+  group: 商业化广告
+  group_order: 5
+  label: 原生商广新
+  order: 1
+mode: ad_v2
+
+form_url: 'https://ad.bilibili.co/#/promote/auto-v2'
+
+urls:
+  new_project: 'https://ad.bilibili.co/#/promote/auto-v2'
+
+ready_selector: 'input[placeholder="请输入项目名称"]'
+submit_button: '保存'
+create_url_marker: 'promote/auto-v2'
+
+# ============================================================
+# 准备阶段字段（界面上填一次，本批共用；不进 Excel）
+# ============================================================
+prep_fields:
+  - name: 项目名称
+    type: text
+    required: true
+    ph: '如【26年9月】原生内容素材-整合版'
+    note: '本次新建的项目名，上限 90 字'
+
+  - name: 素材描述
+    type: text
+    required: true
+    default: ''
+    ph: '2~10 字，客户端广告卡片里 UP 主名称位置的外显文案'
+    note: '⚠ 新页面整个项目只有一条描述（聚合配置），放这里填一个固定值。Excel 的「素材描述」列已废弃'
+
+  - name: 转化目标
+    type: select
+    required: true
+    default: 表单提交
+    options: ['表单提交']
+
+  - name: 出价
+    type: number
+    required: true
+    default: '200'
+    unit: 元/转化
+    note: '页面会提示同类广告出价区间，超了只提示不拦提交'
+
+  - name: 项目预算方式
+    type: segmented
+    required: true
+    default: 不限预算
+    options: ['不限预算', '日预算']
+    note: '⚠ 新页面默认「日预算」下限 500；要「不限预算」这里保持默认，runner 会显式点它'
+
+  - name: 日预算金额
+    type: number
+    when: [项目预算方式, 日预算]
+    default: '500'
+    unit: 元
+    note: '不小于 500，最多两位小数。只有「项目预算方式 = 日预算」时才要'
+
+  - name: 投放时间
+    type: segmented
+    required: true
+    default: 设置起止时间
+    options: ['长期投放', '设置起止时间']
+    note: '长期投放 = 只有开始日期；设置起止时间才要填下面那栏'
+
+  - name: 投放起止时间
+    type: text
+    when: [投放时间, 设置起止时间]
+    default: '{今天} - 2026-12-31'
+    ph: '如 2026-09-02 - 2026-12-31'
+    note: '写成「开始 - 结束」；{今天} 替换成跑的当天'
+
+  - name: 指定人群
+    type: text
+    ph: '人群包名称，留空 = 不指定'
+    note: '填「编辑定向」里人群包列表的名字，支持只填一段'
+
+  - name: 排除人群
+    type: text
+    default: '【大会员】极度敏感用户'
+    ph: '人群包名称，留空 = 不排除'
+    note: '默认排除「【大会员】极度敏感用户」'
+
+# ============================================================
+# 项目层（bd- 组件；顺序 = 页面从上到下）
+# ============================================================
+project_fields:
+  # ---- 基础信息 ----
+  - {name: 项目名称, ph: 请输入项目名称, type: bd_fill, from_prep: 项目名称, required: true}
+  - {name: 广告类型, label: 广告类型, type: bd_radio, value: 所有广告}
+
+  # ---- 推广标的 ----
+  - {name: 推广目的, type: ppt_card, value: 销售线索收集}
+  - {name: 推广内容, label: 推广内容, type: bd_radio, value: OGV推广}
+  - {name: 关联产品, label: 关联产品, type: bd_radio, value: 关闭}
+  - {name: 监测链接方式, label: 监测链接, type: bd_radio, value: 自定义}
+  - name: 展示监控
+    label: 展示监控
+    ph: 请输入https链接开头的URL
+    type: bd_fill
+    default: 'https://api.bilibili.com/x/vas_ads_open/ads/callback?type=show&track_id=__TRACKID__&account_id=__ACCOUNTID__&mid=__UID__&campaign_id=__CAMPAIGNID__&unit_id=__UNITID__&creative_id=__CREATIVEID__&os=__OS__&model=__MODEL__&ts=__TS__'
+  - name: 点击监控
+    label: 点击和播放3秒监控
+    ph: 请输入https链接开头的URL
+    type: bd_fill
+    default: 'https://api.bilibili.com/x/vas_ads_open/ads/callback?type=click&track_id=__TRACKID__&account_id=__ACCOUNTID__&mid=__UID__&campaign_id=__CAMPAIGNID__&unit_id=__UNITID__&creative_id=__CREATIVEID__&os=__OS__&model=__MODEL__&ts=__TS__'
+
+  # ---- 目标与出价 ----
+  # ⚠ 竞价策略卡片渲染在 .bd-form-item__content 之外，card_by_text 整页按「文字以 value 开头」找。
+  - {name: 竞价策略, type: card_by_text, value: 稳定成本投放}
+  - {name: 付费方式, label: 付费方式, type: bd_radio, value: oCPM}
+  - {name: 转化目标, label: 转化目标及出价, type: bd_select, from_prep: 转化目标, required: true}
+  - {name: 出价, ph: 请输入出价(元), type: bd_fill, from_prep: 出价, required: true}
+
+  # ---- 排期与预算 ----
+  - {name: 项目预算方式, label: 项目预算, type: bd_radio, from_prep: 项目预算方式, required: true}
+  - name: 日预算金额
+    ph: 请输入不小于500
+    type: bd_fill
+    when: [项目预算方式, 日预算]
+    from_prep: 日预算金额
+  - {name: 投放日期方式, label: 投放日期, type: bd_radio, from_prep: 投放时间, required: true}
+  - name: 投放日期
+    type: bd_date_range
+    when: [投放时间, 设置起止时间]
+    from_prep: 投放起止时间
+  # 投放时段：默认周一~周日全天，不动
+
+  # ---- 定向 ----
+  - name: 定向人群包
+    type: audience
+    open_button: 编辑定向
+    confirm_button: 确认
+    include_option: 指定人群包
+    exclude_option: 排除人群包
+    unlimited_option: 不限
+    from_prep: {include: 指定人群, exclude: 排除人群}
+
+  - {name: 广告投放位置, label: 广告投放位置, type: bd_radio, value: 全部}
+
+# ============================================================
+# 素材层（聚合配置 · 3 个池子 + 1 条描述）
+# ============================================================
+material:
+  picker:
+    open_button: 添加稿件/视频
+    drawer_selector: '.product-select-drawer'
+    search_ph: 请输入稿件bvid或avid搜索
+    confirm_button: 确定
+    cancel_button: 取消
+    count_text: 已选
+    max: 200
+    # 搜出来的结果卡：点标题文字（.video-name）即选中。
+    # ⚠ 点卡片本体（.video-select-item / 缩略图）会弹视频预览大弹窗，不是选中。
+    result_item: '.product-select-drawer .video-select-item .video-name'
+
+  title:
+    add_button: 新增标题
+    clear_button: 一键清空
+    input_ph: 请输入2~40个字
+    max_chars: 40
+    max_count: 50
+
+  cover:
+    mode_button: 自定义封面
+    add_button: 添加封面
+    file_input: '.media-editor input[type=file]'
+    count_text: 已添加
+    max: 100
+
+  description:
+    input_ph: 即客户端广告卡片中UP主名称位置
+    max_chars: 10
+    from_prep: 素材描述
+
+# ============================================================
+# Excel 模板列（一行 = 一条素材；所有行汇进项目的素材池）
+# ============================================================
+columns:
+  - {name: 内容, _note: '选填。只当人看的备注/分组标记，不参与配置。留空也行'}
+  - {name: avid, required: true, _note: '稿件 avid，抽屉里直接搜这个数字。重复的 avid 会自动去重'}
+  - {name: 素材标题, required: true, _note: '2~40 字。所有行的标题去重后汇进标题池，最多 50 个'}
+  - {name: 封面, _note: '选填。本地图片路径，或直接把图片贴进单元格。所有行的封面汇进封面池，最多 100 张'}
