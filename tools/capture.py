@@ -76,7 +76,9 @@ JS_FIELDS = r"""
   //   下面的「去嵌套只留最内层」会把真正的字段块（外层）丢掉，只剩两个半截：
   //   标签格有 label 没控件、控件格有控件没 label —— 出来的表整列都是「无控件」。
   //   （这一条是拿 antd / Element / iView / Arco 四套的样板页实测出来的。）
-  const isPart = el => /(item|field)[-_]?(label|control|explain|extra|message|tip|wrapper)/i
+  //   ⚠ [-_]* 不是 [-_]?：B 站自研的 bd- 组件用 BEM 双下划线（bd-form-item__label），
+  //     只放一个分隔符会漏掉它，真正的字段块 bd-form-item 反而被当成最内层丢掉。
+  const isPart = el => /(item|field)[-_]*(label|control|explain|extra|message|tip|wrapper)/i
       .test(typeof el.className === 'string' ? el.className : '');
 
   // (a) 各家 UI 框架的表单项容器
@@ -258,7 +260,7 @@ JS_CONTROL = r"""
   const norm = s => (s || '').replace(/\s+/g, ' ').trim().replace(/^[*＊]\s*/, '');
   // ⚠ 和 JS_FIELDS 用同一条排除规则：xxx-form-item-label 那种「标签格」
   //   也会被 [class*="form-item"] 选中，它里面没有控件。
-  const isPart = el => /(item|field)[-_]?(label|control|explain|extra|message|tip|wrapper)/i
+  const isPart = el => /(item|field)[-_]*(label|control|explain|extra|message|tip|wrapper)/i
       .test(typeof el.className === 'string' ? el.className : '');
 
   const blocks = [...document.querySelectorAll(

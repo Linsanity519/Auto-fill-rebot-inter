@@ -79,6 +79,12 @@ BY_MODE = {
         "columns", "create_url_marker", "creative", "grouping", "plan_fields", "prep_fields",
         "submit_button", "unit_fields", "urls",
     },
+    # 原生商广新 / 常规商广投放：ad.bilibili.co 新版投放页（#/promote/auto-v2）。
+    # 两层：project_fields（项目层 bd- 表单）+ material（素材聚合池）。
+    "ad_v2": {
+        "columns", "create_url_marker", "material", "prep_fields", "project_fields",
+        "submit_button", "urls",
+    },
     "dmp_extension": {
         "active_status", "after_each_wait", "after_filter_wait", "after_open_wait",
         "after_pick_wait", "after_save_wait", "cancel_texts", "confirm_texts",

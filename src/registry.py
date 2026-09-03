@@ -53,6 +53,11 @@ def _runner_ad(settings, cfg, ui):
     return AdRunner(settings, cfg, ui)
 
 
+def _runner_adv2(settings, cfg, ui):
+    from .adv2_runner import Adv2Runner
+    return Adv2Runner(settings, cfg, ui)
+
+
 def _runner_meeting(settings, cfg, ui):
     from .meeting_runner import MeetingRunner
     return MeetingRunner(settings, cfg, ui)
@@ -95,6 +100,13 @@ def _template_ad(name: str) -> str:
     return ad_template.build(formcfg.load(name))
 
 
+def _template_adv2(name: str) -> str:
+    from . import adv2_template
+    from . import formcfg
+
+    return adv2_template.build(formcfg.load(name))
+
+
 def _template_price_panel(name: str) -> str:
     from . import formcfg
     from . import pp_template
@@ -120,6 +132,11 @@ def _columns_default(cfg: dict, opts: dict | None = None) -> dict:
 
 def _columns_ad(cfg: dict, opts: dict | None = None) -> dict:
     from . import ad_data as D
+    return {"素材": [c["name"] for c in D.columns(cfg)]}
+
+
+def _columns_adv2(cfg: dict, opts: dict | None = None) -> dict:
+    from . import adv2_data as D
     return {"素材": [c["name"] for c in D.columns(cfg)]}
 
 
@@ -194,6 +211,13 @@ MODES: dict[str, ModeSpec] = {
         make_runner=_runner_ad,
         build_template=_template_ad,
         template_columns=_columns_ad,
+    ),
+    # 原生商广新：ad.bilibili.co 新版投放页（#/promote/auto-v2，bd- 组件，项目→素材两层）。
+    # 常规商广投放也用这个 mode，只是 yaml 里推广目的/推广内容不同。
+    "ad_v2": ModeSpec(
+        make_runner=_runner_adv2,
+        build_template=_template_adv2,
+        template_columns=_columns_adv2,
     ),
     # ⚠ 抢会议室不读 Excel：任务清单在界面上直接填，存 config/prep/预定会议室.json。
     #   build_template 留空，界面上「生成模板」会拿 no_template_hint 提示改去哪儿填。
