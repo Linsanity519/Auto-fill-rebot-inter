@@ -121,17 +121,17 @@
     grouping: {},
   };
 
-  // 首页/数据统计的假数据，同样只为了在普通浏览器里核对样式
+  // 首页的假数据，同样只为了在普通浏览器里核对样式
   const STUB_USAGE = {
     since: "2026-07-01", people: 3, people_opened: 5, shared: false, me: "abc12345",
     opens: 12, retries: 1, dry_runs: 2,
     saving: { mode: "baseline", multiplier: 3, default_seconds: 120, per_item_seconds: {} },
     report: { on: true, pending: 2, snapshot_at: "", error: "连不上网", syncing: false },
     snapshot_at: "2026-08-21T13:00:00+08:00",
-    totals: { runs: 9, items: 143, failed: 4, skipped: 6, attempted: 153,
+    totals: { runs: 9, items: 143, failed: 4,
               seconds: 5400, human: 47000, saved: 41600, ok_rate: 0.972 },
     week: { items: 21, seconds: 900, saved: 7000 },
-    longest: { seconds: 2400, items: 40, form: "资源位投放", ts: "2026-08-18T10:00:00+08:00" },
+    longest: null,
     // ⚠ 至少铺三个配置类型：「用在哪儿了」那张卡要的就是"条数最长的那行和
     //   省时最长的那行不是同一行"，只有一行的话这个效果根本看不出来
     forms: [{ name: "资源位投放", runs: 5, ok: 100, failed: 2, skipped: 0, total: 102,
@@ -140,10 +140,25 @@
               seconds: 900, human: 9120, saved: 8220, last: "2026-08-19T15:20:00+08:00" },
             { name: "预定会议室", runs: 4, ok: 3, failed: 0, skipped: 0, total: 7,
               seconds: 500, human: 0, saved: 0, last: "2026-08-25T09:30:00+08:00" }],
-    recent: [{ ts: "2026-08-20T09:00:00+08:00", form: "资源位投放", mode: "auto",
-               uid: "abc12345", ok: 20, total: 20, seconds: 900 },
-             { ts: "2026-08-19T15:20:00+08:00", form: "DMP延期", mode: "confirm",
-               uid: "abc12345", ok: 12, total: 14, seconds: 300 }],
+    // ⚠ 这份假数据模拟的是**接上团队快照之后**的样子（scope: "team"），因为那才是
+    //   同事机器上的常态：顶上那些数是全团队的，recent 空、longest 空、totals 无
+    //   skipped，本机流水整套挪进 mine。想核对单机口径的布局就把 scope 改成 "local"。
+    scope: "team",
+    actives: [{ uid: "48ea6115", name: "", last: "2026-09-03 18:11", items: 29, runs: 5 },
+              { uid: "abc12345", name: "", last: "2026-08-31 17:26", items: 22, runs: 1 },
+              { uid: "7c31aa02", name: "", last: "2026-08-20 10:02", items: 92, runs: 3 }],
+    recent: [],
+    mine: {
+      totals: { runs: 4, items: 60, failed: 2, skipped: 6, attempted: 68,
+                seconds: 2400, human: 19000, saved: 16600, ok_rate: 0.967 },
+      week: { items: 0, seconds: 0, saved: 0 },
+      longest: { seconds: 2400, items: 40, form: "资源位投放", ts: "2026-08-18T10:00:00+08:00" },
+      forms: [], weeks: [],
+      recent: [{ ts: "2026-08-20T09:00:00+08:00", form: "资源位投放", mode: "auto",
+                 uid: "abc12345", ok: 20, total: 20, seconds: 900 },
+               { ts: "2026-08-19T15:20:00+08:00", form: "DMP延期", mode: "confirm",
+                 uid: "abc12345", ok: 12, total: 14, seconds: 300 }],
+    },
   };
 
   function callApi(name, ...args) {
@@ -702,14 +717,13 @@
   function updateSidebarActive() {
     const onForm = state.view === "form";
     document.querySelectorAll(".sidebar-item").forEach((n) => {
-      if (n.id === "navHome" || n.id === "navStats") return;   // 钉住的两项单独处理
+      if (n.id === "navHome") return;                          // 钉住的首页单独处理
       n.classList.toggle("active", onForm && n.dataset.name === state.activeForm);
       const badge = n.querySelector(".badge");
       badge.textContent = (onForm && n.dataset.name === state.activeForm && state.loaded)
         ? String(state.previewRows.length) : "";
     });
     $("#navHome").classList.toggle("active", state.view === "home");
-    $("#navStats").classList.toggle("active", state.view === "stats");
     const activeGroup = onForm ? formGroup(state.activeForm) : null;
     document.querySelectorAll(".nav-group").forEach((box) => {
       box.classList.toggle("has-active", box.dataset.group === activeGroup);
@@ -1410,50 +1424,51 @@
   // 两个受众：用的人要一个「值得用」的理由，维护的人要成就感和「下一步修哪儿」。
   // 数据来自 usage_summary（口径见 src/usage.py 的 summarize）。
   // ⚠ 一个字的业务内容都没有 —— 埋点里就没记，这里也变不出来。
-  function showHome() { showOverview("home"); }
-  function showStats() { showOverview("stats"); }
-
-  function showOverview(view) {
+  // ⚠ 1.1.6 起「数据统计」并回了首页，只剩这一个概览页。
+  //   拆成两页的时候，侧栏那两项后面是同一批卡：首页画一遍 hero、点「查看详情 →」
+  //   进去第一张还是同一个 hero。而侧栏「配置类型」和首页那张目录卡也是同一份
+  //   config/forms/*.yaml —— 一个工具的导航不该有两份副本（UiPath / n8n / VS Code
+  //   都是「侧栏管全部、主区管你常用的和正在发生的」）。
+  function showHome() {
     if (state.running) {
       appendLog("正在跑，先停止再看这些", "warn");
       return;
     }
-    state.view = view;
+    state.view = "home";
     $("#wizardTabs").classList.add("hidden");
     $(".stepbar").classList.add("hidden");
     $(".footer-bar").classList.add("hidden");
     $("#filterPills").classList.add("hidden");
     document.querySelectorAll(".step-panel").forEach((n) => {
-      n.classList.toggle("active", n.dataset.panel === view);
+      n.classList.toggle("active", n.dataset.panel === "home");
     });
-    $("#topTitle").textContent = view === "home" ? "首页" : "数据统计";
-    $("#topSubtitle").textContent = view === "home"
-      ? "这工具能帮你干什么，以及替大家干了多少" : "全部明细";
+    $("#topTitle").textContent = "首页";
+    $("#topSubtitle").textContent = "这工具能帮你干什么，以及替大家干了多少";
     updateSidebarActive();
-    loadUsage().then((sum) => (view === "home" ? paintHome(sum) : paintStats(sum)));
-    refreshTeamThenRepaint(view);
+    loadUsage().then(paintHome);
+    refreshTeamThenRepaint();
   }
 
   // 团队快照（首页那个「N 人在用 / 共省了多少」）是从 GitHub 拉的，不再等发版。
   // ⚠ 顺序是「先用本地那份把界面点亮，拉到新的再重绘」——反过来的话，网络慢时
   //   人要对着空白页干等。拉失败什么都不做，继续用本地那份。
   let teamRefreshed = false;
-  function refreshTeamThenRepaint(view) {
-    if (teamRefreshed) return;          // 一次启动只拉一次，别每次切页都请求
+  function refreshTeamThenRepaint() {
+    if (teamRefreshed) return;          // 一次启动只拉一次，别每次回首页都请求
     teamRefreshed = true;
     callApi("refresh_team")
       .then((r) => {
         if (!r || !r.changed) return;
         return loadUsage(true).then((sum) => {
-          if (state.view !== view) return;
-          view === "home" ? paintHome(sum) : paintStats(sum);
+          if (state.view !== "home") return;   // 人已经切走了就别重绘
+          paintHome(sum);
         });
       })
       .catch(() => {});
   }
 
   // 统计读一次就够，不用每次点都去捞：数据源（本机 jsonl / 以后的企微表格）都不是
-  // 实时变的，跑完一轮会把缓存置空，「数据统计」页上还有「刷新」按钮兜底。
+  // 实时变的，跑完一轮会把缓存置空，再回首页就是新的。
   function loadUsage(force) {
     if (state.usage && !force) return Promise.resolve(state.usage);
     return callApi("usage_summary").then((sum) => {
@@ -1486,40 +1501,27 @@
     return ts.slice(5, 10);
   }
 
-  // 首页 = 能干什么（主角）+ 关键数据一屏（配角，详情去「数据统计」看）
+  // 首页 = 唯一的概览页，一页到底：
+  //   战绩 → 这些数字怎么来的 → 用在哪儿了 → 谁在用 → 你自己最近跑的 → 还没试过的
+  //
+  // ⚠ 顺序不是随便排的：先给结论（四个数），再给它的构成（两本账、各配置类型），
+  //   最后才是「还能干什么」—— 目录放最后是因为侧栏里已经有一份完整的了，
+  //   这里只补「你还没试过的那几个」，试遍了这张卡自己就消失。
+  // ⚠ 卡片构造函数没数据时一律返回 null（团队口径下没有本机流水、单机口径下没有
+  //   actives、全试过了就没有目录），统一 filter 掉，别往页面里塞空壳。
   function paintHome(sum) {
     const box = $("#homeBody");
     box.innerHTML = "";
     const t = (sum && sum.totals) || {};
     const used = new Set(((sum && sum.forms) || []).map((f) => f.name));
-    const hasData = (t.runs || 0) > 0;
+    const hasData = !!sum && !sum.error && (t.runs || 0) > 0;
 
-    if (!hasData) box.appendChild(homeWelcome());
-    box.appendChild(homeCatalog(used, hasData));
-    if (hasData) box.appendChild(homeHero(sum, t, true));
-    box.appendChild(homeFootnote(sum));
-  }
-
-  // 数据统计页 = 首页放不下的全部明细
-  function paintStats(sum) {
-    const box = $("#statsBody");
-    box.innerHTML = "";
-    const t = (sum && sum.totals) || {};
-    if (!sum || sum.error || !(t.runs || 0)) {
-      const tip = el("div", "card col home-card");
-      tip.style.padding = "24px 18px";
-      tip.appendChild(el("b", null, "还没有统计数据"));
-      tip.appendChild(el("div", "home-note",
-        (sum && sum.error) || "跑一次配置，这里就有数了"));
-      box.appendChild(tip);
-      if (sum) box.appendChild(homeFootnote(sum));
-      return;
-    }
-    box.appendChild(homeHero(sum, t, false));
-    box.appendChild(homeLedger(sum, t));
-    box.appendChild(homeForms(sum));
-    box.appendChild(homeRecent(sum));
-    box.appendChild(homeFootnote(sum));
+    const cards = hasData
+      ? [homeHero(sum, t), homeLedger(sum, t), homeForms(sum),
+         homeActives(sum), homeRecent(sum), homeCatalog(used, true)]
+      : [homeWelcome(sum), homeCatalog(used, false)];
+    cards.concat([homeFootnote(sum)])
+      .filter(Boolean).forEach((n) => box.appendChild(n));
   }
 
   function homeCard(title, hint) {
@@ -1535,7 +1537,7 @@
   }
 
   // ① 顶部四宫格
-  function homeHero(sum, t, brief) {
+  function homeHero(sum, t) {
     const c = homeCard();
     c.classList.add("home-hero");
     const grid = el("div", "kpi-grid");
@@ -1549,7 +1551,7 @@
       ["省下工时", fmtDuration(saved), "", fmtWorkdays(saved) || "还没攒够"],
       ["一次做对", rate, "", (t.failed ? `失败 ${t.failed} 条` : "还没失败过")],
       many
-        ? ["在用人数", `${sum.people}`, "人", `另有 ${(sum.people_opened || 0) - sum.people} 人只打开过`]
+        ? ["在用人数", `${sum.people}`, "人", peopleSub(sum)]
         : ["跑过", `${t.runs || 0}`, "次", (sum.retries ? `另有 ${sum.retries} 次返工` : "没返过工")],
     ];
     items.forEach(([label, value, unit, sub]) => {
@@ -1568,16 +1570,21 @@
         `其中你自己跑了 ${mine.items || 0} 条，省下 ${fmtDuration(mine.saved == null ? mine.seconds : mine.saved)}。`));
     }
     c.appendChild(el("div", "home-note", savingNote(sum, t)));
-    if (brief) {
-      // 首页只给这一屏关键数字，剩下的去「数据统计」看
-      const more = el("div", "row");
-      more.style.cssText = "margin-top:2px";
-      const link = el("button", "btn btn-sm", "查看详情 →");
-      link.addEventListener("click", showStats);
-      more.appendChild(link);
-      c.appendChild(more);
-    }
     return c;
+  }
+
+  /** 「在用人数」下面那行小字。
+   *
+   *  ⚠ 团队口径下**不能用 people_opened** —— 它数的是本机埋点里见过的 uid（几乎恒为 1），
+   *    而 people 来自回传快照（全团队）。两个数不同源，相减出过负数：实测 1 − 2，
+   *    界面上白纸黑字写着「另有 -1 人只打开过」。 */
+  function peopleSub(sum) {
+    if (sum.scope === "team") {
+      const act = (sum.actives || [])[0];
+      return act && act.last ? `最近一次 ${fmtWhen(act.last)}` : "明细见下面「谁在用」";
+    }
+    const idle = (sum.people_opened || 0) - (sum.people || 0);
+    return idle > 0 ? `另有 ${idle} 人只打开过` : "都真跑过东西";
   }
 
   /** 顶部那行口径小字。⚠ 必须说清哪半截是实测、哪半截是估的 —— 这行字是这个数字
@@ -1607,20 +1614,28 @@
 
     // 左：成败环形。中心那个数和 hero 上的「一次做对」是同一个，
     // 这里补的是它的分母长什么样 —— 失败几条、跳过几条
-    const ok = statNum(t.items), bad = statNum(t.failed), skip = statNum(t.skipped);
+    // ⚠ 团队快照里**没有「跳过」这一项** —— 回传的 JSON 只带成功/失败/机器秒
+    //   （见 src/report.py 的 payload）。硬画一个恒为 0 的段 + 图例，等于宣称
+    //   全团队一条都没跳过，比不画更糟。有才画。
+    const ok = statNum(t.items), bad = statNum(t.failed);
+    const hasSkip = t.skipped != null;
+    const skip = hasSkip ? statNum(t.skipped) : 0;
     const rate = (t.ok_rate == null) ? "—" : `${(t.ok_rate * 100).toFixed(1)}%`;
     const left = el("div", "ledger-cell");
-    left.appendChild(donut([
+    const segs = [
       { name: "成功", value: ok, cls: "ok" },
       { name: "失败", value: bad, cls: "bad" },
-      { name: "跳过", value: skip, cls: "skip" },
-    ], rate, "一次做对"));
+    ];
+    if (hasSkip) segs.push({ name: "跳过", value: skip, cls: "skip" });
+    left.appendChild(donut(segs, rate, "一次做对"));
     const lg = el("div", "legend-row");
     lg.appendChild(legendItem("ok", "成功", ok));
     lg.appendChild(legendItem("bad", "失败", bad));
-    lg.appendChild(legendItem("skip", "跳过", skip));
+    if (hasSkip) lg.appendChild(legendItem("skip", "跳过", skip));
     left.appendChild(lg);
-    left.appendChild(el("div", "home-note", "跳过的不算错，不进「一次做对」的分母"));
+    left.appendChild(el("div", "home-note", hasSkip
+      ? "跳过的不算错，不进「一次做对」的分母"
+      : "回传里不带「跳过」，这张图只有成功和失败"));
     duo.appendChild(left);
 
     // 右：时间账。两条同尺归一（都除以两者里大的那个），所以「机器实跑」那条
@@ -1789,10 +1804,47 @@
     return c;
   }
 
-  // ④ 最近几次 + 最长的一次
+  // ④a 谁在用（只有团队口径才有）
+  //
+  // ⚠ 它是「最近跑的」在团队口径下的替身，不是补充。群里回传的是**每人每周的累计**
+  //   （见 src/report.py 的 payload：次数/成功/失败/机器秒/最后活跃），单次运行的
+  //   时间戳和耗时压根没发出来 —— 团队口径下的逐次流水是还原不出来的，谁也变不出。
+  //   能诚实说出口的「最近」就是这张表：谁、累计多少条、最后活跃在什么时候。
+  function homeActives(sum) {
+    const rows = (sum.actives || []).filter((a) => a && a.uid);
+    if (!rows.length) return null;
+    const c = homeCard("谁在用", "来自回传快照，一人一行，按最后活跃排");
+    const top = Math.max(1, ...rows.map((a) => statNum(a.items)));
+    rows.forEach((a) => {
+      const line = el("div", "feed-row");
+      line.appendChild(el("span", "feed-when", fmtWhen(a.last)));
+      const me = a.uid === sum.me;
+      const nm = el("span", "feed-form", (String(a.name || "").trim() || a.uid) + (me ? "（你）" : ""));
+      nm.title = `匿名指纹 ${a.uid}` + (a.runs ? `　跑了 ${a.runs} 次` : "");
+      line.appendChild(nm);
+      const mini = el("div", "feed-bar");
+      const fill = el("i", "");
+      fill.style.width = `${Math.max(3, Math.round((statNum(a.items) / top) * 100))}%`;
+      mini.appendChild(fill);
+      line.appendChild(mini);
+      line.appendChild(el("span", "feed-stat", a.items == null ? "" : `${statNum(a.items)} 条`));
+      line.appendChild(el("span", "feed-cost", a.runs ? `${a.runs} 次` : ""));
+      c.appendChild(line);
+    });
+    return c;
+  }
+
+  // ④b 最近几次 + 最长的一次。
+  //     ⚠ 这一张**永远是本机流水**，团队口径下标题必须写死是谁的 —— 原来它混在
+  //       一屏团队数字里不带任何标记，实测被读成「全团队最近跑的」，然后「群里明明
+  //       回传上来了，这儿怎么没有」。
   function homeRecent(sum) {
-    const c = homeCard("最近跑的", "中间那条是这一次的完成度");
-    (sum.recent || []).forEach((r) => {
+    const team = sum.scope === "team";
+    const src = team ? ((sum.mine && sum.mine.recent) || []) : (sum.recent || []);
+    if (!src.length) return null;
+    const c = homeCard(team ? "你自己最近跑的" : "最近跑的",
+      team ? "这一张是本机流水，上面那些是全团队" : "中间那条是这一次的完成度");
+    src.forEach((r) => {
       const ok = statNum(r.ok), total = statNum(r.total);
       const okAll = total > 0 && ok >= total;
       const line = el("div", "feed-row");
@@ -1809,7 +1861,7 @@
       line.appendChild(el("span", "feed-cost", fmtDuration(r.seconds)));
       c.appendChild(line);
     });
-    const L = sum.longest;
+    const L = team ? (sum.mine && sum.mine.longest) : sum.longest;
     if (L && L.seconds > 60) {
       c.appendChild(el("div", "home-note",
         `最长的一次：${formLabel(L.form)} 连着跑了 ${fmtDuration(L.seconds)}，一口气 ${L.items} 条。`));
@@ -1817,37 +1869,45 @@
     return c;
   }
 
-  // 没数据时的开场白
-  function homeWelcome() {
+  // 没数据时的开场白。
+  // ⚠ 统计聚合报错那一条也归这里 —— 原来它单独长在「数据统计」页上，那一页并进
+  //   首页之后要是不接过来，聚合失败就变成一片空白，谁都不知道出了什么事。
+  function homeWelcome(sum) {
+    const err = sum && sum.error;
     const c = homeCard();
     c.classList.add("home-hero");
-    c.appendChild(el("div", "home-welcome-title", "还没用它跑过东西"));
-    c.appendChild(el("div", "home-welcome-sub",
-      "它能替你干下面这些活 —— 挑一个，按「准备 → 核对 → 执行」走一遍就行。"
-      + "跑完这里会记下替你干了多少、花了多久。"));
+    c.appendChild(el("div", "home-welcome-title", err ? "统计读不出来" : "还没用它跑过东西"));
+    c.appendChild(el("div", "home-welcome-sub", err
+      ? `${err}　—— 不影响干活，下面挑一个配置类型照常走。`
+      : "它能替你干下面这些活 —— 挑一个，按「准备 → 核对 → 执行」走一遍就行。"
+        + "跑完这里会记下替你干了多少、花了多久。"));
     return c;
   }
 
   // 功能导航 / 覆盖度：没用过的那些才是这一块的重点。
   // ⚠ 自制配置类型（录下来的）不进首页这个格子 —— 它是各人自己的草稿，
   //   不是「工具能干的事」，只在侧栏《自制配置类型》里出现。
+  // ⚠ hasData 时**只列没用过的**。用过的那些侧栏里天天见，在首页再铺一遍就是
+  //   「同一个工具两份导航」—— 首页那张卡原来把 11 个类型全铺开，占掉大半屏，
+  //   点下去和点侧栏是同一个 selectForm。全试过了整张卡返回 null，自己消失。
   function homeCatalog(used, hasData) {
     const groups = groupedForms()
-      .map((g) => ({ ...g, items: g.items.filter((f) => f.mode !== "flow") }))
+      .map((g) => ({
+        ...g,
+        items: g.items.filter((f) => f.mode !== "flow" && !(hasData && used.has(f.name))),
+      }))
       .filter((g) => g.items.length);
-    const total = groups.reduce((n, g) => n + g.items.length, 0);
-    let usedHere = 0;
-    groups.forEach((g) => g.items.forEach((f) => { if (used.has(f.name)) usedHere++; }));
-    const c = homeCard(hasData ? "还能干什么" : "能干什么",
-      hasData ? `${total} 个配置类型，你用过 ${usedHere} 个` : "");
+    if (!groups.length) return null;
+    const left = groups.reduce((n, g) => n + g.items.length, 0);
+    const c = homeCard(hasData ? "还没试过的" : "能干什么",
+      hasData ? `还有 ${left} 个配置类型没用过` : "");
     const wrap = el("div", "catalog");
     groups.forEach((g) => {
       g.items.forEach((f) => {
-        const it = el("div", "catalog-item" + (used.has(f.name) ? " used" : ""));
+        const it = el("div", "catalog-item");
         const head = el("div", "catalog-head");
         head.appendChild(el("span", "catalog-group", g.name));
         head.appendChild(el("span", "catalog-name", f.label || f.name));
-        if (used.has(f.name)) head.appendChild(el("span", "catalog-tag", "用过"));
         it.appendChild(head);
         // description 前半截是系统名（「大会员 DMP 人群管理 - …」），和上面的主 Tab 重复，
         // 砍掉只留真正说事的后半句；完整原文留在 tooltip 里
@@ -1877,7 +1937,9 @@
     // ⚠ 全团队那份是随包分发的快照，不是实时的 —— 这句话必须说出来，
     //   不然人会拿一个上周的数字当今天的用
     if (sum.snapshot_at) {
-      bits.push(`全团队数字截至 ${String(sum.snapshot_at).slice(0, 10)}（随版本更新）`);
+      // ⚠ 「随版本更新」这句话 1.1.x 起就不对了：team.json 改成每次开程序去 GitHub
+      //   拉（见 usage.fetch_team），和发版已经解耦
+      bits.push(`全团队数字截至 ${String(sum.snapshot_at).slice(0, 10)}（每次打开自动拉最新）`);
     } else if (rep.on) {
       bits.push("全团队数字要等下个版本带过来");
     } else {
@@ -4383,7 +4445,6 @@
     setTimeout(() => checkForUpdate(false), 800);
 
     $("#navHome").addEventListener("click", showHome);
-    $("#navStats").addEventListener("click", showStats);
     $(".sidebar-brand").addEventListener("click", showHome);
 
     callApi("list_forms").then((forms) => {
