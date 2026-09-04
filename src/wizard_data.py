@@ -22,7 +22,10 @@
 from __future__ import annotations
 
 import logging
+import re
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -74,11 +77,82 @@ def _sheet_rows(wb, title: str) -> list[dict]:
     return rows
 
 
+# WPS「嵌入单元格」的图片：单元格里是公式 =DISPIMG("ID_xxx",1)，
+# 图片本体在 xl/cellimages.xml，openpyxl 的 ws._images 读不到。
+_DISPIMG_RE = re.compile(r'DISPIMG\(\s*"([^"]+)"', re.IGNORECASE)
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _sniff_ext(data: bytes, fallback: str) -> str:
+    """按文件头认扩展名。后台上传框按扩展名判类型，名不副实的会被拒。"""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    ext = ("." + fallback.rsplit(".", 1)[-1].lower()) if "." in fallback else ""
+    return ".jpg" if ext == ".jpeg" else (ext or ".png")
+
+
+def _wps_cell_images(path: str) -> dict[str, tuple[bytes, str]]:
+    """读 WPS 嵌入单元格图片：返回 {'ID_xxx': (图片字节, '.png')}。
+
+    结构：xl/cellimages.xml 里每个 <xdr:pic> 带 <xdr:cNvPr name="ID_xxx">
+    和 <a:blip r:embed="rIdN">；rIdN → 媒体文件在 xl/_rels/cellimages.xml.rels。
+    """
+    out: dict[str, tuple[bytes, str]] = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            if "xl/cellimages.xml" not in names:
+                return out
+            rels: dict[str, str] = {}
+            if "xl/_rels/cellimages.xml.rels" in names:
+                rroot = ET.fromstring(z.read("xl/_rels/cellimages.xml.rels"))
+                for rel in rroot:
+                    rid = rel.get("Id")
+                    tgt = rel.get("Target") or ""
+                    if rid and tgt:
+                        rels[rid] = tgt.lstrip("/").replace("xl/", "", 1) if tgt.startswith("/xl/") else tgt
+
+            root = ET.fromstring(z.read("xl/cellimages.xml"))
+            for pic in root.iter():
+                if _local(pic.tag) != "pic":
+                    continue
+                name = embed = None
+                for node in pic.iter():
+                    ln = _local(node.tag)
+                    if ln == "cNvPr" and node.get("name"):
+                        name = node.get("name")
+                    elif ln == "blip":
+                        for k, v in node.attrib.items():
+                            if _local(k) == "embed":
+                                embed = v
+                if not (name and embed and embed in rels):
+                    continue
+                target = rels[embed]
+                for cand in (f"xl/{target}", target, f"xl/media/{target.rsplit('/', 1)[-1]}"):
+                    if cand in names:
+                        data = z.read(cand)
+                        out[name] = (data, _sniff_ext(data, cand))
+                        break
+    except Exception as e:
+        log.warning("读 WPS 嵌入单元格图片失败，忽略：%s", e)
+    return out
+
+
 def _extract_images(path: str) -> dict[str, dict[str, str]]:
     """抽出贴在单元格里的图片。
 
     返回 {sheet名: {'B3': 存好的文件路径}}。
     openpyxl 读图需要 rich text 关闭，这里单独开一次 workbook 取 _images。
+    同时处理 WPS 的「嵌入单元格」图片（单元格里是 =DISPIMG("ID_xxx",1) 公式）。
     """
     out: dict[str, dict[str, str]] = {}
     try:
@@ -88,6 +162,31 @@ def _extract_images(path: str) -> dict[str, dict[str, str]]:
         return out
 
     img_dir = user_path("output", IMG_DIR)
+
+    # ---- WPS 嵌入单元格图片：按 sheet 扫 =DISPIMG("ID_xxx") 公式，落到对应单元格 ----
+    wps = _wps_cell_images(path)
+    if wps:
+        for ws in wb.worksheets:
+            cells: dict[str, str] = {}
+            for row in ws.iter_rows():
+                for cell in row:
+                    v = cell.value
+                    if not isinstance(v, str) or "DISPIMG" not in v.upper():
+                        continue
+                    m = _DISPIMG_RE.search(v)
+                    if not m or m.group(1) not in wps:
+                        continue
+                    try:
+                        img_dir.mkdir(parents=True, exist_ok=True)
+                        data, ext = wps[m.group(1)]
+                        dst = img_dir / f"{ws.title}_{cell.coordinate}_dispimg{ext}"
+                        dst.write_bytes(data)
+                        cells[cell.coordinate] = str(dst)
+                    except Exception as e:
+                        log.warning("落 WPS 图片 %s!%s 失败：%s", ws.title, cell.coordinate, e)
+            if cells:
+                out[ws.title] = cells
+
     for ws in wb.worksheets:
         imgs = getattr(ws, "_images", None) or []
         if not imgs:
@@ -111,20 +210,29 @@ def _extract_images(path: str) -> dict[str, dict[str, str]]:
             except Exception as e:
                 log.warning("抽图 %s!%s 失败：%s", ws.title, ref, e)
         if cells:
-            out[ws.title] = cells
+            out.setdefault(ws.title, {}).update(cells)
     return out
+
+
+def _is_dispimg(val: str) -> bool:
+    return "DISPIMG(" in str(val).upper().replace(" ", "")
 
 
 def _apply_images(rows: list[dict], headers_idx: dict[str, int],
                   imgs: dict[str, str], sheet: str):
-    """把抽出来的图片路径填回对应单元格的值（原本为空时才填）。"""
+    """把抽出来的图片路径填回对应单元格的值。
+
+    单元格原本为空、或里面是 WPS 的 =DISPIMG(...) 公式（读出来就是那串文本，
+    不是图）时才覆盖 —— 后者必须换掉，不然当成本地路径去找一定报「图片找不到」。
+    """
     if not imgs:
         return
     for rec in rows:
         r = rec.get("_row")
         for col_name, col_i in headers_idx.items():
             ref = f"{get_column_letter(col_i)}{r}"
-            if ref in imgs and not rec.get(col_name):
+            cur = rec.get(col_name)
+            if ref in imgs and (not cur or _is_dispimg(cur)):
                 rec[col_name] = imgs[ref]
                 log.info("%s!%s 用了贴在单元格里的图片", sheet, ref)
 
@@ -413,7 +521,11 @@ def _check_row(fields: list[dict], row: dict, label: str) -> list[str]:
 
         if f.get("type", "").startswith("upload") and val:
             # 网址交给执行时去下载，这里只拦「既不是网址、本地也没有」的
-            if not is_url(val) and not Path(val).exists():
+            if _is_dispimg(val):
+                out.append(f"{label}：「{name}」这一格是 WPS 的「嵌入单元格」图片，"
+                           f"但没能从文件里抽出图片本体。改成「插入 → 浮于单元格上方」的"
+                           f"普通图片，或者填本地路径 / http 网址")
+            elif not is_url(val) and not Path(val).exists():
                 out.append(f"{label}：「{name}」的图片找不到：{val}"
                            f"（可以填本地路径、直接把图贴进单元格，或者填 http 网址）")
     return out

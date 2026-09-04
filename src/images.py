@@ -33,9 +33,25 @@ class ImageError(Exception):
     pass
 
 
+def normalize_url(value: str) -> str:
+    """把「像网址的字符串」补成能下载的 http(s) 网址，不是网址就返回 ""。
+
+    认这几种写法（素材列里常见的都在）：
+      · https://i0.hdslb.com/...        → 原样
+      · //i0.hdslb.com/...              → 协议相对写法，补 https:
+        （从浏览器/HTML 里直接拷出来的链接常长这样，实测踩过）
+    """
+    v = str(value or "").strip()
+    low = v.lower()
+    if low.startswith("http://") or low.startswith("https://"):
+        return v
+    if v.startswith("//"):
+        return "https:" + v
+    return ""
+
+
 def is_url(value: str) -> bool:
-    v = str(value or "").strip().lower()
-    return v.startswith("http://") or v.startswith("https://")
+    return bool(normalize_url(value))
 
 
 def _suffix(url: str, content_type: str | None) -> str:
@@ -57,7 +73,7 @@ def _suffix(url: str, content_type: str | None) -> str:
 
 def fetch_image(url: str) -> Path:
     """把网址下成本地文件，返回路径。已经下过的直接复用。"""
-    url = str(url).strip()
+    url = normalize_url(url) or str(url).strip()
     key = hashlib.md5(url.encode("utf-8")).hexdigest()[:16]
 
     img_dir = user_path("output", IMG_DIR)

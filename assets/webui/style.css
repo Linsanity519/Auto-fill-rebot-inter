@@ -335,14 +335,17 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .modal-overlay {
   position: fixed; inset: 0; background: var(--overlay);
   display: flex; align-items: center; justify-content: center; z-index: 100;
+  padding: 16px; overflow: auto;               /* 屏幕再矮也能滚到「关闭」 */
 }
 .modal-card {
   width: 420px; max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);              /* 不许顶出屏幕 */
+  display: flex; flex-direction: column;
   background: var(--surface); border-radius: 14px; overflow: hidden;
   box-shadow: 0 20px 60px -12px rgba(0,0,0,.5);
 }
-.modal-card .modal-accent { height: 3px; background: var(--brand); }
-.modal-card .modal-body { padding: var(--sp-5) 26px; }
+.modal-card .modal-accent { height: 3px; background: var(--brand); flex: none; }
+.modal-card .modal-body { padding: var(--sp-5) 26px; overflow-y: auto; }  /* 内容多就自己滚 */
 .modal-card .modal-title { font-size: var(--fs-title); font-weight: var(--fw-bold); color: var(--text); }
 .modal-card .modal-desc { color: var(--text-mu); margin: var(--sp-1) 0 18px; font-size: var(--fs-sm); white-space: pre-line; }
 .modal-card .modal-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }

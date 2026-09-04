@@ -4277,6 +4277,16 @@
     $("#btnFeedbackLog").addEventListener("click", (e) => { e.stopPropagation(); openFeedback("issue"); });
     $("#btnFeedback").addEventListener("click", () => openFeedback("idea"));
     $("#btnDetailClose").addEventListener("click", () => $("#detailModal").classList.add("hidden"));
+
+    // 「关不掉」的兜底：点弹窗外的空白处 / 按 Esc 都能收掉详情框
+    $("#detailModal").addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) e.currentTarget.classList.add("hidden");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("#detailModal").classList.contains("hidden")) {
+        $("#detailModal").classList.add("hidden");
+      }
+    });
   }
 
   // ---------------- 暴露给 Python 端 push 的接口 ----------------
