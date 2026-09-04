@@ -25,10 +25,6 @@
         <span>首页</span>
         <span class="badge"></span>
       </div>
-      <div class="sidebar-item nav-home" id="navStats">
-        <span>数据统计</span>
-        <span class="badge"></span>
-      </div>
     </div>
 
     <div class="sidebar-label">配置类型</div>
@@ -94,15 +90,13 @@
 
     <div class="content">
 
-      <!-- ---- 首页：使用统计 / 功能导航 ----
-           内容全由 app.js 按 usage_summary 渲染：有数据显示战绩，没数据显示能干什么 -->
+      <!-- ---- 首页：唯一的概览页 ----
+           内容全由 app.js 按 usage_summary 渲染：有数据一页到底（战绩 → 两本账 →
+           用在哪儿了 → 谁在用 → 你自己最近跑的 → 还没试过的），没数据显示能干什么。
+           ⚠ 1.1.6 把原来的「数据统计」页并进来了：两页后面是同一批卡，侧栏两个入口
+             加首页那张全量目录卡，等于一个工具挂了两份导航。 -->
       <section class="step-panel" data-panel="home">
         <div class="home-scroll" id="homeBody"></div>
-      </section>
-
-      <!-- ---- 数据统计：首页放不下的明细都在这儿 ---- -->
-      <section class="step-panel" data-panel="stats">
-        <div class="home-scroll" id="statsBody"></div>
       </section>
 
       <!-- ---- 步骤1：准备 ---- -->

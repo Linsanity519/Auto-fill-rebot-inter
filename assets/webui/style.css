@@ -463,7 +463,7 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .step-panel.active > * { width: 100%; max-width: 1160px; margin-inline: auto; }
 
 
-/* ---------------- 首页 / 数据统计 ----------------
+/* ---------------- 首页（唯一的概览页）----------------
    没有任何图表库：条形是 div + 百分比宽度，环形是内联 SVG 的 stroke-dasharray。
    这是个离线内网工具，assets/webui/ 里一个外部依赖都不能有 —— 而且 assets/
    整个会进那个 300KB 的代码包（见 tools/make_payload.py），塞个图表库进去

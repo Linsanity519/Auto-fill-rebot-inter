@@ -545,16 +545,31 @@ class Api:
             out = usage.summarize(self.settings)
             out["report"] = self._report_status()
             team = usage.load_team()
+            out["scope"] = "local"
             if team:
-                # 全团队那份是**随包分发的快照**（config/team.json），不是实时的 ——
-                # 前端必须标「截至 X/X」。本机自己的数留在 mine 里，那份永远是新的。
+                # 有团队快照时，**首页/统计页的每一个数都是全团队口径**，本机那一整套
+                # 原样挪进 mine。原来只换掉 totals/forms/people，week（「本周 +N」）、
+                # weeks（趋势）、recent（最近跑的）、longest 还是本机的 —— 同一张卡上
+                # 一半团队一半本机，还没有任何标记，实测就是这么被误读的：
+                # 群里回传上来的运行不出现在「最近跑的」里，人以为回传坏了。
                 out["mine"] = {k: out[k] for k in ("totals", "week", "longest",
                                                    "forms", "weeks", "recent")}
+                out["scope"] = "team"
                 out["people"] = team.get("people", out.get("people"))
                 out["totals"] = team.get("totals", out["totals"])
                 out["forms"] = team.get("forms", out["forms"])
                 out["actives"] = team.get("actives") or []
-                out["team_weeks"] = team.get("weeks") or {}
+                tw = team.get("weeks") or {}
+                out["team_weeks"] = tw
+                out["weeks"] = usage.week_series(tw)
+                out["week"] = dict(tw.get(usage.current_week_key())
+                                   or {"items": 0, "seconds": 0, "saved": 0.0})
+                # ⚠ 团队口径下这两项**必须清空，不能沿用本机的**：群里回传的是
+                #   「每人每周累计」，压根没有单次运行的粒度（没时间戳、没单次耗时），
+                #   还原不出「最近跑的」和「最长的一次」。留着本机那份就是拿一台机器的
+                #   流水冒充全团队。界面改成显示 actives（谁在用），本机流水去 mine 里取。
+                out["recent"] = []
+                out["longest"] = None
                 out["snapshot_at"] = team.get("synced_at", "")
             return out
         except Exception as e:

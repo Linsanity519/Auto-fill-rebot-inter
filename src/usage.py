@@ -593,6 +593,21 @@ def _week_series(buckets: dict, weeks: int) -> list:
     return out
 
 
+def current_week_key() -> str:
+    """本周的周一。团队快照的 weeks 就是按这个键分桶的。"""
+    return _week_key_of(datetime.now().astimezone())
+
+
+def week_series(buckets: dict, weeks: int = 12) -> list:
+    """把任意一份「周 → {items, seconds, saved}」摊成近 N 周的序列。
+
+    ⚠ 存在的理由：本机那份（_aggregate 里现算）和团队快照那份（parse_report 存下来的）
+      形状一样，界面上要的也是同一条曲线 —— 但只有前者原来能摊。团队口径接上来之后
+      两边都得走同一个函数，不然「本机有趋势图、团队没有」这种坑会一直在。
+    """
+    return _week_series(dict(buckets or {}), max(1, int(weeks or 12)))
+
+
 # ---------------------------------------------------------------- 上报到企微表格
 # 每人每周一行。键是「周 + 指纹」，所以一行只属于某个人的某一周，各写各的。
 # ⚠ 列顺序就是这张表的契约：改了等于改表结构，upsert 会发现表头对不上、
@@ -877,10 +892,18 @@ def parse_report(table, form_names, conf: dict | None = None) -> dict:
             b["items"] += r_ok
             b["seconds"] += r_sec
             b["saved"] += row_saved
+        # 每个人一行：累计条数/次数逐周累加，花名和「最后活跃」取最新的那一周
+        # ⚠ 只有 uid + last 的话，「谁在用」那张卡上一行就是一个八位哈希加个日期，
+        #   看不出任何东西。条数是这里唯一还能诚实给出的量（回传里有「成功」）。
         last = r[i_forms + len(form_names)].strip() if len(r) > i_forms + len(form_names) else ""
         prev = who.get(uid)
-        if not prev or last > prev["last"]:
-            who[uid] = {"uid": uid, "name": (r[2].strip() if len(r) > 2 else ""), "last": last}
+        if not prev:
+            prev = who[uid] = {"uid": uid, "name": "", "last": "", "items": 0, "runs": 0}
+        prev["items"] += r_ok
+        prev["runs"] += _num(r[4])
+        if last > prev["last"]:
+            prev["last"] = last
+            prev["name"] = (r[2].strip() if len(r) > 2 else "")
 
     return {
         "people": len(people),
