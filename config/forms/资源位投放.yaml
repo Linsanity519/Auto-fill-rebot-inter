@@ -59,6 +59,7 @@ strategy_groups:
     - 展示不超过          # 频次：每日展示上限
     - 限频规则            # 频次逻辑（会员中心弹窗 / 我的大会员入口 才有）
     - 曝光冷却时间        # 只有播放页半屏有，单位小时
+    - 点击关闭冷却时间    # 追番/影视tab小黄条 才有，单位小时
     - 帧数                # 只有会员中心banner有
     - 优先级
   算法策略:
@@ -522,6 +523,18 @@ _frag:
     options: ['所有用户免费', '会员免费', '会员可抢先', '付费观看', '付费可抢先',
               '加更礼', '结局点映', '超大抢先看', '会员专享']
 
+  # ⚠ 页面上是必填红星，但**没有默认值**（旁边的「展示不超过」默认 -1，它是空的）。
+  #   空着点「保存并下一步」不会跳转，页面只在那一行标红 —— 表现成「点了没反应」。
+  #   默认给 8：线上那条「26萌节-追番小黄条-通用」(单元 40887) 就是 8 小时
+  #   （接口 unit/info 的 show_limit_sec = 28800 秒）。要换值在策略中心改一次即可。
+  点击关闭冷却时间: &f_cooldown
+    name: 点击关闭冷却时间
+    label: 点击关闭冷却时间
+    type: fill_by_label
+    required: true
+    default: '8'
+    unit: 小时
+
   流量渠道: &f_channel
     name: 流量渠道
     label: 流量渠道
@@ -753,6 +766,18 @@ positions:
     scene: 会员中心
     system: v1
     unit_extra:
+      # ⚠ 2026-09-04 补：这个资源位（且只有这个）单元层多一个必填的「生效渠道」，
+      #   页面默认就是「全局」，之前漏抓也没出事 —— 但它是必填红星，
+      #   一旦后台改了默认值就会静默卡在保存那一步，所以显式填一遍。
+      # ⚠⚠ 选「定向」会把整张表单换掉：除了单元名称/投放展示位置/生效渠道，
+      #   人群、生效平台、投放时间…… 全部消失（实测 formily 项从 16 个掉到 3 个）。
+      #   那一套还没抓过，这里只支持「全局」；真要投定向，先补抓再动这段。
+      - name: 生效渠道
+        label: 生效渠道
+        type: radio_by_label
+        required: true
+        default: 全局
+        options: ['定向', '全局']
       - name: 限频规则
         label: 限频规则
         type: radio_by_label
@@ -816,6 +841,37 @@ positions:
       - {name: 图片, label: '图片(1020*300)', type: upload_by_label, required: true, size: '1020*300'}
       - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
 
+  # ---- OGV频道页 ----
+  # 追番 / 影视两个 tab 的小黄条：单元层、创意层字段一模一样，只差 position_id。
+  # 2026-09-04 在活动 708 建单元实抓（单元 41136），创意页是老版 v1。
+  追番tab小黄条:
+    position_id: 5
+    scene: OGV频道页
+    system: v1
+    unit_extra: [*f_cooldown]
+    creative:
+      # ⚠ 没有「配置类型」「跳转类型」「拉起方式」—— 这个位就 4 个框，
+      #   带红星的只有标题和副标题（实测 label 的 ::before 是红色 *）。
+      - {name: 标题文案, label: 标题文案, type: fill_by_ph,
+         ph: '请输入标题文案，最多10个字', required: true, max: 10}
+      - {name: 副标题文案, label: 副标题文案, type: fill_by_ph,
+         ph: '请输入副标题文案，最多20个字', required: true, max: 20}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '不填则默认文案', max: 4}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_ph, ph: '不填则默认购买页'}
+
+  影视tab小黄条:
+    position_id: 6
+    scene: OGV频道页
+    system: v1
+    unit_extra: [*f_cooldown]
+    creative:
+      - {name: 标题文案, label: 标题文案, type: fill_by_ph,
+         ph: '请输入标题文案，最多10个字', required: true, max: 10}
+      - {name: 副标题文案, label: 副标题文案, type: fill_by_ph,
+         ph: '请输入副标题文案，最多20个字', required: true, max: 20}
+      - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '不填则默认文案', max: 4}
+      - {name: 跳转链接, label: 跳转链接, type: fill_by_ph, ph: '不填则默认购买页'}
+
   PC顶导浮层:
     position_id: 52
     real_name: PC-大会员icon与开通浮层
@@ -830,13 +886,18 @@ positions:
         reveals:
           '图片形式':
             - {name: Banner, label: Banner, type: upload_by_label, required: true}
-            - {name: Banner跳转链接, label: Banner跳转链接, type: fill_by_label, required: true}
-      - {name: icon文案, label: 'icon 文案', type: fill_by_ph, ph: '', required: true, max: 4}
+            # ⚠ 2026-09-04 实测：页面上「Banner跳转链接」没有红星，是选填。
+            #   之前标成必填，模板里这一列留空就被离线校验拦下来，跑都跑不起来。
+            - {name: Banner跳转链接, label: Banner跳转链接, type: fill_by_label}
+      # ⚠ 2026-09-04 实测（两个「配置形式」分支都确认过）：页面上带红星的只有
+      #   配置形式 / Banner / 标题文案 / 描述文案 / 按钮文案 / 跳转类型。
+      #   icon文案、icon、按钮角标文案、Banner跳转链接、跳转链接 都是选填。
+      - {name: icon文案, label: 'icon 文案', type: fill_by_ph, ph: '', max: 4}
       - {name: 标题文案, label: 标题文案, type: fill_by_ph, ph: '', required: true, max: 12}
       - {name: 描述文案, label: 描述文案, type: fill_by_ph, ph: '', required: true, max: 18}
       - {name: 按钮文案, label: 按钮文案, type: fill_by_ph, ph: '', required: true, max: 6}
       - {name: 按钮角标文案, label: 按钮角标文案, type: fill_by_ph, ph: '', max: 6}
-      - {name: icon, label: icon, type: upload_by_label, required: true, size: '450*360'}
+      - {name: icon, label: icon, type: upload_by_label, size: '450*360'}
       - name: 跳转类型
         type: vue_radio
         required: true

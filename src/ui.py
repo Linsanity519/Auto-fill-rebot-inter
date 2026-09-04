@@ -98,6 +98,12 @@ class ConsoleUI(BaseUI):
                 return "stop"
 
     def ask_continue(self, error):
+        # ⚠ --auto 的意思就是「别停下来问」。以前这里无条件 input()，
+        #   自动跑遇到第一条失败就卡在这行等键盘 —— 从外面看是「跑到创意页发呆」，
+        #   一等就是几分钟（谁也不会想到是在等回车）。
+        if self.auto:
+            _out("  （--auto：这条失败了，接着跑下一条）")
+            return True
         return self._timed_ask("这条失败了，继续下一条？[y/n] ") == "y"
 
     def finished(self, title, body, ok):

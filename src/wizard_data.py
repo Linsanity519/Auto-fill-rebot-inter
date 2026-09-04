@@ -449,6 +449,11 @@ def strategy_issues(cfg: dict, strategy: dict | None, supplied: dict) -> list[st
         if not fields:
             continue
         resolved = S.resolve(cfg, strategy, pos)
+        # ⚠ yaml 里写了 default 的字段，策略中心没配也不算问题 —— 执行时
+        #   _units_of 会用默认值补上。不补这一下的话，「点击关闭冷却时间」这种
+        #   「必填 + 有默认值」的字段会在这里被误报成「策略中心没配」，把整批拦住。
+        W.apply_defaults(resolved, {f["name"]: str(f["default"]) for f in fields
+                                    if str(f.get("default", "")).strip()})
         for msg in _check_row(fields, resolved, f"[策略中心] {pos}"):
             if "必填但为空" in msg:
                 msg += "（在「准备」页打开策略中心配置）"

@@ -21,8 +21,18 @@ from .images import fetch_image, is_url
 
 log = logging.getLogger(__name__)
 
-# 单元层混用两种表单容器
-FORM_ITEM = ".ant-formily-item, .ant-form-item"
+# 表单容器：单元层混用 Formily 和标准 antd；「新版」创意页
+# （rich-vip 的 React 那套）的 class 前缀是 mega-ant，容器叫 mega-ant-form-item。
+# ⚠ 少了第三个的后果不是「定位差一点」，是「一个容器都圈不到」：
+#   class 是按整词匹配的，.ant-form-item 匹配不上 mega-ant-form-item。
+#   会员中心banner 的两个上传框就是这么谁也认不出来、直接报「不敢乱传」的。
+FORM_ITEM = ".ant-formily-item, .ant-form-item, .mega-ant-form-item"
+# 只要可见的那一份。「新版」创意页加了第 2 条创意之后，创意1 的面板**留在 DOM 里**
+# 只是被隐藏了 —— 按 label 找「跳转链接」会命中创意1 那个看不见的框，
+# 然后 fill 一直等「element is not visible」直到超时（实测卡满 15 秒才报错）。
+# ⚠ 只用来筛「字段容器」，别拿去筛 input[type=file]：antd 的上传框
+#   本来就是隐藏的 input，加了 :visible 一个都找不到。
+FORM_ITEM_VIS = ", ".join(x.strip() + ":visible" for x in FORM_ITEM.split(","))
 
 
 def mode_matches(cur: str, value: str, f: dict) -> bool:
@@ -181,14 +191,20 @@ class WizardFiller:
         ⚠ 页面上 label 写成「*生效平台」「生效平台：」，不能用全等匹配。
         """
         pat = re.compile(rf"^\s*\*?\s*{re.escape(label)}\s*[:：]?\s*$")
-        item = self.page.locator(FORM_ITEM).filter(
-            has=self.page.locator("label", has_text=pat)
-        )
-        n = item.count()
-        if not n:
-            # 退一步：容器自己的文本以 label 开头
-            item = self.page.locator(FORM_ITEM).filter(has_text=pat)
+        # 先只看可见的容器，一个都没有再放开（有些页面靠折叠面板藏字段，
+        # 那种情况下退回全量总比找不到强）
+        item = n = None
+        for scope in (FORM_ITEM_VIS, FORM_ITEM):
+            item = self.page.locator(scope).filter(
+                has=self.page.locator("label", has_text=pat))
             n = item.count()
+            if n:
+                break
+            # 退一步：容器自己的文本以 label 开头
+            item = self.page.locator(scope).filter(has_text=pat)
+            n = item.count()
+            if n:
+                break
         if not n:
             raise FillError(f"按 label「{label}」找不到表单项")
         # ⚠ label_index: -1 = 取最后一个。人群那几级的 label 同名（都叫「人群选组」），
@@ -262,11 +278,16 @@ class WizardFiller:
         """按 placeholder 定位输入框。创意页很多框既没 id 也没规范 label。"""
         ph = f.get("ph")
         if ph:
-            el = self.page.locator(f"input[placeholder*='{ph}'], textarea[placeholder*='{ph}']").first
-            if el.count():
-                el.fill("")
-                el.fill(value)
-                return
+            # 同上：多条创意时上一条的框还留在 DOM 里，只是隐藏了，
+            # 不挑可见的就会去填那个看不见的框然后卡到超时
+            sel = f"input[placeholder*='{ph}'], textarea[placeholder*='{ph}']"
+            vis = ", ".join(x.strip() + ":visible" for x in sel.split(","))
+            for s2 in (vis, sel):
+                el = self.page.locator(s2).first
+                if el.count():
+                    el.fill("")
+                    el.fill(value)
+                    return
         # 退回 label 方式
         self._fill_by_label(f, value)
 
@@ -593,31 +614,45 @@ class WizardFiller:
             raise FillError(f"图片不存在：{value}")
         label = f.get("label", f["name"])
 
-        # ① label 容器
-        try:
-            fi = self._scope(f).locator("input[type=file]").first
-            if fi.count():
+        def send(fi):
+            """传一次，没落上就再传一次 —— 上传偶发失败比想象中常见，
+            为一张图重跑整条单元不值当。第二次还不行才往上抛。"""
+            try:
                 self._send(fi, path)
-                return
+            except FillError:
+                self._note(f"「{label}」第一次没传上去，重传一次")
+                self._send(fi, path)
+
+        # ① label 容器
+        # ⚠ try 只包「找容器」这一步。以前把 send 也包在里面，上传真失败抛的
+        #   FillError 会被这里吞掉、掉到 ② 去往另一个框上重传一遍 —— 传串了。
+        fi = None
+        try:
+            box = self._scope(f).locator("input[type=file]").first
+            if box.count():
+                fi = box
         except FillError:
             pass
+        if fi is not None:
+            send(fi)
+            return
 
-        # ② 按 label 文字找最近的上传区
-        node = self.page.locator("*", has_text=re.compile(re.escape(label))).last
-        try:
-            if node.count():
-                fi = node.locator("input[type=file]").first
-                if fi.count():
-                    self._send(fi, path)
-                    return
-        except Exception:
-            pass
+        # ② 找到 label 文字那个节点，取 DOM 顺序上它之后最近的一个上传框
+        # ⚠ 以前这里是 locator("*", has_text=...).last —— 取的是「包含这段文字的
+        #   最内层节点」，也就是 label 自己，它里面当然没有 input[type=file]。
+        #   等于这一级回退从来没生效过：只要页面上有两个以上上传框（会员中心banner
+        #   的 图片 + 增大版图片、播放页催费条的 图片 + 大屏专属图片），
+        #   就一路掉到 ③ 报「不敢乱传」。改成和 _input_after_label 一样的走法。
+        fi = self._file_after_label(label)
+        if fi is not None:
+            send(fi)
+            return
 
         # ③ 整页唯一
         alls = self.page.locator("input[type=file]")
         n = alls.count()
         if n == 1:
-            self._send(alls.first, path)
+            send(alls.first)
             return
         if n == 0:
             raise FillError(f"「{label}」找不到上传控件（页面上没有 input[type=file]）")
@@ -625,33 +660,74 @@ class WizardFiller:
             f"「{label}」定位不到自己的上传控件，页面上有 {n} 个上传框，不敢乱传。"
             f"请把 yaml 里这个字段的 label 改成页面上的原文。")
 
-    def _send(self, fi, path: Path):
-        """选文件并等它真的传完。
+    def _file_after_label(self, label: str):
+        """label 文字所在节点之后、DOM 顺序上最近的一个 input[type=file]。
 
-        ⚠ 不写死「睡 2 秒」：小图 200ms 就好了，大图 2 秒还不够。
-          盯着页面上出现预览图/文件名 —— 出来了就说明后台收下了。
+        和 _input_after_label 同构：从窄到宽找 label 节点，别一上来就全页扫 div。
         """
-        # ⚠ 不能等「预览图出现」：好几个创意页压根不显示预览，每张图都要把
-        #   20 秒上限等满（实测一轮两张图白白吃掉 45 秒）。
-        #   改成等上传的网络请求回来 —— 这才是「后台收下了」的真信号。
+        pat = re.compile(rf"^\s*\*?\s*{re.escape(label)}\s*[:：]?\s*$")
+        for sel in ("label", "span", "div"):
+            cand = self.page.locator(sel).filter(has_text=pat).last
+            if cand.count():
+                after = cand.locator("xpath=following::input[@type='file'][1]")
+                if after.count():
+                    return after.first
+        return None
+
+    # 页面上「有没有东西变了」的指纹：可见的图片张数 + 可见输入框的值。
+    # 上传成功必然会改动其中之一（冒出预览图，或者把 CDN 网址写回输入框）。
+    SIG_JS = """
+    () => {
+      const vis = e => e.offsetParent !== null;
+      const imgs = [...document.querySelectorAll('img')].filter(vis).length;
+      const vals = [...document.querySelectorAll('input, textarea')].filter(vis)
+                    .map(i => i.value || '').join('');
+      return imgs + '' + vals;
+    }
+    """
+
+    def _form_sig(self) -> str:
+        try:
+            return self.page.evaluate(self.SIG_JS)
+        except Exception:
+            return ""
+
+    def _send(self, fi, path: Path):
+        """选文件并确认它**真的落到这个框上**了。
+
+        ⚠ 判据不能只看「有没有一个上传请求回来」：
+          `/bfs/` 既是上传接口也是图片 CDN，上一条创意的预览图 GET 回来
+          同样命中，expect_response 立刻返回 —— 于是「以为传完了」，
+          实际文件还在路上，紧接着切到下一条创意，这一条就永远空着。
+          16 条创意里第 3、13 条空掉就是这么来的：页面不报错，
+          点「保存创意」静默失败，日志里一点线索都没有。
+        所以两条判据一起用：
+          ① 只认 POST/PUT 的上传请求（预览图是 GET，排除掉）
+          ② 页面指纹必须变了（冒出预览图 / 输入框被写回网址）
+        ②才是硬判据 —— 请求抓没抓到都要等到它变。
+        """
+        before = self._form_sig()
+
         def _is_upload(resp):
+            try:
+                if (resp.request.method or "").upper() not in ("POST", "PUT"):
+                    return False
+            except Exception:
+                return False
             u = (resp.url or "").lower()
             return any(k in u for k in ("upload", "/bfs/", "oss", "file"))
 
         try:
             with self.page.expect_response(_is_upload, timeout=max(self.timeout, 20000)):
                 fi.set_input_files(str(path))
-            self.page.wait_for_timeout(300)
-            return
         except Exception:
-            pass                       # 没抓到上传请求就退回看预览
+            pass                       # 没抓到请求不代表没传成，交给指纹判
 
-        ok = self.wait_until(
-            lambda: self.page.locator(
-                "img, .el-upload-list__item, .ant-upload-list-item").count() > 0,
-            timeout=5000)
-        if not ok:
-            log.info("传完 %s 没看到上传请求也没看到预览，继续往下走", path.name)
+        if not self.wait_until(lambda: self._form_sig() != before,
+                               timeout=max(self.timeout, 20000)):
+            raise FillError(f"图片 {path.name} 传上去之后页面没有任何变化"
+                            f"（既没出预览也没写回网址），当成没传成功")
+        self.page.wait_for_timeout(200)
 
     def _date_by_label(self, f, value):
         """单个日期选择器。"""
