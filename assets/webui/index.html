@@ -435,12 +435,13 @@
 <div class="modal-overlay hidden" id="modalOverlay">
   <div class="modal-card">
     <div class="modal-accent"></div>
+    <div class="modal-head"><div class="modal-title" id="modalTitle"></div></div>
     <div class="modal-body">
-      <div class="modal-title" id="modalTitle"></div>
       <div class="modal-desc" id="modalDesc"></div>
       <div class="modal-extra hidden" id="modalExtra" style="max-height:320px;overflow-y:auto;border:1px solid var(--bd);border-radius:8px;margin-bottom:14px"></div>
-      <div class="modal-actions" id="modalActions"></div>
     </div>
+    <!-- ⚠ 按钮在滚动区外面，长内容也永远点得到。别挪回 .modal-body 里去 -->
+    <div class="modal-foot"><div class="modal-actions" id="modalActions"></div></div>
   </div>
 </div>
 
@@ -448,14 +449,15 @@
 <div class="modal-overlay hidden" id="detailModal">
   <div class="modal-card" style="width:560px">
     <div class="modal-accent"></div>
+    <div class="modal-head"><div class="modal-title" id="detailTitle"></div></div>
     <div class="modal-body">
-      <div class="modal-title" id="detailTitle"></div>
-      <div class="modal-desc" id="detailIssues" style="color:var(--bad);max-height:30vh;overflow-y:auto"></div>
-      <div style="max-height:360px;overflow-y:auto;font-size:12px;line-height:1.8" id="detailBody"></div>
-      <div class="modal-actions" style="margin-top:14px">
-        <button class="btn" id="btnDetailClose">关闭</button>
-      </div>
+      <div class="modal-desc" id="detailIssues" style="color:var(--bad)"></div>
+      <div style="font-size:12px;line-height:1.8" id="detailBody"></div>
     </div>
+    <!-- ⚠ 「关闭」在滚动区外面。以前它跟正文一起滚，报错攒多了就找不到了 -->
+    <div class="modal-foot"><div class="modal-actions">
+      <button class="btn" id="btnDetailClose">关闭</button>
+    </div></div>
   </div>
 </div>
 
