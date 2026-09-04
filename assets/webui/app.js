@@ -567,7 +567,12 @@
   }
 
   // ---------------- 通用弹窗 ----------------
-  function showModal({ title, desc, buttons, extraHtml }) {
+  // dismissible：能不能点遮罩空白处 / 按 Esc 关掉。默认能。
+  // ⚠ 跑批时「提交这条 / 跳过 / 停止」那两个弹窗必须传 false —— 它们不是
+  //   通知，是执行器在等一个答案，关掉了后台就一直挂着。
+  let modalDismissible = true;
+  function showModal({ title, desc, buttons, extraHtml, dismissible }) {
+    modalDismissible = dismissible !== false;
     $("#modalTitle").textContent = title || "";
     $("#modalDesc").textContent = desc || "";
     const extra = $("#modalExtra");
@@ -591,6 +596,22 @@
     $("#modalOverlay").classList.remove("hidden");
   }
   function hideModal() { $("#modalOverlay").classList.add("hidden"); }
+
+  // 关闭的第二、第三条路：点遮罩空白处、按 Esc。
+  // 见 CLAUDE.md「弹窗与滚动」第 4 条 —— 按钮那条路万一又被内容挤没了，
+  // 这两条至少能让人把弹窗关掉，而不是干瞪眼。
+  document.addEventListener("DOMContentLoaded", () => {
+    const ov = $("#modalOverlay");
+    if (!ov) return;
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov && modalDismissible) hideModal();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && modalDismissible && !ov.classList.contains("hidden")) {
+        hideModal();
+      }
+    });
+  });
 
   // ---------------- 侧栏 ----------------
   // 侧栏是两层：主 Tab（yaml 的 nav.group）+ 它下面的分 Tab（nav.label）。
@@ -4376,6 +4397,7 @@
           { label: step ? "别再停 · 直接跑完" : "以后全部自动", onClick: () => callApi("answer", "auto") },
           { label: step ? "中断" : "停止", onClick: () => callApi("answer", "stop") },
         ],
+        dismissible: false,
       });
     },
 
@@ -4387,6 +4409,7 @@
           { label: "继续", primary: true, onClick: () => callApi("answer", true) },
           { label: "停止", onClick: () => callApi("answer", false) },
         ],
+        dismissible: false,
       });
     },
 

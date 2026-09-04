@@ -136,6 +136,43 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
    没写 CI 会直接失败（这是故意的：notes 缺失是静默的）。
 7. `RUNTIME_ID` **只有改了 `requirements.txt` 才 +1**。
 8. 打包不 `--add-data assets`：assets/ 和 src/ 要留在 exe 旁边当普通文件。
+9. **界面上任何弹窗 / 可滚区，按下面那条「弹窗与滚动」的规矩来。**
+   这一条前后踩了三次（详情弹窗、更新说明弹窗、准备页），每次的表现都是
+   「点不到按钮」「以为界面卡住了」，而且**在开发机上看不出来** ——
+   内容一短就一切正常，内容一长才现形。
+
+---
+
+## 弹窗与滚动（写界面时的硬规矩）
+
+界面跑在 pywebview（Edge WebView2）里，窗口能被拉到很矮，
+而弹窗里的内容（更新日志、一行攒了十几条的报错、字段很多的准备页）
+**长度是没有上限的**。下面四条一条都不能省：
+
+| # | 规矩 | 不守会怎样 |
+|---|---|---|
+| 1 | 卡片**限高**：`max-height: calc(100vh - 32px)` + `display:flex; flex-direction:column` | 弹窗上下都顶出屏幕，标题和按钮全在视口外 |
+| 2 | 只让**中间那一段**滚：`flex:1 1 auto; min-height:0; overflow-y:auto` | 不写 `min-height:0` 的话 flex 子项不肯收缩，限高等于没限 |
+| 3 | **按钮必须在滚动区外面**，单独一段 `flex:none` 的页脚 | 内容一长，「关闭」被推到滚动区一千像素以下 —— 用户看到的就是「弹窗关不掉」 |
+| 4 | 关闭要有**三条路**：按钮、点遮罩空白处、按 Esc | 前三条万一还是漏了，至少 Esc 能救 |
+
+配套的：**滚动条要看得见**。默认的覆盖式滚动条只在滚动时现形，
+于是「这块还能往下滚」这件事一点提示都没有 —— 用户以为内容就这么多。
+`style.css` 里已经全局画了一条细滚动条（`::-webkit-scrollbar` +
+`scrollbar-width: thin`），新写的滚动区不要再用 `scrollbar-width: none`
+之类把它藏回去。
+
+⚠ **改完必须拿长内容在矮窗口下验一遍**，别用开发机默认窗口大小验：
+
+```bash
+# 把 style.css 内联进一个测试页，用 CDP 连着的 Chrome 量几何
+# 判据三条：卡片 bottom <= 视口高；正文 scrollHeight > clientHeight；
+#          按钮的 boundingBox 完整落在视口内
+```
+
+现成的两个弹窗（`#modalOverlay` / `#detailModal`）已经是三段式
+（`.modal-head` / `.modal-body` / `.modal-foot`），照抄结构就行，
+**别把 `.modal-actions` 挪回 `.modal-body` 里去**。
 
 ---
 
