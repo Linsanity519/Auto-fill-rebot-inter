@@ -1,0 +1,74 @@
+# ============================================================
+# 常规资源位批量开关
+# 结构抓取：见 docs/常规资源位批量开关-配置项抓取.md ——【改这个文件之前先看那份】
+# ============================================================
+# ⚠ 前端是 Ant Design 5，满页 css-mncuj7 / css-var-«r26» 编译哈希，一个都不能用。
+#   定位一律：筛选表单按 label 文字找 .ant-form-item → 表按 thead 里有没有「<层级>ID」
+#   和「操作」→ 行按 data-row-key → 操作列 hover「更多」读菜单项。写死在 src/dl_filler.py。
+# ⚠ 只点「启动投放 / 暂停投放」。「终止投放」不可逆，代码里永远不碰。
+# ⚠ 往这里加新的顶层键时，回 src/formcfg.py 的 BY_MODE["dl_toggle"] 里登记一下。
+
+name: 常规资源位批量开关
+description: 大会员投放系统 - 把一个活动下的单元 / 创意批量启动 或 暂停投放
+
+nav:
+  group: 大会员资源位
+  group_order: 4
+  label: 常规资源位批量开关
+  order: 2
+
+mode: dl_toggle
+
+# 不吃 Excel：开哪些行由「方向 + 层级 + 活动ID + 范围」决定
+data_source: none
+
+# 界面上：这是个「批量开关」类型 —— 藏掉数据文件那一行，露出方向/层级/活动ID/范围
+toggle: true
+
+# 方向（启动 / 暂停）是界面上切的。留 direction 只是给命令行兜底。
+direction: "on"
+
+# 层级：单元 / 创意两张表。界面上是一排 segmented（第一项是默认），
+# 后端按值走（unit / creative），见 src/dl_filler.py 的 LEVELS。
+levels:
+  - ["单元", "unit"]
+  - ["创意", "creative"]
+level: unit
+
+# 要「活动ID」输入框：这张列表全站四万多行，不圈定活动没法批量。
+activity_id: true
+
+# 「选哪些行」——一排 segmented。第一项是默认。
+# 「本工具操作过的」= 台账里反方向动过的那几批，界面上勾哪几批就只翻哪几批。
+scopes:
+  - ["按名称关键词", "keyword"]
+  - ["按清单", "list"]
+  - ["本工具操作过的", "ledger"]
+
+# 跑完把成功翻转的那批记进台账（output/<这个名字>台账.json，见 src/dl_ledger.py），
+# 「本工具操作过的」这一档读的就是它：按**反方向**挑，用来把刚暂停的那批恢复回去。
+# ⚠ ledger_kind 决定用哪套台账：delivery = dl_ledger（层级+活动+ID），
+#   不写就是价格策略那套 pt_ledger（策略+人群名称），两边字段对不上。
+ledger: 常规资源位开关
+ledger_kind: delivery
+
+# 不导航（filler 自己按层级 goto 单元表 / 创意表）
+form_url: null
+# 表出来了就算能开始
+ready_selector: '.ant-table-row'
+
+ui:
+  run_kind: fill
+  toggle_title: 批量开关
+  toggle_subtitle: 把一个活动下的单元 / 创意，批量启动 或 暂停投放
+  level_label: 层级
+  activity_label: 活动ID
+  activity_placeholder: "一次只跑一个活动；留空 = 按下面的 ID 清单逐个查"
+  dir_on_hint: 把已暂停的重新投起来
+  dir_off_hint: 把投放中的暂停掉
+  params_label: 名称关键词
+  params_placeholder: "逗号分隔，子串命中单元名称；留空 = 这个活动下所有行"
+  ledger_empty: "还没有记录 —— 用这个工具暂停 / 启动过一批之后，这里会列出那几批，方便反着来一次"
+  ledger_hint: "挑的是本工具反方向动过的那批：现在方向=开启，就找上次被本工具暂停的；日期留空 = 不限"
+  list_placeholder: "一行一个 ID 或名称：纯数字按 ID 精确匹配，其余当名称子串；活动ID 留空时只认纯数字 ID"
+  toggle_hint: "活动ID 留空也行 —— 只要范围选「按清单」、填的是纯数字ID，就一个ID查一次列表、查到就点。点的是「更多」里的启动投放 / 暂停投放，每条都有一次二次确认（工具会自己核对弹窗文字再确认）。已是目标状态的自动跳过；「未开始 / 已完成 / 已终止」这三种状态后台没给开关，也跳过。「终止投放」不可逆，工具永远不点。层级=创意时，因为创意表没有活动ID，会先去单元表按活动ID查出活动名称和单元清单，再回创意表筛"

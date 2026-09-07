@@ -83,6 +83,11 @@ def _runner_flow(settings, cfg, ui):
     return FlowRunner(settings, cfg, ui)
 
 
+def _runner_dl(settings, cfg, ui):
+    from .dl_runner import DlToggleRunner
+    return DlToggleRunner(settings, cfg, ui)
+
+
 def _runner_default(settings, cfg, ui):
     from .runner import Runner
     return Runner(settings, cfg, ui)
@@ -286,6 +291,14 @@ MODES: dict[str, ModeSpec] = {
             "当前「延期范围」直接读取网页里「我的实验」下的实验，不需要 Excel 模板。\n\n"
             "要按实验ID指定的话，先把范围切到「按清单指定实验ID」。"),
         no_template_hint_cli="直接读取网页中「我的实验」下的实验，不需要 Excel 模板（要按实验ID指定请加 --scope id_list）",
+    ),
+    # 常规资源位批量开关：投放列表里的单元 / 创意，批量「启动投放 / 暂停投放」。
+    # 不吃 Excel（要开哪些行由 活动ID + 层级 + 范围 决定），所以没有 build_template。
+    "dl_toggle": ModeSpec(
+        make_runner=_runner_dl,
+        no_template_hint=("「批量开关」不用 Excel 模板。\n\n"
+                          "填活动ID、选层级（单元 / 创意）和范围，点「载入并检查」。"),
+        no_template_hint_cli="「批量开关」不用 Excel 模板，用 --scope 选范围",
     ),
 }
 

@@ -254,9 +254,15 @@ def check_global() -> Report:
     def caps_no_mode_names():
         import inspect
 
+        from src import formcfg
         from src.webapp import Api
         src = inspect.getsource(Api._caps)
-        bad = [m for m in registry.MODES if f'"{m}"' in src or f"'{m}'" in src]
+        # ⚠ 有的 mode 名同时也是**合法的 yaml 顶层键**（flow 就是：mode 叫 flow，
+        #   yaml 里也有 flow: 那一段）。`cfg.get("flow")` 是按 yaml 判断，正是这条
+        #   规矩要的写法，不该被当成「按 mode 名分支」报出来 —— 所以登记过的键放行。
+        yaml_keys = set().union(*(formcfg.known_keys(m) for m in list(registry.MODES) + [None]))
+        bad = [m for m in registry.MODES
+               if (f'"{m}"' in src or f"'{m}'" in src) and m not in yaml_keys]
         if bad:
             raise AssertionError(f"_caps() 里出现了 mode 名：{bad}"
                                  "　← 该在 yaml 里补一个声明，不是在这里加分支")

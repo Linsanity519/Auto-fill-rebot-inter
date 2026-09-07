@@ -144,7 +144,12 @@ button, input, select { font-family: inherit; font-size: inherit; }
   box-shadow: var(--focus);
 }
 
-.row { display: flex; align-items: center; }
+/* ⚠ .row 一律**允许换行**。窗口能被拉到很窄，而一行里常常是
+   「一排 segmented + 几个按钮」这种不可压缩的东西 —— 不换行的结果不是挤一挤，
+   而是最右边那个按钮**被裁到窗口外**（「开始配置」就这么消失过，见 CHANGELOG 1.1.8）。
+   真需要死不换行的那几行，单独加 .row-nowrap。 */
+.row { display: flex; align-items: center; flex-wrap: wrap; row-gap: var(--sp-2); }
+.row-nowrap { flex-wrap: nowrap; }
 .col { display: flex; flex-direction: column; }
 .hidden { display: none !important; }
 
@@ -820,3 +825,31 @@ table.data .num { text-align: center; font-variant-numeric: tabular-nums; }
 .stie-item { padding: 4px var(--sp-2); border-radius: var(--sp-1); color: var(--text-sub); cursor: pointer; white-space: nowrap; }
 .stie-item:hover { background: var(--hover); color: var(--text); }
 .stie-item.sel { background: var(--brand-weak); color: var(--brand-ink); }
+
+/* ---------------- 「本工具操作过的」那份可勾选的台账 ---------------- */
+/* ⚠ 这份清单**是拿来点的**：勾哪几批就只翻哪几批。所以每一行必须一眼看出
+   「能点」和「点上了」——鼠标手型、hover 变底色、勾中整行换底色加左边一道竖线。
+   之前它只是个只读列表，用户的原话是「点也点不动、选也选不了，光告诉我配过啥没用」。 */
+.lg-list {
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  max-height: 190px;
+  overflow: auto;
+}
+.lg-item {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  padding: 7px 10px 7px 8px;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.lg-item:last-child { border-bottom: none; }
+.lg-item:hover { background: var(--hover); }
+.lg-item.on { background: var(--brand-weak); border-left-color: var(--brand); }
+.lg-item input { margin-top: 2px; accent-color: var(--brand); cursor: pointer; flex: none; }
+.lg-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lg-head { color: var(--text); }
+.lg-names { color: var(--text-mu); font-size: var(--fs-xs); word-break: break-all; }

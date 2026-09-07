@@ -49,7 +49,14 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 | `dmp_extension` | DMP延期 | `dmp_` | `dmp_runner` | `dmp_data` | `dmp_template` | 直接操作，无独立 filler |
 | `ab_extension` | AB实验延期 | `ab_` | `ab_runner` | `ab_data` | `ab_template` | 同上 |
 | `meeting_reserve` | 预定会议室 | `meeting_` | `meeting_runner` | `meeting_data` | 不吃 Excel | 走接口 `meeting_api` |
+| `pt_toggle` | 价格策略批量开关 | `pt_` | `pt_runner` | 不吃 Excel | 同上 | `pt_filler` + `pt_strategy` / `pt_ledger` |
+| `dl_toggle` | 常规资源位批量开关 | `dl_` | `dl_runner` | 不吃 Excel | 同上 | `dl_filler` + `dl_ledger` |
 | （无 mode） | 价格配置、DMP人群新建 | — | `runner` | `datasource` | `template` | `filler` |
+
+**两个「批量开关」类型（`pt_toggle` / `dl_toggle`）共用界面上那张卡**，但一行代码都不共用：
+卡上显示哪几段由 caps 决定（`toggle` / `levels` / `activity_id` / `strategy_scope`），
+文案由各自 yaml 的 `ui:` 段给。加第三个批量开关类型时**别去 app.js 里加分支**，
+在 yaml 里声明就行。
 
 **每套家族之间互不调用，改一套不会影响另一套。** 这是刻意的：各家后台的 DOM
 栈完全不同（Formily / Vue+tw- / iView / Arco / antd），共用选择器只会互相踩。
@@ -101,6 +108,10 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 | `activity` | 本批共用一个活动 | 有 `activity` 或 `steps` |
 | `task_list` | 抢占任务清单那张卡 | 有 `grab` |
 | `excel` | 吃 Excel 数据文件 | `data_source` 不是 `none` |
+| `toggle` | 「批量开关」那张卡（方向 / 范围…） | `toggle: true` |
+| `levels` | 卡上多一排「层级」（单元 / 创意） | `levels` 多于 1 项 |
+| `activity_id` | 卡上多一个「活动ID」输入框 | `activity_id: true` |
+| `strategy_scope` | 卡上多一行「策略范围」 | `strategy_scope: true` |
 
 配套的还有 `ui:` 段（`deliver_label` / `deliver_hint` / `strategy_hint` / `run_kind`），
 界面上跟着类型变的几句话写在 yaml 里，不写用默认。
@@ -155,6 +166,12 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 | 2 | 只让**中间那一段**滚：`flex:1 1 auto; min-height:0; overflow-y:auto` | 不写 `min-height:0` 的话 flex 子项不肯收缩，限高等于没限 |
 | 3 | **按钮必须在滚动区外面**，单独一段 `flex:none` 的页脚 | 内容一长，「关闭」被推到滚动区一千像素以下 —— 用户看到的就是「弹窗关不掉」 |
 | 4 | 关闭要有**三条路**：按钮、点遮罩空白处、按 Esc | 前三条万一还是漏了，至少 Esc 能救 |
+
+还有一条同源的：**一行控件（`.row`）一律允许换行**。窗口能被拉窄，而一行里常常是
+「一排 segmented + 几个按钮」这种压不动的东西 —— 不换行的结果不是挤一挤，而是最右边
+那个按钮**被裁到窗口外**（「开始配置」就这么消失过，实测 980px 宽必现，而开发机上
+默认窗口宽根本看不出来）。`style.css` 里 `.row` 已经全局 `flex-wrap: wrap`，
+真需要死不换行的加 `.row-nowrap`，别反过来在某一行上写 `flex-wrap:nowrap` 图好看。
 
 配套的：**滚动条要看得见**。默认的覆盖式滚动条只在滚动时现形，
 于是「这块还能往下滚」这件事一点提示都没有 —— 用户以为内容就这么多。

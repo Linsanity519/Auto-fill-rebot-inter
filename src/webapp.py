@@ -427,6 +427,11 @@ class Api:
             "health": bool(cfg.get("fields") or cfg.get("ready_selector")),
             # 跑完能不能「把这批翻回去」（价格策略批量开关：反方向再点一遍）
             "reversible": bool(cfg.get("reversible")),
+            # 「批量开关」类型多出来的两个控件：层级（单元/创意）、活动ID
+            "levels": len(cfg.get("levels") or []) > 1,
+            "activity_id": bool(cfg.get("activity_id")),
+            # 要不要「策略范围」那一行（当前打开的策略页 / 指定策略）
+            "strategy_scope": bool(cfg.get("strategy_scope")),
         }
 
     # 界面上跟着配置类型变的那几句话。yaml 里 ui: 段可以覆盖，
@@ -452,6 +457,22 @@ class Api:
             "strategy_placeholder": ui.get("strategy_placeholder")
             or "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID",
             "toggle_hint": ui.get("toggle_hint") or "",
+            # 「批量开关」那张卡的标题 / 副标题 / 方向提示 / 层级、活动ID 的标签
+            "toggle_title": ui.get("toggle_title") or "批量开关",
+            "toggle_subtitle": ui.get("toggle_subtitle") or "把已配好的行批量开 / 关",
+            "dir_on_label": ui.get("dir_on_label") or "开启",
+            "dir_off_label": ui.get("dir_off_label") or "关闭",
+            "dir_on_hint": ui.get("dir_on_hint") or "把还没开的行开起来",
+            "dir_off_hint": ui.get("dir_off_hint") or "把已开启的行关掉",
+            "level_label": ui.get("level_label") or "层级",
+            "activity_label": ui.get("activity_label") or "活动ID",
+            "activity_placeholder": ui.get("activity_placeholder") or "只跑这个活动下的行",
+            "list_placeholder": ui.get("list_placeholder")
+            or "一行一个名称，从别处粘过来即可",
+            # 「本工具操作过的」那一档：一句说明 + 台账空的时候说点有用的
+            "ledger_hint": ui.get("ledger_hint") or "",
+            "ledger_empty": ui.get("ledger_empty")
+            or "还没有记录 —— 本工具跑过一轮之后，这里会列出它动过哪些",
         }
 
     def list_forms(self) -> list:
@@ -468,6 +489,8 @@ class Api:
                 "caps": caps,
                 "ui": self._ui_text(cfg, caps),
                 "scopes": registry.scopes_for(cfg),
+                # 「批量开关」类型的层级选项（单元 / 创意）；没有就是空表
+                "levels": [[x[0], x[1]] for x in (cfg.get("levels") or [])],
                 # 侧栏归类。yaml 没写 nav 的（比如新加的配置）落到「其他」组，
                 # 名字就用文件名 —— 界面照样能显示，不至于漏掉一整项。
                 "group": nav.get("group") or "其他",
@@ -912,6 +935,13 @@ class Api:
             s["toggle_strategies"] = str(_o.get("toggle_strategies", "") or "")
             s["toggle_date_from"] = str(_o.get("toggle_date_from", "") or "")
             s["toggle_date_to"] = str(_o.get("toggle_date_to", "") or "")
+            # 常规资源位批量开关：层级（unit/creative）+ 活动ID。
+            # toggle_scope 是「选哪些行」的通用名，pt 那套仍读 pt_scope，两个都给。
+            s["toggle_scope"] = scope
+            s["toggle_level"] = str(_o.get("toggle_level", "") or "")
+            s["toggle_activity"] = str(_o.get("toggle_activity", "") or "")
+            # 「本工具操作过的」那一档：界面上勾了哪几批（批次 id）
+            s["toggle_ledger_ids"] = list(_o.get("toggle_ledger_ids") or [])
             # 活动挂哪儿、按哪套策略跑。资源位投放和价格面板配置共用这两个键
             # （界面上就是同一行控件）；别的 mode 用不到。
             if cfg.get("mode") in ("wizard", "price_panel"):
@@ -1009,17 +1039,37 @@ class Api:
             "header": rec.get("header", {}), "items": items or [],
         })
 
-    def pt_ledger_view(self, form_name: str) -> dict:
-        """「价格策略批量开关」卡里那份台账：本工具「价格策略配置」配过哪些。
+    def ledger_view(self, form_name: str) -> dict:
+        """「批量开关」卡里那份台账：本工具都动过些什么。
 
-        strategies：出现过的策略（新→旧），给「策略」下拉当选项。
-        recent：最近几批，给人看一眼「都记了些啥」。
+        两套台账，按 yaml 的 `ledger_kind` 分（**不看 mode 名**）：
+          delivery  → src/dl_ledger.py：层级 + 活动 + ID（常规资源位批量开关）
+          不写      → src/pt_ledger.py：策略 + 人群名称（价格策略那套）
+
+        返回的形状两边一样，前端只管画：
+          strategies：给「策略」下拉当选项（delivery 那套没有策略，返回空表）
+          recent：最近几批，给人看一眼「都记了些啥」
         """
         try:
             cfg = self._form_cfg(form_name)
             name = cfg.get("ledger")
             if not name:
                 return {"ok": True, "strategies": [], "recent": [], "path": ""}
+            if cfg.get("ledger_kind") == "delivery":
+                from . import dl_ledger as DL
+                recent = [{
+                    "at": b.get("at", ""),
+                    "strategy": "　".join(x for x in (
+                        b.get("level_label") or "",
+                        (f"活动{b['activity']}" if b.get("activity") else ""),
+                        f"已{b.get('verb') or ''}投放") if x),
+                    "strategy_id": "",
+                    "count": len(b.get("items") or []),
+                    "names": [f"{i.get('id')} {i.get('name') or ''}".strip()
+                              for i in (b.get("items") or [])[:8]],
+                } for b in DL.load(name)[:12]]
+                return _json_safe({"ok": True, "strategies": [], "recent": recent,
+                                   "path": DL.path(name)})
             from . import pt_ledger as PL
             recent = [{
                 "at": b.get("at", ""),

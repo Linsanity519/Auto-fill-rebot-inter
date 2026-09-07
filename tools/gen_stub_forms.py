@@ -58,6 +58,7 @@ def build_items() -> list[dict]:
             "order": nav.get("order", 99),
             "desc": cfg.get("description") or "",
             "scopes": [list(x) for x in registry.scopes_for(cfg)],
+            "levels": [list(x) for x in (cfg.get("levels") or [])],
         })
     # 和侧栏一样按 nav 排，读起来跟界面对得上
     items.sort(key=lambda d: (d["group_order"], d["order"], d["name"]))

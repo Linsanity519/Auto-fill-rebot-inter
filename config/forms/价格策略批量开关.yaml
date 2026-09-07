@@ -35,6 +35,10 @@ ledger: 价格策略开关
 # 按产物清单里那批人群、反方向再点一遍。webapp.Api.pt_rollback + caps.reversible。
 reversible: true
 
+# 有「策略范围」那一行（当前打开的策略页 / 指定策略）。界面按这个布尔显示，
+# 不看 mode 名 —— 别的批量开关类型（常规资源位）没有策略这回事。
+strategy_scope: true
+
 # 「选哪些行」——界面上是一排 segmented，不是共用的「延期范围」那一行。
 # 后端仍按 scope 值走（keyword / ledger / list）。第一项是默认。
 scopes:
@@ -49,4 +53,7 @@ ready_selector: '.ant-table-row'
 
 ui:
   run_kind: fill
+  toggle_title: 批量开关
+  toggle_subtitle: 把「价格配置」表里已配好的行，批量开 / 关
+  ledger_empty: 还没有记录 —— 用「价格策略配置」跑过一轮后，这里会列出它配了哪些人群、在哪条策略下
   toggle_hint: "只点「操作」列的开启/关闭，一键直接生效、没有二次确认。已是目标状态的、以及开启方向下人群选组=不限的，自动跳过。跨策略是尽力而为——最稳的用法是自己在浏览器里打开那条策略页，用「当前打开的策略页」"

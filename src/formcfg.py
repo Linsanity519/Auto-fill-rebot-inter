@@ -109,7 +109,14 @@ BY_MODE = {
         "buildings", "data_source", "grab",
     },
     "pt_toggle": {
-        "data_source", "direction", "ledger", "reversible", "scopes", "toggle", "ui",
+        "data_source", "direction", "ledger", "reversible", "scopes", "strategy_scope",
+        "toggle", "ui",
+    },
+    # 常规资源位批量开关：投放列表的单元 / 创意两张表。
+    # levels = 层级选项（单元/创意），activity_id = 要不要「活动ID」输入框。
+    "dl_toggle": {
+        "activity_id", "data_source", "direction", "ledger", "ledger_kind", "level",
+        "levels", "scopes", "toggle", "ui",
     },
     # 自制配置类型的 cfg 是 flow_data.synthetic_cfg 拼出来的，不是手写的 yaml，
     # 但走同一套校验 —— _flow 是那份 config/flows/*.json 的原件。
