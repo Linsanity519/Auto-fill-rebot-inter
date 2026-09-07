@@ -251,6 +251,72 @@ def check_global() -> Report:
 
     r.check("app.js 没有按 mode 名硬编码的能力判断", no_mode_names)
 
+    def api_args_match():
+        """app.js 里每个 callApi("xxx", …) 的实参个数，和 Api.xxx 的签名对得上吗。
+
+        ⚠ 为什么要查：对不上的表现是**界面永远转圈**。pywebview 桥接层抛的
+          TypeError 只会让那个 Promise reject，而各处的 `.then()` 不跑、日志里
+          一个字都没有 —— 1.1.8 的「本工具操作过的」就是这么卡在「读取中…」上，
+          而且是发出去之后才被用户发现的。这类不一致纯属机械活，交给机器查。
+        """
+        import inspect
+        import re
+
+        from src.webapp import Api
+        js = (ROOT / "assets" / "webui" / "app.js").read_text(encoding="utf-8")
+
+        def split_args(s: str) -> list:
+            """按顶层逗号拆实参；括号 / 引号 / 模板串里的逗号不算数。"""
+            out, depth, cur, quote = [], 0, "", None
+            for ch in s:
+                if quote:
+                    cur += ch
+                    if ch == quote and not cur.endswith("\\" + ch):
+                        quote = None
+                    continue
+                if ch in "\"'`":
+                    quote, cur = ch, cur + ch
+                    continue
+                if ch in "([{":
+                    depth += 1
+                elif ch in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                if ch == "," and depth == 0:
+                    out.append(cur.strip())
+                    cur = ""
+                    continue
+                cur += ch
+            if cur.strip():
+                out.append(cur.strip())
+            return out
+
+        bad, names = [], set()
+        for m in re.finditer(r'callApi\(\s*"([a-zA-Z_]\w*)"\s*(,)?', js):
+            name = m.group(1)
+            names.add(name)
+            n = len(split_args(js[m.end():])) if m.group(2) else 0
+            line = js[:m.start()].count("\n") + 1
+            fn = getattr(Api, name, None)
+            if fn is None:
+                bad.append(f'app.js:{line} callApi("{name}") —— Api 上没有这个方法')
+                continue
+            sig = inspect.signature(fn)
+            ps = [p for p in sig.parameters.values() if p.name != "self"]
+            pos = [p for p in ps if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+            lo = sum(1 for p in pos if p.default is p.empty)
+            hi = 10 ** 6 if any(p.kind == p.VAR_POSITIONAL for p in ps) else len(pos)
+            if not lo <= n <= hi:
+                bad.append(f'app.js:{line} callApi("{name}", …) 传了 {n} 个实参，'
+                           f"而 Api.{name}{sig} 只收 {lo}~{hi} 个")
+        if bad:
+            raise AssertionError("；".join(bad[:3])
+                                 + "　← 对不上的后果是界面永远转圈、日志里没有任何线索")
+        return f"{len(names)} 个 API 调用名都对得上"
+
+    r.check("app.js 调后端的实参个数和 Api 方法签名一致", api_args_match)
+
     def caps_no_mode_names():
         import inspect
 

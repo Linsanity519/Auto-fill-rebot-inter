@@ -164,7 +164,16 @@
 
   function callApi(name, ...args) {
     if (hasBackend() && window.pywebview.api[name]) {
-      return window.pywebview.api[name](...args);
+      // ⚠ 一定要 catch：桥接层抛错时 Promise 只是 reject，各处的 .then() 永远不跑 ——
+      //   界面就停在「读取中…」「载入中…」上，**日志里一个字都没有**，没法查。
+      //   1.1.8 的 ledger_view 就是这么卡住的（前端传 2 个实参，Python 那边的方法
+      //   只收 1 个，pywebview 直接 reject）。现在统一翻译成 {ok:false} + 一条错误日志，
+      //   调用方原本就有的「!r.ok」分支会把话说出来。
+      return window.pywebview.api[name](...args).catch((e) => {
+        const msg = `调用后端 ${name}() 失败：${(e && (e.message || e)) || "未知错误"}`;
+        try { appendLog(msg, "error"); } catch (_) { /* 日志还没初始化就算了 */ }
+        return { ok: false, error: msg };
+      });
     }
     // 没有 Python 后端时的假数据，只为了能在普通浏览器里核对样式
     if (name === "list_forms") return Promise.resolve(STUB_FORMS);
@@ -3275,6 +3284,16 @@
       appendLog("选了「挂到已有活动」，先把活动ID填上", "warn");
       return;
     }
+    // 「本工具操作过的」：勾了哪几批就只翻哪几批。一批都没勾就别往下走 ——
+    // 后端把空清单当成「不按批次筛」（价格策略那套的台账没有勾选框，靠的就是这个），
+    // 于是"我特意全取消了"会变成"全都翻一遍"，和下面那句「一批都没勾」自相矛盾。
+    // ⚠ 判据是「这份台账有没有可勾的批次（带 id）」，不是 mode 名。
+    if (hasToggle() && state.tgScope === "ledger"
+        && (state.tgLedgerBatches || []).some((b) => b.id)
+        && !(state.tgLedgerPicked || []).length) {
+      appendLog("「本工具操作过的」一批都没勾 —— 勾上要翻回的那几批，再点「载入并检查」", "warn");
+      return;
+    }
     const btn = $("#btnLoadCheck");
     btn.disabled = true;
     appendLog("正在载入并检查…", "info");
@@ -3286,7 +3305,6 @@
         : sc === "keyword" ? $("#tgKeywordInput").value : "";
       if (hasLevels()) opts.toggle_level = state.tgLevel;
       if (hasActivityId()) opts.toggle_activity = $("#tgActivityInput").value.trim();
-      // 「本工具操作过的」：勾了哪几批就只翻哪几批
       if (sc === "ledger") opts.toggle_ledger_ids = state.tgLedgerPicked || [];
       if (sc === "ledger") {
         opts.toggle_date_from = $("#tgLedgerFrom").value || "";

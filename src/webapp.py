@@ -1039,7 +1039,7 @@ class Api:
             "header": rec.get("header", {}), "items": items or [],
         })
 
-    def ledger_view(self, form_name: str) -> dict:
+    def ledger_view(self, form_name: str, opts: dict | None = None) -> dict:
         """「批量开关」卡里那份台账：本工具都动过些什么。
 
         两套台账，按 yaml 的 `ledger_kind` 分（**不看 mode 名**）：
@@ -1048,7 +1048,12 @@ class Api:
 
         返回的形状两边一样，前端只管画：
           strategies：给「策略」下拉当选项（delivery 那套没有策略，返回空表）
-          recent：最近几批，给人看一眼「都记了些啥」
+          recent：最近几批（每批带 `id`，前端按它勾选）
+
+        ⚠ `opts` 必须留着（前端传 {level, direction, activity}）。1.1.8 发出去的那版
+          漏了这个参数，前端两个实参撞上单参数的方法 —— pywebview 直接 reject 了
+          那个 Promise，而 `.then()` 没有 `.catch()`，界面就永远停在「读取中…」，
+          日志里一个字都没有。见 CHANGELOG 1.1.9。
         """
         try:
             cfg = self._form_cfg(form_name)
@@ -1057,7 +1062,15 @@ class Api:
                 return {"ok": True, "strategies": [], "recent": [], "path": ""}
             if cfg.get("ledger_kind") == "delivery":
                 from . import dl_ledger as DL
+                o = opts or {}
+                # ⚠ 只列**这次跑得到**的那几批：层级对得上、而且是反方向动过的
+                #   （现在要启动，就只列上次被暂停的）。列出来点了没用比不列还糟。
+                rev = {"on": "off", "off": "on"}.get(str(o.get("direction") or ""), "")
+                batches = DL.batches_for(name, level=str(o.get("level") or ""),
+                                         direction=rev,
+                                         activity=str(o.get("activity") or ""))
                 recent = [{
+                    "id": DL.bid(b),
                     "at": b.get("at", ""),
                     "strategy": "　".join(x for x in (
                         b.get("level_label") or "",
@@ -1067,7 +1080,7 @@ class Api:
                     "count": len(b.get("items") or []),
                     "names": [f"{i.get('id')} {i.get('name') or ''}".strip()
                               for i in (b.get("items") or [])[:8]],
-                } for b in DL.load(name)[:12]]
+                } for b in batches[:20]]
                 return _json_safe({"ok": True, "strategies": [], "recent": recent,
                                    "path": DL.path(name)})
             from . import pt_ledger as PL
