@@ -25,9 +25,13 @@ log = logging.getLogger(__name__)
 
 
 class AdRegCreative:
-    def __init__(self, page, timeout: int = 15000):
+    def __init__(self, page, timeout: int = 15000, skip: int = 0):
         self.page = page
         self.timeout = timeout
+        # 准备页的「跳过前几个」，只用来把报错说清楚（第几个视频没了）
+        self.skip = skip
+        # 「空间设置」的兜底这一批里报没报过（见 _pick_space）
+        self._space_fallback_seen = False
 
     # ------------------------------------------------------------ 批量加视频
     def add_videos(self, picker: dict, indexes: list[int]) -> int:
@@ -58,15 +62,28 @@ class AdRegCreative:
             by_page.setdefault(g // per + 1, []).append(g % per)
 
         picked = 0
+        last_page = max(by_page)
         for page_no in sorted(by_page):
-            self._goto_page(drawer, picker, page_no)
+            self._goto_page(drawer, picker, page_no)   # 里面已经等到列表渲染出来
             cards = drawer.locator(card_sel)
             n_on_page = cards.count()
             for pos in by_page[page_no]:
                 if pos >= n_on_page:
+                    # ⚠ 只有**最后一页没满**才是真的「视频不够」。中间某页数不够
+                    #   一定是页面出了别的问题（列表没刷新 / 被弹窗盖住），
+                    #   以前两种情况共用一句「超出总数」，把人往改数量的方向带偏了。
                     self._cancel(drawer, picker)
-                    raise FillError(f"要勾第 {page_no} 页第 {pos + 1} 个，但这页只有 {n_on_page} 个"
-                                    f" —— 「视频数量 + 跳过前几个」超出「我的视频」总数了")
+                    want = self.skip + len(indexes)
+                    if page_no == last_page:
+                        raise FillError(
+                            f"「我的视频」不够用：要取到第 {want} 个"
+                            f"（跳过前 {self.skip} 个 + {len(indexes)} 个），"
+                            f"但第 {page_no} 页只有 {n_on_page} 个，到这儿就没了。"
+                            f"把准备页的「视频数量」调小，或者把「跳过前几个」减一点。")
+                    raise FillError(
+                        f"第 {page_no} 页本该是满的（每页 {per} 个），却只数到 {n_on_page} 个 ——"
+                        f"要勾第 {pos + 1} 个。这不是视频不够，是这一页没正常渲染出来"
+                        f"（网慢 / 抽屉被别的弹窗盖住）。重跑一次通常就好。")
                 cards.nth(pos).locator(check_sel).first.click()
                 self.page.wait_for_timeout(400)
                 picked += 1
@@ -122,8 +139,12 @@ class AdRegCreative:
     def _pick_space(self, cfg: dict):
         """空间设置：选第一个「稿件UP主空间」。
 
-        ⚠ 这个选项对一部分视频（我的视频里没绑 UP 主空间的）是**禁用**的，
-          页面会自动落到「自定义」。禁用时就不强选，保持页面默认（已选中的那个）。
+        ⚠ 这个选项对一部分视频（我的视频里没绑 UP 主空间的）是**禁用**的 ——
+          页面会自己落到品牌那一档（截图里是「哔哩哔哩大会员 · 取自品牌头像」）。
+          禁用时不强选，保持页面默认。这是**正常兜底，不是错**。
+        ⚠ 只在这一批里第一次遇到时按 INFO 记一条并说清楚落到了哪儿，后面的走
+          debug —— 2026-09-08 那轮 50 条创意刷了 50 行一模一样的话，
+          真正的报错被埋在里面看不见了。
         """
         w = self._wrapper()
         fi = w.locator(".ivu-form-item", has_text=cfg.get("label", "空间设置")).first
@@ -136,7 +157,13 @@ class AdRegCreative:
             raise FillError(f"「空间设置」里没有「{want}」。实际有：{opts.all_inner_texts()}")
         cls = opt.get_attribute("class") or ""
         if "disabled" in cls:
-            log.info("「空间设置」的「%s」不可选，落到「自定义」", want)
+            if not self._space_fallback_seen:
+                self._space_fallback_seen = True
+                log.info("「空间设置」的「%s」这批视频不可选（页面禁用），"
+                         "保持页面自己选好的「%s」。后面的创意同样处理，不再重复记录",
+                         want, self._space_current(fi) or "默认项")
+            else:
+                log.debug("「空间设置」的「%s」不可选，保持页面默认", want)
         elif "checked" not in cls and "active" not in cls:
             opt.click()
             self.page.wait_for_timeout(400)
@@ -326,6 +353,14 @@ class AdRegCreative:
         self.page.wait_for_timeout(2500)
 
     def _goto_page(self, drawer, picker: dict, page_no: int):
+        """翻到第 page_no 页，**等列表真的换过来**再返回。
+
+        ⚠ 别退回「点一下 + wait_for_timeout(1600)」那个写法（硬约定第 1 条）。
+          它是这么炸的：翻页是异步拉数据，1.6 秒不够时回到调用方
+          `cards.count()` 数到 0，然后被当成「视频不够」报出来 ——
+          实测 287 个视频、同样是第 3 页，上一个单元成、下一个单元败
+          （2026-09-08 的 _5 成 / _6 败）。
+        """
         cur = self._active_page(drawer, picker)
         if cur == page_no:
             return
@@ -334,17 +369,46 @@ class AdRegCreative:
             if page_no > 1:
                 raise FillError(f"要翻到第 {page_no} 页，但抽屉里没有翻页控件")
             return
+
         item = pager.locator(picker.get("page_item_selector", ".ivu-page-item")).filter(
             has_text=re.compile(rf"^\s*{page_no}\s*$")).first
         if item.count():
             item.click()
-            self.page.wait_for_timeout(1600)
+        else:
+            # 页码没直接列出来（页数多时中间是「…」），只能一页页点「下一页」
+            nxt = pager.locator(".ivu-page-next")
+            for _ in range(max(0, page_no - (cur or 1))):
+                nxt.click()
+                if not self._wait_page_ready(drawer, picker, None):
+                    break
+        self._require_page_ready(drawer, picker, page_no)
+
+    def _wait_page_ready(self, drawer, picker: dict, page_no: int | None) -> bool:
+        """等「页码切过去了 **且** 这一页的卡片渲染出来了」。
+
+        两个条件缺一不可：只等页码，卡片可能还在拉；只等卡片数>0，
+        数到的可能还是上一页那批。page_no=None 表示不校页码（点「下一页」时用）。
+        """
+        card_sel = picker.get("card_selector", ".video-select-item")
+
+        def ready():
+            if page_no is not None and self._active_page(drawer, picker) != page_no:
+                return False
+            return drawer.locator(card_sel).count() > 0
+
+        return wait_until(self.page, ready, self.timeout)
+
+    def _require_page_ready(self, drawer, picker: dict, page_no: int):
+        if self._wait_page_ready(drawer, picker, page_no):
             return
-        nxt = pager.locator(".ivu-page-next")
-        steps = page_no - (cur or 1)
-        for _ in range(max(0, steps)):
-            nxt.click()
-            self.page.wait_for_timeout(1400)
+        # 到这儿是真没翻过去 / 真没渲染出来，不是「视频不够」—— 说清楚是哪一种
+        act = self._active_page(drawer, picker)
+        n = drawer.locator(picker.get("card_selector", ".video-select-item")).count()
+        raise FillError(
+            f"翻到第 {page_no} 页之后，等了 {self.timeout // 1000} 秒列表还是没出来"
+            f"（当前停在第 {act if act is not None else '?'} 页，页面上 {n} 张卡）。"
+            f"多半是网慢或者抽屉被别的弹窗盖住了，重跑一次；一直这样就把"
+            f"「设置」里的超时调大。")
 
     def _active_page(self, drawer, picker: dict):
         try:
@@ -356,6 +420,16 @@ class AdRegCreative:
         except Exception:
             pass
         return None
+
+    def _space_current(self, fi) -> str:
+        """「空间设置」当前实际落在哪 —— 只用来把日志写清楚，读不到就返回空。"""
+        try:
+            sel = fi.locator(".ivu-select-selected-value, .ivu-select-placeholder").first
+            if sel.count():
+                return (sel.inner_text() or "").strip()
+        except Exception:
+            log.debug("读不到「空间设置」当前的值", exc_info=True)
+        return ""
 
     def _counter(self, scope, text: str):
         try:
