@@ -198,7 +198,7 @@ def _prep_field(f: dict) -> dict:
 
 
 def _prep_kind(f: dict) -> str:
-    """这一项在界面上长什么样：segmented / select / number / file / text。
+    """这一项在界面上长什么样：segmented / select / number / file / textarea / text。
 
     ⚠ 不能直接拿 type 当长相。原生商广的 prep_fields 里 type 写的就是长相
       （segmented/select/number）；价格面板配置的字段是从 unit_common 借来的，
@@ -208,7 +208,7 @@ def _prep_kind(f: dict) -> str:
     t = str(f.get("type") or "")
     if f.get("options_map"):
         return "select"               # 联动下拉（常规商广的推广内容 / 转化目标）
-    if t in ("segmented", "select", "number", "file", "text"):
+    if t in ("segmented", "select", "number", "file", "textarea", "text"):
         return t                      # 自己就写的是长相（原生商广）
     if t == "pp_number":
         return "number"
@@ -1026,7 +1026,8 @@ class Api:
         # payload 不传回前端：有的（wizard 的 creatives）很大，且前端不需要自己拼 records，
         # 双击详情 / 开跑都是回头问 Python 要，数据不用来回搬两遍。
         return {"index": r.index, "name": r.name, "kind": r.kind,
-                "detail_count": r.detail_count, "issues": r.issues, "done": r.done}
+                "detail_count": r.detail_count, "issues": r.issues,
+                "warnings": getattr(r, "warnings", []), "done": r.done}
 
     def row_detail(self, index: int) -> dict | None:
         row = next((r for r in self.preview_rows if r.index == index), None)
@@ -1036,6 +1037,7 @@ class Api:
         items = rec.get("items") if "items" in rec else rec.get("creatives", [])
         return _json_safe({
             "index": row.index, "name": row.name, "issues": row.issues,
+            "warnings": getattr(row, "warnings", []),
             "header": rec.get("header", {}), "items": items or [],
         })
 

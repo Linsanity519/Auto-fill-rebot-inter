@@ -22,5 +22,11 @@ class PreviewRow:
     kind: str                 # 原「类型」
     detail_count: int         # 原「明细」
     issues: list = field(default_factory=list)   # 原「问题」
+    # 提醒：说得出口、但**不该拦住这一行**的话。issues 会被 start_run 直接筛掉
+    # （`good = [r for r in rows if not r.issues]`），所以凡是「我知道了，照样能跑」
+    # 的话都得放这儿 —— 放 issues 里等于把整批堵死。
+    # 踩过的：常规商广「视频数量填 10，Excel 只有 6 行 —— 按 Excel 的 6 行算」，
+    # 话都说了按 6 行算，却因为挂在 issues 上把唯一那个单元筛没了，整批跑不了。
+    warnings: list = field(default_factory=list)
     done: bool = False         # 原「已完成」
     payload: dict = field(default_factory=dict)  # 原 "_record" / "_unit"

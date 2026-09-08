@@ -52,8 +52,10 @@ class AdRegRunner(StateMixin):
     # ---------------- 预检 ----------------
     def preview(self) -> list[PreviewRow]:
         prep = self.s.get("ad_prep") or P.load(self.f)
-        data = D.load(self.s["data_file"], self.f, self.s)
+        # ⚠ 不读 data_file：这个类型 data_source: none，规模和文案都来自准备页
+        data = D.load("", self.f, self.s)
         issues = D.validate(self.f, data, prep)
+        warns = D.warnings(self.f, data, prep)
         head = P.validate(self.f, prep)
 
         rows = []
@@ -66,11 +68,19 @@ class AdRegRunner(StateMixin):
                 detail_count=len(cs), issues=[],
                 done=self.state.is_done(u["name"]), payload=u,
             ))
+        # 准备参数和素材文案是**全批共用**的，出问题就是每一个单元都跑不了 ——
+        # 所以挂到每一行上，不是只挂第一行。
+        # ⚠ 只挂第一行会变成「第 1 个单元被拦下，第 2~15 个照样拿着空标题去跑」：
+        #   start_run 是逐行筛的（good = [r for r in rows if not r.issues]）。
+        # ⚠ 提醒挂 warnings、别并进 issues：issues 非空 = 这一行整个不跑
         if rows:
-            rows[0].issues = head + issues + rows[0].issues
-        elif head or issues:
+            for r in rows:
+                r.issues = head + issues + r.issues
+            rows[0].warnings = warns + rows[0].warnings
+        elif head or issues or warns:
             rows.append(PreviewRow(index=1, name="（准备参数）", kind="", detail_count=0,
-                                   issues=head + issues, done=False, payload={}))
+                                   issues=head + issues, warnings=warns,
+                                   done=False, payload={}))
 
         self._data = data
         self._prep = prep

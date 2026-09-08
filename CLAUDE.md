@@ -46,6 +46,7 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
 | `wizard` | 资源位投放 | `wizard_` | `wizard_runner` | `wizard_data` | `wizard_template` | `wizard_filler` |
 | `price_panel` | 价格面板配置 | `pp_` | `pp_runner` | `pp_data` | `pp_template` | `pp_filler` + `pp_creative` |
 | `ad_native` | 原生商广 | `ad_` | `ad_runner` | `ad_data` | `ad_template` | `ad_filler` + `ad_image` |
+| `ad_regular` | 常规商广 | `ad_reg_` | `ad_reg_runner` | `ad_reg_data`（不吃 Excel，读准备页） | 无 | `ad_filler` + `ad_reg_creative` |
 | `dmp_extension` | DMP延期 | `dmp_` | `dmp_runner` | `dmp_data` | `dmp_template` | 直接操作，无独立 filler |
 | `ab_extension` | AB实验延期 | `ab_` | `ab_runner` | `ab_data` | `ab_template` | 同上 |
 | `meeting_reserve` | 预定会议室 | `meeting_` | `meeting_runner` | `meeting_data` | 不吃 Excel | 走接口 `meeting_api` |

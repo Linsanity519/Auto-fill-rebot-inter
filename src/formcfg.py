@@ -80,8 +80,9 @@ BY_MODE = {
         "submit_button", "unit_fields", "urls",
     },
     # 常规商广：和原生老同页（老 auto）。吃 Excel（columns），多了 prep_fields（联动下拉）和 ui。
+    # ⚠ 没有 "columns"：1.1.10 起这个类型不吃 Excel，素材文案在 prep_fields 里
     "ad_regular": {
-        "columns", "create_url_marker", "creative", "grouping", "plan_fields",
+        "create_url_marker", "creative", "data_source", "grouping", "plan_fields",
         "prep_fields", "submit_button", "ui", "unit_fields", "urls",
     },
     # 原生商广新：ad.bilibili.co 新版投放页（#/promote/auto-v2）。

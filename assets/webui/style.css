@@ -295,6 +295,24 @@ html[data-theme="dark"] .segmented .seg-item.active { box-shadow: 0 1px 3px rgba
   flex: 1;
   min-width: 0;         /* flex 项默认 min-width:auto，按内容撑开会把后面的按钮挤出容器 */
 }
+/* 多行输入框。⚠ 不能直接套 .field：那个是 height:30px + display:flex 的单行框，
+   textarea 套上去会被压成一行高、宽度还会塌成 22px（padding 撑出来的那点）。 */
+.field-multi {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 6px 10px;
+}
+.field-multi::placeholder { color: var(--text-mu); }
+.field-multi:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+
 .field::placeholder { color: var(--text-mu); }
 .field:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
 
