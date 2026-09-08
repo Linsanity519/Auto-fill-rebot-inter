@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 
-from .fill_core import FillError, wait_until
+from .fill_core import FillError, wait_stable, wait_until
 
 log = logging.getLogger(__name__)
 
@@ -85,8 +85,11 @@ class AdRegCreative:
                         f"要勾第 {pos + 1} 个。这不是视频不够，是这一页没正常渲染出来"
                         f"（网慢 / 抽屉被别的弹窗盖住）。重跑一次通常就好。")
                 cards.nth(pos).locator(check_sel).first.click()
-                self.page.wait_for_timeout(400)
                 picked += 1
+                # 等页面底部「已选 n/10」涨到 picked 为止（读不到计数就不卡着）
+                wait_until(self.page,
+                           lambda: self._counter(drawer, count_text) in (picked, None),
+                           self.timeout)
                 got = self._counter(drawer, count_text)
                 if got is not None and got != picked:
                     self._cancel(drawer, picker)
@@ -97,8 +100,11 @@ class AdRegCreative:
             drawer.wait_for(state="hidden", timeout=self.timeout)
         except Exception as e:
             raise FillError("点了「确定」但加视频的抽屉没关掉") from e
-        self.page.wait_for_timeout(1500)
 
+        # 等这 N 条创意块渲染出来（以前是干等 1.5 秒就数，慢一点就数少了）
+        wait_until(self.page,
+                   lambda: self.page.locator(".single-creative-wrapper").count() >= len(indexes),
+                   self.timeout)
         got = self.page.locator(".single-creative-wrapper").count()
         if got != len(indexes):
             raise FillError(f"要加 {len(indexes)} 个视频，页面上出现了 {got} 条创意，对不上")
@@ -128,13 +134,13 @@ class AdRegCreative:
         tab = fi.locator(".radio-item").filter(has_text=re.compile(rf"^\s*{re.escape(opt)}\s*$")).first
         if tab.count() and not re.search(r"active", tab.get_attribute("class") or ""):
             tab.click()
-            self.page.wait_for_timeout(400)
         box = fi.locator(f'input[placeholder*="{cfg.get("url_ph", "请使用https链接开头的URL")}"]').first
-        if not box.count():
+        # 切「自定义链接」之后 URL 输入框才渲染出来，等它，别干等固定毫秒
+        if not wait_until(self.page, lambda: box.count() > 0, self.timeout):
             raise FillError("落地页里没找到 URL 输入框")
         box.fill("")
         box.fill(url)
-        self.page.wait_for_timeout(200)
+        wait_until(self.page, lambda: (box.input_value() or "").strip() == url, 3000)
 
     def _pick_space(self, cfg: dict):
         """空间设置：选第一个「稿件UP主空间」。
@@ -166,7 +172,9 @@ class AdRegCreative:
                 log.debug("「空间设置」的「%s」不可选，保持页面默认", want)
         elif "checked" not in cls and "active" not in cls:
             opt.click()
-            self.page.wait_for_timeout(400)
+            wait_until(self.page,
+                       lambda: any(x in (opt.get_attribute("class") or "")
+                                   for x in ("checked", "active")), 3000)
 
         # 自定义时下面有个品牌下拉（.brand-select-wrap），选第一个（页面一般已默认选中第一个，
         # 这里再点一遍保底）
@@ -186,13 +194,14 @@ class AdRegCreative:
             except Exception:
                 pass
         bw.locator(".ivu-select-selection").first.click()
-        self.page.wait_for_timeout(700)
-        item = self.page.locator(".ivu-select-dropdown:visible .ivu-select-item").first
-        if not item.count():
-            item = bw.locator(".ivu-select-item").first
+        drop = self.page.locator(".ivu-select-dropdown:visible .ivu-select-item")
+        wait_until(self.page, lambda: drop.count() > 0, self.timeout)
+        item = drop.first if drop.count() else bw.locator(".ivu-select-item").first
         if item.count():
             item.click()
-            self.page.wait_for_timeout(400)
+            # 等下拉收起来，说明选中了
+            wait_until(self.page,
+                       lambda: self.page.locator(".ivu-select-dropdown:visible").count() == 0, 3000)
 
     def _pick_story(self, cfg: dict):
         """Story 转化组件：点「选择」开抽屉，挑第一个组件卡，确定。"""
@@ -206,22 +215,58 @@ class AdRegCreative:
         opener = fi.get_by_text(cfg.get("open_button", "选择"), exact=True).first
         if not opener.count():
             raise FillError("Story转化组件里没有「选择」按钮")
-        opener.click()
-        self.page.wait_for_timeout(1500)
 
         psel = cfg.get("picker_selector", ".library-wrap")
         isel = cfg.get("item_selector", ".library-item")
-        picker = self.page.locator(f"{psel}:visible").first
-        if not picker.count():
-            picker = self.page.locator(psel).first
-        if not wait_until(self.page, lambda: picker.locator(isel).count() > 0, self.timeout):
-            raise FillError("点了「选择」但 Story 组件抽屉没出来 / 里面没有可选组件")
 
+        # ⚠ 别把 picker 提前绑成 `page.locator(f"{psel}:visible").first` 再去等 ——
+        #   那个 .count() 是**点开的一瞬间**求值的，抽屉还没显示时会退化成
+        #   「DOM 里第一个 .library-wrap」，那可能是别的创意那条**隐藏的**抽屉，
+        #   于是就守着一个永远不会有内容的元素等到超时。
+        #   locator 每次 poll 重新求值才是对的。
+        def visible_picker(self=self, psel=psel):
+            return self.page.locator(f"{psel}:visible").first
+
+        # 组件列表是异步拉的，偶尔会拉回来空的（2026-09-08 第 8 个单元就是：
+        # 抽屉开着、标题在、筛选行在，「共有 __ 个附加创意组件」那个数字是空的）。
+        # 这种是一次性的，关掉重开一次通常就有了 —— 所以整段可以重试。
+        attempts = int(cfg.get("retry", 3))
+        for attempt in range(1, attempts + 1):
+            opener.click()
+            opened = wait_until(self.page,
+                                lambda: visible_picker().count() > 0, self.timeout)
+            got_items = opened and wait_until(
+                self.page, lambda: visible_picker().locator(isel).count() > 0, self.timeout)
+            if got_items:
+                break
+            if attempt < attempts:
+                log.info("Story 组件列表这次是空的（第 %d/%d 次），关掉重开再试",
+                         attempt, attempts)
+                self._close_story(psel, cfg)
+                continue
+            # 到这儿是真拿不到。把「没打开」和「开了但空」分清楚 ——
+            # 以前两种共用一句话，看日志的人根本不知道该去页面上看什么
+            if not opened:
+                raise FillError(
+                    f"点了「选择」但 Story 组件抽屉没出来（等了 {self.timeout // 1000} 秒）。"
+                    f"多半是被别的弹窗盖住了，重跑一次。")
+            raise FillError(
+                f"Story 组件抽屉开了，但里面一个组件都没有（试了 {attempts} 次，"
+                f"抽屉上写的是「{self._story_count_text(visible_picker())}」）。"
+                f"要么这个账号下确实没有可用的附加创意组件，要么后台这会儿没返回数据 —— "
+                f"到页面上手动点一次「选择」看看列表是不是空的。")
+
+        picker = visible_picker()
         # 选第一张卡：勾它右上角的方块（.component-checkbox），不是点卡片本体（会开预览）
         item = picker.locator(isel).first
         chk = item.locator(cfg.get("check_in_item", ".component-checkbox .ivu-checkbox-wrapper")).first
-        (chk if chk.count() else item).click()
-        self.page.wait_for_timeout(500)
+        target = chk if chk.count() else item
+        target.click()
+        # 等它真的被勾上，别干等固定毫秒
+        wait_until(self.page,
+                   lambda: "checked" in (target.get_attribute("class") or "")
+                   or "checked" in (item.get_attribute("class") or ""),
+                   2000)
 
         cb = cfg.get("confirm_button", "确定")
         ok = self.page.locator(cfg.get("footer_confirm_selector",
@@ -236,7 +281,33 @@ class AdRegCreative:
             self.page.locator(f"{psel}:visible").first.wait_for(state="hidden", timeout=self.timeout)
         except Exception:
             log.warning("Story 组件抽屉没检测到关闭，继续")
-        self.page.wait_for_timeout(600)
+
+    def _story_count_text(self, picker) -> str:
+        """抽屉上「共有 N 个附加创意组件」那一行，只为把报错说清楚。"""
+        try:
+            m = re.search(r"共有\s*\d*\s*个[^\n]*", picker.inner_text() or "")
+            return (m.group(0).strip() if m else "").replace("\n", " ") or "（这行也没读到）"
+        except Exception:
+            log.debug("读不到 Story 抽屉的计数行", exc_info=True)
+            return "（这行也没读到）"
+
+    def _close_story(self, psel: str, cfg: dict):
+        """把 Story 抽屉关掉（点「取消」，没有就按 Esc），等它真的消失。"""
+        try:
+            cancel = self.page.locator(f"{psel}:visible button").filter(
+                has_text=re.compile(r"^\s*取消\s*$")).last
+            if cancel.count():
+                cancel.click()
+            else:
+                self.page.keyboard.press("Escape")
+        except Exception:
+            log.debug("关 Story 抽屉时点取消失败，按 Esc 兜底", exc_info=True)
+            try:
+                self.page.keyboard.press("Escape")
+            except Exception:
+                pass
+        wait_until(self.page, lambda: self.page.locator(f"{psel}:visible").count() == 0,
+                   self.timeout)
 
     def _switch_to(self, creative_cfg: dict, i: int):
         """点左边第 i 张「创意N」卡，把那条创意的表单切出来。"""
@@ -245,7 +316,6 @@ class AdRegCreative:
         if cards.count() <= i:
             raise FillError(f"要切到第 {i + 1} 条创意，左侧只有 {cards.count()} 张切换卡")
         cards.nth(i).click()
-        self.page.wait_for_timeout(700)
         wait_until(self.page,
                    lambda: self.page.locator(".single-creative-wrapper").filter(
                        visible=True).count() > 0, self.timeout)
@@ -259,7 +329,6 @@ class AdRegCreative:
         if not btn.count():
             raise FillError(f"创意块里没有「{opener}」按钮")
         btn.click()
-        self.page.wait_for_timeout(1200)
 
         dsel = titles_cfg.get("drawer_selector", ".batch-title-drawer")
         drawer = self.page.locator(dsel).filter(visible=True).first
@@ -268,23 +337,26 @@ class AdRegCreative:
         if not wait_until(self.page, lambda: ta.count() and ta.is_visible(), self.timeout):
             raise FillError("「批量添加」抽屉里没有可填的文本框")
 
+        key = titles_cfg.get("confirm_key", "Enter")
+        added = titles_cfg.get("added_text", "已添加")
+        mx = int(titles_cfg.get("max", 6))
+
         # 抽屉里可能已经有标题（切来切去、或页面预填），先清空
         clr = drawer.get_by_text(re.compile(r"^\s*(全部清空|一键清空)\s*$")).first
         if clr.count():
             try:
                 clr.click()
-                self.page.wait_for_timeout(400)
+                wait_until(self.page,
+                           lambda: self._counter(drawer, added) in (0, None), 3000)
             except Exception:
                 pass
 
-        key = titles_cfg.get("confirm_key", "Enter")
-        added = titles_cfg.get("added_text", "已添加")
-        mx = int(titles_cfg.get("max", 6))
         for i, t in enumerate(titles[:mx], 1):
             ta.fill(t)
-            self.page.wait_for_timeout(200)
+            wait_until(self.page, lambda: (ta.input_value() or "").strip() == t, 2000)
             ta.press(key)
-            self.page.wait_for_timeout(450)
+            # 等「已添加 n」涨到 i；不涨说明这条被页面拒了，下面那句会说清楚
+            wait_until(self.page, lambda: self._counter(drawer, added) in (i, None), 4000)
             got = self._counter(drawer, added)
             if got is not None and got < i:
                 raise FillError(f"输了第 {i} 条标题「{t}」但抽屉显示已添加 {got} 条，"
@@ -299,7 +371,6 @@ class AdRegCreative:
             drawer.wait_for(state="hidden", timeout=self.timeout)
         except Exception:
             log.warning("批量添加抽屉没检测到关闭，继续")
-        self.page.wait_for_timeout(600)
 
     def _fill_desc(self, desc_cfg: dict, value: str):
         if not value:
@@ -311,7 +382,7 @@ class AdRegCreative:
             raise FillError(f"创意块里没有 placeholder 含「{ph}」的输入框")
         el.fill("")
         el.fill(value)
-        self.page.wait_for_timeout(200)
+        wait_until(self.page, lambda: (el.input_value() or "").strip() == value, 3000)
 
     # ------------------------------------------------------------ 内部
     def _wrapper(self):
@@ -325,12 +396,16 @@ class AdRegCreative:
                 has=self.page.locator(".tab-link")).filter(visible=True).first
             try:
                 drawer.wait_for(state="visible", timeout=4000 if attempt == 1 else self.timeout)
-                self.page.wait_for_timeout(1500)
+                # 抽屉是「壳先出来、Tab 后渲染」，等 Tab 真的在，再交出去
+                wait_until(self.page, lambda: drawer.locator(".tab-link").count() > 0,
+                           self.timeout)
                 return drawer
             except Exception:
                 if attempt == 2:
                     raise FillError(f"点了「{button_text}」但加稿件的抽屉没打开")
-                self.page.wait_for_timeout(800)
+                # 重试前等它彻底消失，别干等固定毫秒
+                wait_until(self.page,
+                           lambda: self.page.locator(".ivu-drawer:visible").count() == 0, 3000)
 
     def _pick_sub_account(self, drawer, name: str):
         if not name:
@@ -339,7 +414,10 @@ class AdRegCreative:
         if btn.count():
             try:
                 btn.click()
-                self.page.wait_for_timeout(1800)
+                # 换子账户会整列表重拉，没有明确完成信号 —— 等卡片数不再变
+                wait_stable(self.page,
+                            lambda: drawer.locator(".video-select-item").count(),
+                            timeout=self.timeout)
             except Exception:
                 log.warning("切子账户「%s」没点动，继续", name)
 
@@ -350,7 +428,10 @@ class AdRegCreative:
         if not link.count():
             raise FillError(f"加稿件抽屉里没有「{tab}」这个 Tab")
         link.click()
-        self.page.wait_for_timeout(2500)
+        # 切 Tab 也是重拉列表。调用方随后还会 wait_until(卡片>0)，这里只等它稳下来
+        wait_stable(self.page,
+                    lambda: drawer.locator(".video-select-item").count(),
+                    timeout=self.timeout)
 
     def _goto_page(self, drawer, picker: dict, page_no: int):
         """翻到第 page_no 页，**等列表真的换过来**再返回。
@@ -448,7 +529,7 @@ class AdRegCreative:
     def _cancel(self, drawer, picker: dict):
         try:
             self._click_confirm(drawer, picker.get("cancel_button", "取消"))
-            self.page.wait_for_timeout(800)
+            wait_until(self.page, lambda: not drawer.is_visible(), 3000)
         except Exception:
             log.warning("关抽屉失败", exc_info=True)
 
