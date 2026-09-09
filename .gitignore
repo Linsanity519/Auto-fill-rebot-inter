@@ -47,3 +47,6 @@ assets/settings.default.yaml
 # 智能表格回传地址：打包时由 tools/inject_release_config.py 从 USAGE_SHEET_WEBHOOK_URL 生成。
 # 和 config/webhook.txt 不同，这个不提交 —— 它能往统计表里写行（只能写那一张表）。
 config/sheet_webhook.txt
+
+# 统计表的文档 ID（tools/collect_usage.py 用）。跟 .mcp_key 一样不进仓库。
+tools/.stats_docid

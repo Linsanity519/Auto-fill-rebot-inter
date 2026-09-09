@@ -378,6 +378,204 @@ def push_team(root) -> str:
     return "已推送，同事下次打开就能看到（raw 有几分钟 CDN 缓存）"
 
 
+# ---------------------------------------------------------------- 主通道：智能表格
+# 1.1.15 起客户端一次运行往「配置助手 · 使用统计」写一行，收集端直接读那张表。
+# 剪贴板那条路留着，只为收还没升级的人发到群里的老消息（见 main 的 --clipboard）。
+#
+# ⚠ 表 ID 放在 tools/.stats_docid，不进仓库（和 tools/.mcp_key 一个待遇）。
+#   第一次用：把智能表格的链接丢进那个文件，或者设环境变量 STATS_DOCID。
+RUNS_SHEET = "运行流水"          # 一行 = 一次运行
+LEGACY_SHEET = "历史周汇总"      # 1.1.15 之前的老数据，一行 = 某人某周的累计
+
+# ⚠ **必须按运行ID去重**：表格 webhook 没有幂等键，客户端读超时（服务端其实已经
+#   写进去了）之后补发，同一次运行就留下两行。实测过一次，不去重那次运行的条数和
+#   耗时全部翻倍。
+# ⚠ 去重放在 Python 里做，不写成 GROUP BY `运行ID` + MAX(每一列)：
+#   实测这个 SQL 引擎的 MAX() **对文本列返回空**（配置类型、指纹、模式全成了空串），
+#   于是「空跑/重跑不进累计」这条过滤形同虚设，数字悄悄变大。数值列倒是正常，
+#   所以这个坑特别隐蔽 —— 总数看着只多了一点点。
+RUNS_LIMIT = 20000      # 防跑飞。到顶会警告，不静默截断
+RUNS_SQL = """
+SELECT `运行ID` AS `run`,
+       DATE_FORMAT(`时间`, "%Y-%m-%d") AS `日`,
+       `指纹`, `版本`, `配置类型` AS `类型`, `模式`, `重跑`,
+       `成`, `败`, `跳`, `机器秒`, `等人秒`
+FROM `运行流水`
+LIMIT 20000
+"""
+
+LEGACY_SQL = """
+SELECT `周`, `指纹`, `版本`, `次数`, `成功`, `失败`, `机器秒`, `最后活跃`, `分类型`
+FROM `历史周汇总`
+"""
+
+
+def stats_docid() -> str:
+    """统计表的文档 ID。环境变量 STATS_DOCID 优先，否则读 tools/.stats_docid。
+
+    ⚠ 文件里可以直接粘表格链接，这里会把 /smartsheet/<id> 那段抠出来 ——
+      让人去 URL 里数字符是最容易出错的一步。
+    """
+    raw = (os.environ.get("STATS_DOCID") or "").strip()
+    if not raw:
+        p = ROOT / "tools" / ".stats_docid"
+        try:
+            raw = next((ln.strip() for ln in p.read_text(encoding="utf-8").splitlines()
+                        if ln.strip() and not ln.startswith("#")), "")
+        except OSError:
+            raw = ""
+    m = re.search(r"/smartsheet/([A-Za-z0-9_\-]+)", raw)
+    return m.group(1) if m else raw
+
+
+def sheet_query(docid: str, sql: str) -> list[dict]:
+    """跑一条只读 SQL，返回 rows。CLI 不在 / 没授权 / 查不动都抛，由调用方兜。
+
+    ⚠ 输出必须按 UTF-8 解码：Windows 控制台默认 GBK，中文列名会被解成乱码，
+      json.loads 直接报「Expecting ',' delimiter」—— 看着像接口坏了，其实是编码。
+    """
+    import shutil
+    import subprocess
+
+    # ⚠ Windows 上 wecom-cli 是个 .cmd / .exe 的壳，subprocess 不走 shell 时
+    #   直接传 "wecom-cli" 会 WinError 2「找不到文件」—— 得先 which 一下。
+    exe = shutil.which("wecom-cli") or shutil.which("wecom-cli.cmd")
+    if not exe:
+        raise RuntimeError("找不到 wecom-cli（npm install -g @wecom/cli）")
+    r = subprocess.run([exe, "smartsheet", "records", "query",
+                        "--docid", docid, "--sql", " ".join(sql.split())],
+                       capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or b"").decode("utf-8", "replace")[:200] or "wecom-cli 执行失败")
+    d = json.loads((r.stdout or b"").decode("utf-8", "replace"))
+    if d.get("errcode") not in (0, None):
+        raise RuntimeError(f"表格返回 {d.get('errcode')}：{d.get('errmsg')}")
+    rows = []
+    for v in d.get("values") or []:
+        v = json.loads(v) if isinstance(v, str) else v
+        rows.extend(v.get("rows") or [])
+    return rows
+
+
+def _monday(day: str) -> str:
+    """'2026-09-09' → 那一周的周一。统计的最小粒度是周，和 usage.week_of 同源。"""
+    return usage.week_of(str(day or "").strip()[:10])
+
+
+def build_team(runs: list[dict], legacy: list[dict], conf: dict) -> dict:
+    """把「一次运行一行」+「老的周累计」压成首页要的那份 team.json。
+
+    ⚠ 形状必须和 usage.parse_report 的返回值一模一样 —— 首页读的就是它，
+      少一个键那张卡就空着，而且不报错。
+    ⚠ 口径只在这里算一次（人工基准 × 条数，见 usage.saved_seconds）。
+      客户端不算、前端不算 —— 以前这个数在两处各实现一份，改一次要改两个地方，
+      漏一个就出现「首页我的」和「首页团队」两个不同的数。
+    ⚠ 重跑和空跑不进累计，和本机口径一致（见 usage.summarize 的注释）。
+    """
+    people, forms, form_saved, weeks, who = set(), {}, {}, {}, {}
+    n_runs = ok = failed = seconds = 0
+    human = saved = 0.0
+
+    def bump(uid, wk, last, items, secs, r_human, r_saved, n=1):
+        nonlocal n_runs, ok, seconds, human, saved
+        n_runs += n
+        ok += items
+        seconds += secs
+        human += r_human
+        saved += r_saved
+        b = weeks.setdefault(wk, {"items": 0, "seconds": 0, "saved": 0.0})
+        b["items"] += items
+        b["seconds"] += secs
+        b["saved"] += r_saved
+        w = who.setdefault(uid, {"uid": uid, "name": "", "last": "", "items": 0, "runs": 0})
+        w["items"] += items
+        w["runs"] += n
+        w["last"] = max(w["last"], str(last or ""))
+
+    for r in runs:
+        if str(r.get("重跑") or "").strip() or str(r.get("模式") or "") == "空跑":
+            continue          # 重跑和空跑单独看，不进累计
+        uid = str(r.get("指纹") or "")
+        name = str(r.get("类型") or "(未知)")
+        items, secs = _num(r.get("成")), _num(r.get("机器秒"))
+        r_human = usage.human_seconds(conf, name, items, secs)
+        r_saved = usage.saved_seconds(conf, name, items, secs)
+        people.add(uid)
+        failed += _num(r.get("败"))
+        forms[name] = forms.get(name, 0) + items
+        form_saved[name] = form_saved.get(name, 0.0) + r_saved
+        bump(uid, _monday(r.get("日")), r.get("日"), items, secs, r_human, r_saved)
+
+    for r in legacy:
+        uid = str(r.get("指纹") or "")
+        people.add(uid)
+        failed += _num(r.get("失败"))
+        secs = _num(r.get("机器秒"))
+        try:
+            by_form = json.loads(r.get("分类型") or "{}")
+        except ValueError:
+            by_form = {}
+        # ⚠ 老数据只有「每个类型成功了几条」，没有「每个类型各花了多少秒」。
+        #   人工基准按类型算得出来，机器秒只能整周挂着 —— 所以按条数摊。
+        # ⚠ 总条数以「成功」那一列为准，**不能**拿分类型加出来：老归档的分类型是
+        #   逐键取最大值合出来的，加起来可能比总数大（实测 22 加成了 34）。
+        #   分类型只用来分摊，不参与总数。
+        total_items = _num(r.get("成功"))
+        split_base = sum(_num(v) for v in by_form.values()) or total_items
+        r_human = r_saved = 0.0
+        for name, cnt in by_form.items():
+            cnt = _num(cnt)
+            share = secs * cnt / split_base if split_base else 0
+            r_human += usage.human_seconds(conf, name, cnt, share)
+            s = usage.saved_seconds(conf, name, cnt, share)
+            r_saved += s
+            forms[name] = forms.get(name, 0) + cnt
+            form_saved[name] = form_saved.get(name, 0.0) + s
+        bump(uid, usage.norm_week(r.get("周")), r.get("最后活跃"),
+             total_items, secs, r_human, r_saved, n=_num(r.get("次数")))
+
+    return {
+        "people": len(people),
+        "totals": {"runs": n_runs, "items": ok, "failed": failed, "seconds": seconds,
+                   "human": round(human, 1), "saved": round(saved, 1),
+                   "ok_rate": (ok / (ok + failed)) if (ok + failed) else None},
+        "forms": [{"name": n, "ok": v, "saved": round(form_saved.get(n, 0.0), 1)}
+                  for n, v in sorted(forms.items(), key=lambda kv: -kv[1])],
+        "weeks": {k: {"items": v["items"], "seconds": v["seconds"],
+                      "saved": round(v["saved"], 1)} for k, v in weeks.items()},
+        "actives": sorted(who.values(), key=lambda x: x["last"], reverse=True)[:12],
+    }
+
+
+def collect_from_sheet() -> dict:
+    """从统计表读全量 → team.json 的内容。表读不了就抛，由 main 决定退不退。"""
+    docid = stats_docid()
+    if not docid:
+        raise RuntimeError("不知道统计表是哪一张：把表格链接写进 tools/.stats_docid，"
+                           "或者设环境变量 STATS_DOCID")
+    raw = sheet_query(docid, RUNS_SQL)
+    if len(raw) >= RUNS_LIMIT:
+        print(f"  ⚠ 取到了 {RUNS_LIMIT} 行上限，可能还有没读到的 —— 该给这张表分表了")
+    # 同一个运行ID 只留一行（重复来自客户端超时补发，见 RUNS_SQL 上面那段）
+    runs, seen = [], set()
+    for r in raw:
+        rid = str(r.get("run") or "")
+        if rid and rid in seen:
+            continue
+        seen.add(rid)
+        runs.append(r)
+    if len(raw) != len(runs):
+        print(f"  （表里有 {len(raw) - len(runs)} 行是超时补发留下的重复，已按运行ID去掉）")
+    try:
+        legacy = sheet_query(docid, LEGACY_SQL)
+    except Exception as e:
+        legacy = []
+        print(f"  （历史周汇总那张子表读不到，先只算新数据：{e}）")
+    team = build_team(runs, legacy, usage.saving_conf(_settings()))
+    print(f"表里读到 {len(runs)} 次运行（已按运行ID去重）+ {len(legacy)} 行历史周汇总")
+    return team
+
+
 def _print_fail_hotspots(msgs: list[dict], top: int = 12) -> None:
     """把所有上报里的「失败明细」汇总,按次数排出热点。
 
@@ -405,13 +603,41 @@ def _print_fail_hotspots(msgs: list[dict], top: int = 12) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="把统计群里的上报消息整理成 config/team.json")
-    ap.add_argument("--file", help="从文件读，不读剪贴板（调试用）")
-    ap.add_argument("--sheet", action="store_true", help="顺便写一份进企微智能表格")
-    ap.add_argument("--dry", action="store_true", help="只看解析结果，不写 team.json")
+    ap = argparse.ArgumentParser(
+        description="整理 config/team.json。默认从企微智能表格读（1.1.15 起客户端直接写那张表）")
+    ap.add_argument("--clipboard", action="store_true",
+                    help="老路子：从剪贴板里的群聊记录抠上报消息（收还没升级的人发的）")
+    ap.add_argument("--file", help="从文件读群聊记录，不读剪贴板（调试用）")
+    ap.add_argument("--sheet", action="store_true", help="顺便写一份进企微智能表格看板")
+    ap.add_argument("--dry", action="store_true", help="只看结果，不写 team.json")
     ap.add_argument("--rebuild", action="store_true",
-                    help="不读剪贴板，只用归档里已有的数据重算 team.json 并推送")
+                    help="不读剪贴板，只用归档里已有的老数据重算（不碰表格）")
     args = ap.parse_args()
+
+    # 默认走表格。这是 1.1.15 之后的主通道：客户端一次运行写一行，
+    # 这里几条 SQL 就够 —— 不用复制聊天记录、不用正则找 JSON、不用「取最大值」合并。
+    if not (args.clipboard or args.file or args.rebuild):
+        try:
+            team = collect_from_sheet()
+        except Exception as e:
+            print(f"读统计表失败：{e}")
+            print()
+            print("对照检查：")
+            print("  · wecom-cli 装了吗、授权了吗（wecom-cli auth show --status）")
+            print("  · tools/.stats_docid 里是不是那张统计表的链接")
+            print("  · 想收还没升级的人发到群里的老消息，用 --clipboard")
+            return 1
+        t = team.get("totals", {})
+        print(f"  全团队：{team.get('people')} 人 · 累计 {t.get('items')} 条 · "
+              f"省下 {int(t.get('saved', 0)) // 3600} 小时 · 失败 {t.get('failed')} 条")
+        if args.dry:
+            print("\n--dry：没有写文件")
+            return 0
+        usage.save_team(team)
+        print("  同步：" + push_team(ROOT))
+        print(f"\n已写入 {usage.team_path()}")
+        print("  同事下次打开就能看到（首页运行时会去拉这份）。")
+        return 0
 
     if args.rebuild:
         # 只用归档重算：改过归档、或上次推送失败想重推时用

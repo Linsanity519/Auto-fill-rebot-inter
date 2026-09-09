@@ -47,6 +47,10 @@ jobs:
       # 统计回传地址默认取仓库里的 config/webhook.txt，不配 Secret 也能正常打包。
       # 配了这个 Secret 就以它为准（想换统计群时用），见 tools/inject_release_config.py。
       USAGE_WEBHOOK_URL: ${{ secrets.USAGE_WEBHOOK_URL }}
+      # 智能表格「接收外部数据」的写入地址。⚠ 这个**只能**来自 Secret ——
+      # 它不在仓库里（见 .gitignore），没配的话打出来的包只发群、不写表格，
+      # 而且这件事是静默的：包能打出来、能跑，只是表里一直没数据。
+      USAGE_SHEET_WEBHOOK_URL: ${{ secrets.USAGE_SHEET_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +71,11 @@ jobs:
           # 统计回传一旦缺失是**静默**失效的，所以在这儿显式拦一道。
           if (-not $env:USAGE_WEBHOOK_URL -and -not (Test-Path config/webhook.txt)) {
             throw "既没有 config/webhook.txt，也没配 USAGE_WEBHOOK_URL —— 这一版发出去同事的使用统计会静默失效。"
+          }
+          # 表格那条同理，而且它**只能**来自 Secret（不在仓库里）。缺了的话包照样能打、
+          # 能跑，只是那张统计表一直不进数据 —— 正是最难发现的那种坏，所以也拦一道。
+          if (-not $env:USAGE_SHEET_WEBHOOK_URL -and -not (Test-Path config/sheet_webhook.txt)) {
+            throw "没配 USAGE_SHEET_WEBHOOK_URL —— 这一版发出去，统计表里不会有任何数据。去仓库 Settings → Secrets and variables → Actions 加这个 Secret（值就是智能表格「接收外部数据」那条地址）。"
           }
 
       - name: Build installer and payload
