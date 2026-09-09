@@ -233,9 +233,13 @@ creative:
     confirm_button: 确定
     cancel_button: 取消
 
-  # 素材标题：创意块里点「批量添加」→ .batch-title-drawer → 逐条打字 + 回车 → 保存
+  # 素材标题：创意块里点「添加标题」→ .batch-title-drawer → 逐条打字 + 回车 → 保存
+  # ⚠ 这个按钮页面上叫过好几个名字（「+ 添加标题」是 2026-09-09 实测的那个，
+  #   「批量添加 / 批量添加标题」是早先抓取记录里的），点开的是同一个抽屉。
+  #   下面这几个是**别名**，代码按顺序找、且是包含匹配（按钮带「+」图标，
+  #   全等匹配命不中）。页面再改名就往这个列表里加一行，别去改代码。
   titles:
-    open_button: 批量添加
+    open_buttons: [添加标题, 批量添加, 批量添加标题]
     drawer_selector: '.batch-title-drawer'
     textarea_selector: '.batch-title-drawer textarea'
     confirm_key: Enter

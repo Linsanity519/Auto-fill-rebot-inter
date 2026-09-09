@@ -223,23 +223,85 @@ class AdRegCreative:
                    lambda: self.page.locator(".single-creative-wrapper").filter(
                        visible=True).count() > 0, self.timeout)
 
+    @staticmethod
+    def _opener_names(titles_cfg: dict) -> list[str]:
+        """打开「批量填标题」抽屉的那个按钮，页面上叫什么。
+
+        ⚠ 这个按钮的文案后台改过：抓取记录里写的是「批量添加」（当时还没定位到，
+          是照抽屉的 aria-label「批量添加标题」猜的），现在页面上是「+ 添加标题」。
+          两个点开的是同一个抽屉，所以一律当别名处理，别再写死一个。
+          新增一个叫法只要往 yaml 的 titles.open_buttons 里加一行。
+        """
+        names = titles_cfg.get("open_buttons")
+        if not names:
+            names = [titles_cfg.get("open_button", "添加标题")]
+        return [str(n).strip() for n in names if str(n).strip()]
+
+    def _find_button(self, scope, names: list[str]):
+        """在 scope 里按文字找一个按钮。找到返回 (locator, 它实际显示的文字)，
+        没找到返回 (None, "")。
+
+        ⚠ 光用 get_by_text(..., exact=True) 是不够的：页面上的按钮常常带图标，
+          文字是「+ 添加标题」这种，全等匹配一个都命不中 —— 这就是
+          「创意块里没有「批量添加」按钮」的由来。所以先全等（最准），
+          再退到**包含**匹配，而且只在按钮类元素上找，免得匹到把整块文字
+          都包进去的祖先 div。
+        """
+        names = [n for n in names if n]
+        if not names:
+            return None, ""
+        for n in names:
+            b = scope.get_by_text(n, exact=True).first
+            if b.count():
+                return b, n
+        pat = re.compile("|".join(re.escape(n) for n in names))
+        for sel in ("button", ".ivu-btn", "[role=button]", "a"):
+            b = scope.locator(sel).filter(has_text=pat).first
+            if b.count():
+                return b, " ".join((b.inner_text() or "").split())
+        return None, ""
+
+    def _find_title_opener(self, w, titles_cfg: dict):
+        """创意块里那个「打开批量填标题抽屉」的按钮。
+
+        ⚠ 「新增标题」是「再加一个空输入框」的另一个按钮，不能当成它。
+          按现在的别名（添加标题 / 批量添加 / 批量添加标题）天然撞不上，
+          但别把匹配放宽到「标题」两个字。
+        """
+        return self._find_button(w, self._opener_names(titles_cfg))
+
     def _fill_titles(self, titles_cfg: dict, titles: list[str]):
         if not titles:
             raise FillError("没有素材标题可填")
         w = self._wrapper()
-        opener = titles_cfg.get("open_button", "批量添加")
-        btn = w.get_by_text(opener, exact=True).first
-        if not btn.count():
-            raise FillError(f"创意块里没有「{opener}」按钮")
+        btn, opener = self._find_title_opener(w, titles_cfg)
+        if btn is None:
+            raise FillError(f"创意块里没找到打开批量填标题抽屉的按钮"
+                            f"（找过这几个名字：{'、'.join(self._opener_names(titles_cfg))}）")
+        log.info("素材标题：点「%s」打开抽屉", opener)
         btn.click()
         self.page.wait_for_timeout(1200)
 
+        # ⚠ 抽屉的类名也别写死一个：.batch-title-drawer 是抓取时看到的，
+        #   后台换一次皮就没了，而它换掉之后这里报的是「抽屉里没有可填的文本框」，
+        #   人只会以为是页面没加载完。所以先按配置的类名找，找不到就退到
+        #   「当前可见的、带 textarea 的那个抽屉/弹窗」。
         dsel = titles_cfg.get("drawer_selector", ".batch-title-drawer")
         drawer = self.page.locator(dsel).filter(visible=True).first
-        ta = self.page.locator(titles_cfg.get("textarea_selector", f"{dsel} textarea")).filter(
-            visible=True).first
+        if not wait_until(self.page, lambda: drawer.count() > 0, 4000):
+            for alt in (".ivu-drawer", ".ivu-modal", "[role=dialog]"):
+                cand = self.page.locator(alt).filter(visible=True).filter(
+                    has=self.page.locator("textarea")).first
+                if cand.count():
+                    log.warning("没找到 %s，退到「%s」当批量填标题的抽屉", dsel, alt)
+                    drawer = cand
+                    break
+        if not drawer.count():
+            raise FillError(f"点了「{opener}」但批量填标题的抽屉没打开")
+
+        ta = drawer.locator("textarea").filter(visible=True).first
         if not wait_until(self.page, lambda: ta.count() and ta.is_visible(), self.timeout):
-            raise FillError("「批量添加」抽屉里没有可填的文本框")
+            raise FillError(f"「{opener}」抽屉里没有可填的文本框")
 
         # 抽屉里可能已经有标题（切来切去、或页面预填），先清空
         clr = drawer.get_by_text(re.compile(r"^\s*(全部清空|一键清空)\s*$")).first
@@ -264,9 +326,9 @@ class AdRegCreative:
                                 f"可能这条不合规（2~40 字？违禁词？）")
 
         save = titles_cfg.get("save_button", "保存")
-        sb = drawer.get_by_text(save, exact=True).first
-        if not sb.count():
-            raise FillError(f"「批量添加」抽屉里没有「{save}」按钮")
+        sb, _ = self._find_button(drawer, [save])
+        if sb is None:
+            raise FillError(f"「{opener}」抽屉里没有「{save}」按钮")
         sb.click()
         try:
             drawer.wait_for(state="hidden", timeout=self.timeout)
