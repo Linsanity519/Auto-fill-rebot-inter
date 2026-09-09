@@ -358,6 +358,22 @@ class AdRegCreative:
                 return b, " ".join((b.inner_text() or "").split())
         return None, ""
 
+    @staticmethod
+    def _save_names(titles_cfg: dict) -> list[str]:
+        """抽屉里那个「填完了，落地」的按钮叫什么。实测是「确认」。"""
+        names = titles_cfg.get("save_buttons")
+        if not names:
+            names = [titles_cfg.get("save_button", "确认")]
+        return [str(n).strip() for n in names if str(n).strip()]
+
+    @staticmethod
+    def _counter_texts(titles_cfg: dict) -> list[str]:
+        """抽屉底下那个计数的前缀。实测是「已选」。"""
+        names = titles_cfg.get("added_texts")
+        if not names:
+            names = [titles_cfg.get("added_text", "已选")]
+        return [str(n).strip() for n in names if str(n).strip()]
+
     def _find_title_opener(self, w, titles_cfg: dict):
         """创意块里那个「打开批量填标题抽屉」的按钮。
 
@@ -382,10 +398,11 @@ class AdRegCreative:
         #   后台换一次皮就没了，而它换掉之后这里报的是「抽屉里没有可填的文本框」，
         #   人只会以为是页面没加载完。所以先按配置的类名找，找不到就退到
         #   「当前可见的、带 textarea 的那个抽屉/弹窗」。
-        dsel = titles_cfg.get("drawer_selector", ".batch-title-drawer")
+        dsel = titles_cfg.get("drawer_selector", "[role=dialog]")
         drawer = self.page.locator(dsel).filter(visible=True).first
         if not wait_until(self.page, lambda: drawer.count() > 0, 4000):
-            for alt in (".ivu-drawer", ".ivu-modal", "[role=dialog]"):
+            for alt in (titles_cfg.get("drawer_fallbacks")
+                        or [".batch-title-drawer", ".ivu-drawer", ".ivu-modal", "[role=dialog]"]):
                 cand = self.page.locator(alt).filter(visible=True).filter(
                     has=self.page.locator("textarea")).first
                 if cand.count():
@@ -400,7 +417,10 @@ class AdRegCreative:
             raise FillError(f"「{opener}」抽屉里没有可填的文本框")
 
         key = titles_cfg.get("confirm_key", "Enter")
-        added = titles_cfg.get("added_text", "已添加")
+        # ⚠ 抽屉底下那个计数，实测写的是「已选 6/6」，不是抓取记录里的「已添加」。
+        #   读不出来时下面那段校验会整段跳过（_counter 返回 None 一律放行）——
+        #   也就是「一条标题被页面悄悄拒掉」这件事就查不出来了。所以给一张别名表。
+        added = self._counter_texts(titles_cfg)
         mx = int(titles_cfg.get("max", 6))
 
         # 抽屉里可能已经有标题（切来切去、或页面预填），先清空
@@ -424,10 +444,13 @@ class AdRegCreative:
                 raise FillError(f"输了第 {i} 条标题「{t}」但抽屉显示已添加 {got} 条，"
                                 f"可能这条不合规（2~40 字？违禁词？）")
 
-        save = titles_cfg.get("save_button", "保存")
-        sb, _ = self._find_button(drawer, [save])
+        # ⚠ 同样是别名表：这个抽屉的落地按钮实测叫「确认」，不是抓取记录里的「保存」。
+        saves = self._save_names(titles_cfg)
+        sb, save_txt = self._find_button(drawer, saves)
         if sb is None:
-            raise FillError(f"「{opener}」抽屉里没有「{save}」按钮")
+            raise FillError(f"「{opener}」抽屉里没找到落地按钮"
+                            f"（找过这几个名字：{'、'.join(saves)}）")
+        log.info("素材标题：%d 条填完，点「%s」", min(len(titles), mx), save_txt)
         sb.click()
         try:
             drawer.wait_for(state="hidden", timeout=self.timeout)
@@ -574,12 +597,21 @@ class AdRegCreative:
             log.debug("读不到「空间设置」当前的值", exc_info=True)
         return ""
 
-    def _counter(self, scope, text: str):
+    def _counter(self, scope, text):
+        """读「已选 3/6」这类计数里的当前值。text 可以是一个字符串，也可以是别名表。
+
+        读不出来返回 None —— 调用方一律把 None 当「这页没有计数，别拦」。
+        """
+        names = [text] if isinstance(text, str) else list(text or [])
         try:
-            m = re.search(rf"{re.escape(text)}\s*(\d+)\s*/", scope.inner_text() or "")
-            return int(m.group(1)) if m else None
+            txt = scope.inner_text() or ""
         except Exception:
             return None
+        for n in names:
+            m = re.search(rf"{re.escape(n)}\s*(\d+)\s*/", txt)
+            if m:
+                return int(m.group(1))
+        return None
 
     def _click_confirm(self, drawer, text: str):
         btn = drawer.locator("button").filter(

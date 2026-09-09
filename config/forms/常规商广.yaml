@@ -243,18 +243,27 @@ creative:
     confirm_button: 确定
     cancel_button: 取消
 
-  # 素材标题：创意块里点「添加标题」→ .batch-title-drawer → 逐条打字 + 回车 → 保存
-  # ⚠ 这个按钮页面上叫过好几个名字（「+ 添加标题」是 2026-09-09 实测的那个，
-  #   「批量添加 / 批量添加标题」是早先抓取记录里的），点开的是同一个抽屉。
-  #   下面这几个是**别名**，代码按顺序找、且是包含匹配（按钮带「+」图标，
-  #   全等匹配命不中）。页面再改名就往这个列表里加一行，别去改代码。
+  # 素材标题：创意块里点「+ 添加标题」→ 弹窗里逐条打字 + 回车 →「确认」
+  #
+  # ⚠ 这一段的文案 2026-09-09 全部挂在调试 Chrome 上实测过一遍（页面已登录，
+  #   只读 DOM 没提交）。实测到的样子：
+  #     弹窗       <div role="dialog" class="bd-overlay-dialog">，一个 textarea
+  #                （老的 .batch-title-drawer 已经不在页面上了）
+  #     Tab        批量添加 / AI关键词匹配 / 标题库
+  #     计数       「已选 6/6」（不是抓取记录里的「已添加」）
+  #     底部按钮   取消 / 确认（不是「保存」）
+  #
+  # ⚠ 下面几个都是**别名表**，代码按顺序找、按「包含」匹配（按钮带「+」图标，
+  #   全等匹配命不中）。页面再改名就往列表里加一行，别去改代码。
+  #   这里已经栽过三次：open_button 写死「批量添加」、save_button 写死「保存」、
+  #   added_text 写死「已添加」—— 每次的表现都是整批第一条就失败。
   titles:
     open_buttons: [添加标题, 批量添加, 批量添加标题]
-    drawer_selector: '.batch-title-drawer'
-    textarea_selector: '.batch-title-drawer textarea'
+    drawer_selector: '[role=dialog].bd-overlay-dialog'
+    drawer_fallbacks: ['.batch-title-drawer', '.ivu-drawer', '.ivu-modal', '[role=dialog]']
     confirm_key: Enter
-    added_text: 已添加
-    save_button: 保存
+    added_texts: [已选, 已添加]
+    save_buttons: [确认, 保存, 确定]
     max: 6
 
   # 素材描述：创意块里 placeholder 含这段的输入框
