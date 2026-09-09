@@ -275,21 +275,63 @@ class WizardFiller:
         return after.first if after.count() else None
 
     def _fill_by_ph(self, f, value):
-        """按 placeholder 定位输入框。创意页很多框既没 id 也没规范 label。"""
+        """按 placeholder 定位输入框。创意页很多框既没 id 也没规范 label。
+
+        ⚠ placeholder 不保证唯一：收银台弹窗的「上按钮文案」和「下按钮文案」
+          占位符都是「最多6个字」。只认 placeholder 的话两个值会前后写进
+          同一个（第一个）框 —— 上按钮被下按钮的值覆盖、下按钮空着，
+          页面卡在必填校验上，表现为「保存创意」点了没反应也没报错。
+          所以匹配到多个时改按 label 定位，label 也定不到就明着报错。
+        """
         ph = f.get("ph")
         if ph:
-            # 同上：多条创意时上一条的框还留在 DOM 里，只是隐藏了，
+            # 多条创意时上一条的框还留在 DOM 里，只是隐藏了，
             # 不挑可见的就会去填那个看不见的框然后卡到超时
             sel = f"input[placeholder*='{ph}'], textarea[placeholder*='{ph}']"
             vis = ", ".join(x.strip() + ":visible" for x in sel.split(","))
             for s2 in (vis, sel):
-                el = self.page.locator(s2).first
-                if el.count():
-                    el.fill("")
-                    el.fill(value)
-                    return
+                loc = self.page.locator(s2)
+                n = loc.count()
+                if not n:
+                    continue
+                if n == 1:
+                    el = loc.first
+                else:
+                    el = self._input_after_label(f["label"])
+                    if el is None:
+                        raise FillError(
+                            f"placeholder「{ph}」在页面上匹配到 {n} 个输入框，"
+                            f"又按 label「{f['label']}」找不到对应的框，"
+                            f"不敢猜该填哪个")
+                el.fill("")
+                el.fill(value)
+                # ⚠ 只有「刚才有歧义、是靠 label 挑出来的」才把回读对不上当硬错误。
+                #   唯一匹配的那条路存量 19 个资源位都在跑着，页面自己改写值
+                #   （去空格、格式化）就会变成误报 —— 那种情况只记一条日志。
+                self._verify_filled(f, el, value, hard=(n > 1))
+                return
         # 退回 label 方式
         self._fill_by_label(f, value)
+
+    def _verify_filled(self, f, el, value, hard: bool = True):
+        """填完读回来对一遍。填错框是静默的，只有回读能当场发现。
+
+        maxlength 会把超长的值截短，所以「实际值是期望值的前缀」也算对。
+        hard=False 时只记日志不报错（见调用处）。
+        """
+        try:
+            got = el.input_value()
+        except Exception:
+            return
+        want = (value or "").strip()
+        got = (got or "").strip()
+        if got == want or (got and want.startswith(got)):
+            return
+        msg = (f"「{f['label']}」填完回读对不上：期望「{want}」，"
+               f"框里是「{got}」（多半填到别的框去了）")
+        if hard:
+            raise FillError(msg)
+        log.warning(msg)
 
     def _radio_by_label(self, f, value):
         item = self._scope(f)

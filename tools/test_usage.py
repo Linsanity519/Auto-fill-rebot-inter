@@ -392,20 +392,23 @@ def test_report_roundtrip():
 
 # ============================================================ 省时口径
 def test_saving():
-    print("\n[省时口径] 人工基准 × 条数 − 机器实跑")
+    print("\n[省时口径] 省下 = 人工基准 × 条数（不减机器实跑）")
     conf = usage.saving_conf({"usage": {"saving": {
         "mode": "baseline", "default_seconds": 60,
         "per_item_seconds": {"资源位投放": 480, "预定会议室": 0}}}})
     check("按配置类型取各自的基准", usage.human_seconds(conf, "资源位投放", 10) == 4800)
     check("没列出来的用兜底基准", usage.human_seconds(conf, "价格配置", 10) == 600)
     check("基准填 0 = 不按时长算价值", usage.human_seconds(conf, "预定会议室", 10) == 0)
-    check("省下的 = 人工 − 机器", usage.saved_seconds(conf, "资源位投放", 10, 600) == 4200)
-    check("机器比人工还慢时不算负数",
+    # ⚠ 2026-09-09 口径：省下的就是人工要花的，机器实跑不参与相减。
+    check("省下的 = 人工要花的", usage.saved_seconds(conf, "资源位投放", 10, 600) == 4800)
+    check("机器实跑再长也不从省下里扣",
+          usage.saved_seconds(conf, "资源位投放", 10, 99999) == 4800)
+    check("基准 0 的类型仍然是 0",
           usage.saved_seconds(conf, "预定会议室", 10, 600) == 0)
 
     mult = usage.saving_conf({"usage": {"saving": {"mode": "multiplier", "multiplier": 3}}})
     check("倍数口径：人工 = 机器 × 倍数", usage.human_seconds(mult, "任意", 5, 100) == 300)
-    check("倍数口径：省下 = 机器 ×（倍数−1）", usage.saved_seconds(mult, "任意", 5, 100) == 200)
+    check("倍数口径：省下 = 人工 = 机器 × 倍数", usage.saved_seconds(mult, "任意", 5, 100) == 300)
 
     # ⚠ 回归：倍数口径下 parse_report 曾经在配置类型上循环，把机器耗时乘了 N 遍
     #   （七个配置类型 → 624 秒算成 13104 秒）。它只在团队快照里出现，本机页面看不到，
@@ -415,10 +418,10 @@ def test_saving():
     row7 = ["2026-08-17", "abc", "", "1.0", 1, 38, 1, 624] + [38] + [0] * 6 + ["", ""]
     got7 = usage.parse_report([header7] + [row7], FORMS7, mult)
     check("倍数口径下团队汇总不会按配置类型数翻倍",
-          got7["totals"]["human"] == 624 * 3 and got7["totals"]["saved"] == 624 * 2,
-          f"human={got7['totals']['human']} saved={got7['totals']['saved']}（应为 1872 / 1248）")
+          got7["totals"]["human"] == 624 * 3 and got7["totals"]["saved"] == 624 * 3,
+          f"human={got7['totals']['human']} saved={got7['totals']['saved']}（应为 1872 / 1872）")
     check("省时按条数摊到各配置类型",
-          [f["saved"] for f in got7["forms"] if f["ok"]] == [624 * 2],
+          [f["saved"] for f in got7["forms"] if f["ok"]] == [624 * 3],
           str([(f["name"], f["saved"]) for f in got7["forms"] if f["ok"]]))
 
     # 聚合层：两个配置类型各按各的基准算，不能拿总条数乘一个数
@@ -431,7 +434,7 @@ def test_saving():
              "form": "价格配置", "ok": 10, "failed": 0, "skipped": 0, "total": 10,
              "seconds": 100, "wait_seconds": 0}]
     agg = usage._aggregate(runs, 4, conf)
-    check("聚合按配置类型分别算", agg["totals"]["saved"] == (4800 - 600) + (600 - 100),
+    check("聚合按配置类型分别算", agg["totals"]["saved"] == 4800 + 600,
           str(agg["totals"]))
     check("机器实跑还是照实记", agg["totals"]["seconds"] == 700, str(agg["totals"]))
 

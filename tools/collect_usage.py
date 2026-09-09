@@ -194,6 +194,15 @@ def _fold(old: dict, new: dict) -> dict:
         forms[name] = max(_num(forms.get(name)), _num(cnt))
     out["分类型"] = forms
 
+    # 「分类型跑了」={类型: 跑了几次}，1.1.10 起才带。和「分类型」同为累计语义，
+    # 逐键取最大。它记的是**跑没跑过**，不是成功条数 —— 全失败的类型只在这儿露面，
+    # 正表不用它（表结构没动），维护者靠它看出「这周谁在试哪个类型、试崩了」。
+    ran = dict(old.get("分类型跑了") or {})
+    for name, cnt in (new.get("分类型跑了") or {}).items():
+        ran[name] = max(_num(ran.get(name)), _num(cnt))
+    if ran:
+        out["分类型跑了"] = ran
+
     # 失败明细（fail_kinds / fail_fields）：同「分类型」，逐叶子键取最大（累计语义）
     fd = {}
     for sect in ("fail_kinds", "fail_fields"):

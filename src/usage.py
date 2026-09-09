@@ -404,11 +404,17 @@ def human_seconds(conf: dict, form: str, items: int, machine: float = 0.0) -> fl
 
 
 def saved_seconds(conf: dict, form: str, items: int, machine: float) -> float:
-    """净省下的时间 = 人工要花的 − 机器实际花的。不会是负数。
+    """省下的时间 = 人工要花的时间。**不再减机器实跑**。
 
-    ⚠ 基准填 0 的配置类型（抢会议室）等于「不按时长算价值」，直接是 0。
+    ⚠ 口径 2026-09-09 又改了一次，别改回去：原来是「人工 − 机器」，理由是
+      「机器那段时间也过去了」。但那段时间**不是人的时间** —— 点完「开始配置」
+      人就去干别的了，机器跑 2.6 小时不占他一分钟。按差额算，等于承认人得
+      在旁边陪着看进度条，把本来省掉的时间又扣了一遍：脚本越慢扣得越多，
+      优化到 0 秒才不扣，方向正好是反的。
+    ⚠ 基准填 0 的配置类型（抢会议室）等于「不按时长算价值」，仍然是 0。
+    ⚠ machine 这个参数留着：倍数口径（mode: multiplier）下人工是拿它算出来的。
     """
-    return max(0.0, human_seconds(conf, form, items, machine) - max(0.0, machine))
+    return max(0.0, human_seconds(conf, form, items, machine))
 
 
 # ---------------------------------------------------------------- 聚合（主页的数）
@@ -416,8 +422,8 @@ def saved_seconds(conf: dict, form: str, items: int, machine: float) -> float:
 #   · 只认 run_finished，且「重跑」和「空跑」不进累计（各自单独计数）
 #   · 「机器实跑」= 墙钟耗时 − 等人点确认的时长。逐条确认时人就坐在旁边，
 #     那段时间不能算机器替你干活
-#   · 「省下工时」= 人工基准 × 条数 − 机器实跑（见上面 saved_seconds），
-#     人工那半截是估的、机器那半截是实测的，界面上必须分开说
+#   · 「省下工时」= 人工基准 × 条数（见上面 saved_seconds）。机器实跑是另一个数，
+#     只用来说明「这些活机器花了多久」，不从省时里扣 —— 那段时间人没在旁边守着
 #   · 「一次做对率」= ok / (ok + failed)。跳过的不算错，不进分母
 def summarize(settings: dict, weeks: int = 12) -> dict:
     # ⚠ 在入口一次性把非字典挡掉。read_events 读文件时已经过滤过，但数据源以后会
@@ -746,15 +752,31 @@ def weekly_buckets(settings: dict) -> dict:
         if not wk:
             continue
         b = buckets.setdefault(wk, {"runs": 0, "ok": 0, "failed": 0, "seconds": 0.0,
-                                    "forms": {}, "last": ""})
+                                    "forms": {}, "form_runs": {}, "last": ""})
         b["runs"] += 1
         b["ok"] += _num(r.get("ok"))
         b["failed"] += _num(r.get("failed"))
         b["seconds"] += _net_seconds(r)
         name = r.get("form") or "(未知)"
         b["forms"][name] = b["forms"].get(name, 0) + _num(r.get("ok"))
+        # ⚠ forms 记的是**成功条数**，一次全失败的运行在里面是 0，而 0 在上报时会被
+        #   当成「没跑过」丢掉（见 report._payload）。于是「昨天 常规商广 成了 27 条、
+        #   今天 资源位投放 跑了但一条没成」回传上来还是只有「常规商广 27」——
+        #   看上去就像回传坏了、老是发同一份。form_runs 记「这个类型跑了几次」，
+        #   跟成功与否无关，专门用来回答「这周到底动过哪几个配置类型」。
+        b["form_runs"][name] = b["form_runs"].get(name, 0) + 1
         b["last"] = max(b["last"], str(r.get("ts") or ""))
     return buckets
+
+
+def weekly_form_runs(settings: dict) -> dict:
+    """{周: {配置类型: 跑了几次}}。和 weekly_fail_summary 一样，是回传时「捎带」的一段。
+
+    ⚠ 不进 report_header 那张表 —— 列顺序是表结构契约，加一列等于改表。
+      这段只走消息体，收集端认不认都不影响正表。
+    """
+    return {wk: dict(b.get("form_runs") or {})
+            for wk, b in weekly_buckets(settings).items() if b.get("form_runs")}
 
 
 def weekly_fail_summary(settings: dict) -> dict:
@@ -835,7 +857,7 @@ def parse_report(table, form_names, conf: dict | None = None) -> dict:
 
     ⚠ 省时是在这里按「每个配置类型的条数 × 人工基准」现算的，表里存的还是
       实测秒数 —— 改了 settings 里的基准，全团队的历史数字跟着一起变，
-      不用回头动表。
+      不用回头动表。口径同 saved_seconds：省下的 = 人工要花的，不减机器实跑。
     """
     conf = conf or saving_conf({})
     header = report_header(form_names)
@@ -877,7 +899,9 @@ def parse_report(table, form_names, conf: dict | None = None) -> dict:
             row_human = human_seconds(conf, "", 0, r_sec)
         else:
             row_human = sum(human_seconds(conf, n, c, r_sec) for n, c in row_counts.items())
-        row_saved = max(0.0, row_human - r_sec)
+        # ⚠ 和 saved_seconds 同一个口径：省下的就是人工要花的，不减机器实跑。
+        #   两边任何一边单独改，团队页和本机页会给出两个不一样的「省下工时」。
+        row_saved = max(0.0, row_human)
         human += row_human
         saved += row_saved
 

@@ -829,7 +829,7 @@ positions:
       - {name: icon图片, label: 'icon图片(864*864)', type: upload_by_label, required: true, size: '864*864'}
       - {name: 上按钮文案, label: 上按钮文案, type: fill_by_ph, ph: '最多6个字', required: true, max: 6}
       - {name: 跳转链接, label: 跳转链接, type: fill_by_label, required: true}
-      - {name: 下按钮文案, label: 下按钮文案, type: fill_by_ph, ph: '最多6个字', max: 6}
+      - {name: 下按钮文案, label: 下按钮文案, type: fill_by_ph, ph: '最多6个字', required: true, max: 6}
 
   PC会员中心banner:
     position_id: 15

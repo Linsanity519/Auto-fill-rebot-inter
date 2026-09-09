@@ -91,7 +91,8 @@ def enabled(settings: dict) -> bool:
     return bool(webhook_url(settings))
 
 
-def _payload(header: list, row: list, form_names, extra: dict | None = None) -> dict:
+def _payload(header: list, row: list, form_names, extra: dict | None = None,
+             runs_by_form: dict | None = None) -> dict:
     """一行（列顺序见 usage.report_header）→ 发出去的那个 JSON。
 
     ⚠ 发的是「本机到目前为止的累计」，不是增量。收集端只取每人最近一条就够，
@@ -116,6 +117,14 @@ def _payload(header: list, row: list, form_names, extra: dict | None = None) -> 
         "最后活跃": d.get("最后活跃", ""),
         "分类型": forms,
     }
+    # ⚠ 「分类型」记的是**成功条数**，全失败的那个类型在里面是 0、上面那行就把它
+    #   丢掉了 —— 结果是「今天跑的是资源位投放、一条没成」回传上来还是只有昨天的
+    #   「常规商广 27」，看着像回传坏了、每次都发同一份。所以再带一段「分类型跑了」
+    #   ={类型: 跑了几次}，跟成功与否无关，专门回答「这周动过哪几个配置类型」。
+    #   收集端不认这个键也无害（正表不受影响），见 tools/collect_usage.py 的 _merge。
+    if runs_by_form:
+        out["分类型跑了"] = {k: v for k, v in runs_by_form.items() if _num_ok(v)}
+
     # 失败明细（fail_kinds / fail_fields，全是定长枚举 + 字段名，无业务值）。
     # 有就带上，没有就不占位。
     if extra:
@@ -126,6 +135,9 @@ def _payload(header: list, row: list, form_names, extra: dict | None = None) -> 
 
     # ⚠ 顶到长度上限时按重要性依次丢：失败明细 < 分类型明细 < 总数。
     #   总数（次数/成功/失败/秒）永远发得出去。
+    if _too_big() and out.get("分类型跑了"):
+        out.pop("分类型跑了", None)
+        log.warning("上报内容超长，这一条不带「分类型跑了」")
     if _too_big() and out.get("失败明细"):
         out["失败明细"] = {}
         log.warning("上报内容超长，这一条不带失败明细")
@@ -133,6 +145,13 @@ def _payload(header: list, row: list, form_names, extra: dict | None = None) -> 
         out["分类型"] = {}
         log.warning("上报内容超长，这一条只发总数不发分类型明细")
     return out
+
+
+def _num_ok(v) -> bool:
+    try:
+        return int(v) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _post(url: str, text: str) -> bool:
@@ -214,11 +233,13 @@ def push(settings: dict, form_names, nickname: str = "") -> dict:
         return {"sent": 0, "failed": 0, "error": ""}
 
     fails = usage.weekly_fail_summary(settings)      # {周: {fail_kinds, fail_fields}}
+    runs = usage.weekly_form_runs(settings)          # {周: {配置类型: 跑了几次}}
 
     ok, bad, first_err = [], 0, ""
     for row in rows:
         line = json.dumps(
-            _payload(header, row, form_names, fails.get(str(row[0]))),
+            _payload(header, row, form_names, fails.get(str(row[0])),
+                     runs.get(str(row[0]))),
             ensure_ascii=False)
         try:
             _post(url, line)

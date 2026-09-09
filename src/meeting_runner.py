@@ -145,9 +145,11 @@ class MeetingRunner:
     def _settled(self, task: dict) -> set:
         """这条任务不用再管的日期：抢到了的，和试到超时放弃了的。
 
-        ⚠ 放弃的也必须记下来。不记的话，每周循环的任务一旦有一周没抢到，
-          _next_day 会一直返回同一天（那天早就在窗口内了，等待时间为 0），
-          于是原地死循环重试同一天，后面几周永远轮不到。
+        ⚠ 放弃的也必须记下来 —— 但**只对每周循环的任务**记（见 run() 里那处 _mark）。
+          不记的话，每周循环的任务一旦有一周没抢到，_next_day 会一直返回同一天
+          （那天早就在窗口内了，等待时间为 0），于是原地死循环重试同一天，
+          后面几周永远轮不到。单次任务没这个问题（跑完即出队），给它记反而是害它：
+          一次没抢到就得「清除断点」才能重抢，而那会连别的任务的成功记录一起清掉。
         """
         return self._booked(task) | set(
             self.state.get("given_up", {}).get(self.task_key(task), []))
@@ -386,6 +388,11 @@ class MeetingRunner:
                     rejected.clear()
                     strikes.clear()
                     idle_rounds = 0
+                    # ⚠ 预算重新计时。不重置的话，等窗口这段（可能几十分钟）是从
+                    #   grab_timeout 里扣的 —— 真到点开抢时预算已经见底，白等一场。
+                    deadline = _time.monotonic() + self.grab_timeout
+                    started = _time.monotonic()
+                    next_beat = started + self.heartbeat_s
                     break
 
                 # ⚠ 失败原文以前只在界面上一闪而过，run.log 里一个字都没有 ——
@@ -421,9 +428,14 @@ class MeetingRunner:
             # 候选被服务端全盘拒绝，而且不是「被占」——这不是「等等就有」，是这条
             # 任务本身有问题（同时段自己已经有会、没有该楼栋权限之类）。等下去
             # 只会把 600 秒耗光，两种模式都直接收，把原因原样报出去。
-            if cands and len(dead) >= len(cands):
-                reasons = list(dead.values())
-                why = max(set(reasons), key=reasons.count)
+            # ⚠ 必须拿**这一轮的候选**去交集，不能拿 dead 的总数去比：dead 是跨轮累积的，
+            #   而 cands 每轮都在变（房被别人订走就不在候选里了）。直接比总数的话，
+            #   「攒了 3 间死房、这轮只剩 2 间候选」就会判成「全被拒绝」提前收摊，
+            #   而那 2 间根本还没试过 —— 报出来还是一句「全被服务端拒绝」，
+            #   把人往「是不是我自己已经有会了」的方向指，完全错。
+            dead_now = [dead[r["roomId"]] for r in cands if r["roomId"] in dead]
+            if cands and len(dead_now) >= len(cands):
+                why = max(set(dead_now), key=dead_now.count)
                 return {"ok": False,
                         "error": f"符合条件的 {len(cands)} 间全被服务端拒绝：{why}"}
 
@@ -603,7 +615,16 @@ class MeetingRunner:
                         stats["dry"] += 1
                         outcome[idx] = self._result(idx, task, "dry_run", "", day=day)
                     else:
-                        self._mark("given_up", task, day)
+                        # ⚠ 只有「每周循环」才记 given_up。它存在的唯一理由是让循环任务
+                        #   能往下一周挪（不记的话 _next_day 永远返回同一天，原地死循环，
+                        #   见 _settled）。单次任务本来就跑完即出队，不需要它 ——
+                        #   而记了的代价很大：那一天被永久标成「了结过」，下次再点开始，
+                        #   预检直接给一句「这条已经了结过了，要重抢先点清除断点」，
+                        #   而「清除断点」是连所有任务抢到的记录一起清的。一次没抢到
+                        #   （查询抽风、临时没房）就再也抢不了同一天，用户看到的就是
+                        #   「抢会议室坏了」。
+                        if task.get("repeat_weekly"):
+                            self._mark("given_up", task, day)
                         stats["failed"] += 1
                         outcome[idx] = self._result(idx, task, "failed", res.get("error", ""), day=day)
                         self.ui.log(f"[{idx + 1}] 没抢到：{res.get('error')}", "error")

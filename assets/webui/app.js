@@ -1587,7 +1587,7 @@
     const items = [
       ["累计处理", `${t.items || 0}`, "条", (sum.week && sum.week.items)
         ? `本周 +${sum.week.items}` : "本周还没动过"],
-      // 「省下工时」= 人工基准 × 条数 − 机器实跑。口径见 src/usage.py 的 saved_seconds
+      // 「省下工时」= 人工基准 × 条数。口径见 src/usage.py 的 saved_seconds
       ["省下工时", fmtDuration(saved), "", fmtWorkdays(saved) || "还没攒够"],
       ["一次做对", rate, "", (t.failed ? `失败 ${t.failed} 条` : "还没失败过")],
       many
@@ -1633,21 +1633,23 @@
     const machine = fmtDuration(t.seconds);
     const cfg = sum.saving || {};
     if (cfg.mode === "multiplier") {
-      return `「省下工时」= 机器实跑 ${machine}（实测，已扣掉等你点确认的时间）`
-        + ` × ${cfg.multiplier} 倍 − 机器实跑。倍数在 settings.yaml 的 usage.saving 里改。`;
+      return `「省下工时」= 同样这些活人工要花的时间，按机器实跑 ${machine}`
+        + `（实测，已扣掉等你点确认的时间）× ${cfg.multiplier} 倍估。`
+        + `倍数在 settings.yaml 的 usage.saving 里改。`;
     }
-    return `「省下工时」= 同样这些条数人工要花的时间 ${fmtDuration(t.human)}（按每种配置一条`
-      + `多少分钟估的，见 settings.yaml 的 usage.saving）− 机器实跑 ${machine}`
-      + `（实测，已扣掉等你点确认的时间）。`;
+    return `「省下工时」= 同样这些条数人工要花的时间 ${fmtDuration(t.human)}`
+      + `（按每种配置一条多少分钟估的，见 settings.yaml 的 usage.saving）。`
+      + `机器实跑的 ${machine} 不从里头扣 —— 那段时间你没在旁边守着。`;
   }
 
   // ② 两本账：条数落在哪儿（环形）+ 时间去哪儿了（对比条）
   //
   // ⚠ 这两本账的**分母不一样** —— 条数账的分母是「这次要处理多少条」，时间账的
   //   分母是「人工要花多久」。所以是两张图，不能凑成一张。
-  // ⚠ 时间账画成上下两条**各自独立**的条、不叠成一条：saved 是逐次运行
-  //   max(0, 人工 − 机器) 累加出来的，机器比人工还慢的那几次贡献 0，所以
-  //   「机器实跑 + 省下」并不恒等于「人工要花」。叠成一条等于宣称它们相加，那是假的。
+  // ⚠ 时间账画成上下两条**各自独立**的条、不叠成一条：它们不是一个总量的两段，
+  //   而是同一批活的两种口径 —— 人工要花多久（估） vs 机器实际花了多久（实测）。
+  //   省下的就是上面那条（口径见 src/usage.py 的 saved_seconds），下面那条纯粹
+  //   是「这些活机器花了多久」，不参与相减。叠成一条等于宣称它们相加，那是假的。
   function homeLedger(sum, t) {
     const c = homeCard("这些数字怎么来的", "左边是条数落在哪儿，右边是时间去哪儿了");
     const duo = el("div", "ledger-duo");
@@ -1688,11 +1690,12 @@
     right.appendChild(meterRow("机器实跑", machine / scale, fmtDuration(machine), "实测", "blue"));
     const big = el("div", "ledger-saved");
     big.appendChild(el("b", null, fmtDuration(saved)));
-    big.appendChild(el("span", null, "省下的差额"
+    big.appendChild(el("span", null, "省下的工时"
       + (fmtWorkdays(saved) ? `　${fmtWorkdays(saved)}` : "")));
     right.appendChild(big);
     right.appendChild(el("div", "home-note",
-      "上面那条是估的，下面那条是实测的 —— 差额才是省下的。口径见页脚那行小字。"));
+      "省下的就是上面那条（人工要花的，估）。下面那条是机器实跑（实测），"
+      + "不从省下里扣 —— 机器干活那会儿你没在旁边守着。"));
     duo.appendChild(right);
 
     c.appendChild(duo);
