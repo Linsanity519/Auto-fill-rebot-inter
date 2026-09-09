@@ -760,6 +760,47 @@ def parse_report(table, form_names, conf: dict | None = None) -> dict:
     }
 
 
+MINE_KEYS = ("totals", "week", "longest", "forms", "weeks", "recent")
+
+
+def team_view(local: dict, team: dict) -> dict:
+    """本机那份 + 团队快照 → 首页真正吃的那一份。
+
+    ⚠ 规矩只有一条：**有团队快照时，首页每一个数都是全团队口径**，本机那一整套
+      原样挪进 mine。原来只换掉 totals/forms/people，而 week（「本周 +N」）、
+      weeks（趋势）、recent（最近跑的）、longest 还是本机的 —— 同一张卡上
+      一半团队一半本机，还没有任何标记。实测就是这么被误读的：群里回传上来的
+      运行不出现在「最近跑的」里，人以为回传坏了。
+
+    ⚠ recent / longest 在团队口径下**必须清空**：快照里没有单次运行的粒度，
+      还原不出「最近跑的」和「最长的一次」。留着本机那份，就是拿一台机器的流水
+      冒充全团队。界面上这两块改成显示 actives（谁在用），本机流水去 mine 里取。
+
+    ⚠ 这段以前长在 webapp 里。挪进来是为了能离线测 —— 它是「首页显示的是谁的数」
+      这个判断的**唯一**实现，测不到的话，改错了只会表现为「首页数字有点怪」。
+    """
+    out = dict(local or {})
+    out["scope"] = "local"
+    if not team:
+        return out
+
+    out["mine"] = {k: out.get(k) for k in MINE_KEYS}
+    out["scope"] = "team"
+    out["people"] = team.get("people", out.get("people"))
+    out["totals"] = team.get("totals", out.get("totals"))
+    out["forms"] = team.get("forms", out.get("forms"))
+    out["actives"] = team.get("actives") or []
+    tw = team.get("weeks") or {}
+    out["team_weeks"] = tw
+    out["weeks"] = week_series(tw)
+    out["week"] = dict(tw.get(current_week_key())
+                       or {"items": 0, "seconds": 0, "saved": 0.0})
+    out["recent"] = []
+    out["longest"] = None
+    out["snapshot_at"] = team.get("synced_at", "")
+    return out
+
+
 # ---------------------------------------------------------------- 全团队数据（快照）
 # ⚠ 这是一个**随分发包发出去的静态快照**，不是实时数据，首页上必须标「截至 X/X」。
 #

@@ -408,6 +408,49 @@ def test_webhook_migration():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ============================================================ 首页：本机 vs 全团队
+def test_team_view():
+    """有团队快照时，首页每一个数都得是团队口径；本机那套整体挪进 mine。
+
+    ⚠ 这段以前长在 webapp 里、没有测试。它错了不会报错，只会让首页
+      「一半团队一半本机」—— 实测被误读过（回传上来的运行不在「最近跑的」里，
+      人以为回传坏了）。
+    """
+    print("\n[首页] 本机 / 全团队两套数，别混在一张卡上")
+    local = {"people": 1, "totals": {"items": 10}, "forms": [{"name": "A", "ok": 10}],
+             "week": {"items": 3}, "weeks": [{"week": "2026-09-07", "items": 3}],
+             "recent": [{"form": "A"}], "longest": {"seconds": 9}, "opens": 5}
+
+    only_local = usage.team_view(local, {})
+    check("没有快照时原样返回，标成 local",
+          only_local["scope"] == "local" and only_local["totals"]["items"] == 10
+          and "mine" not in only_local)
+
+    team = {"people": 7, "totals": {"items": 131, "failed": 36},
+            "forms": [{"name": "B", "ok": 131}],
+            "weeks": {usage.current_week_key():
+                      {"items": 40, "seconds": 5277, "saved": 15831.0}},
+            "actives": [{"uid": "x", "runs": 14}], "synced_at": "2026-09-09 19:00"}
+    out = usage.team_view(local, team)
+    check("标成 team", out["scope"] == "team")
+    check("总数换成团队的", out["totals"]["items"] == 131, str(out["totals"]))
+    check("人数换成团队的", out["people"] == 7)
+    check("分类型换成团队的", out["forms"][0]["name"] == "B")
+    # ⚠ 下面这四项是当年漏掉的，漏了就是「同一张卡一半团队一半本机」
+    check("「本周」也是团队的", out["week"]["items"] == 40, str(out["week"]))
+    check("趋势也是团队的",
+          any(w["items"] == 40 for w in out["weeks"]), str(out["weeks"][-1:]))
+    check("「最近跑的」清空 —— 快照里没有单次运行的粒度", out["recent"] == [])
+    check("「最长的一次」清空", out["longest"] is None)
+    check("谁在用来自快照", out["actives"][0]["uid"] == "x")
+    check("快照日期带出来", out["snapshot_at"] == "2026-09-09 19:00")
+    check("本机那套整体挪进 mine",
+          set(usage.MINE_KEYS) <= set(out["mine"])
+          and out["mine"]["totals"]["items"] == 10
+          and out["mine"]["recent"] == [{"form": "A"}], str(list(out["mine"])))
+    check("和首页无关的字段原样留着", out["opens"] == 5)
+
+
 def test_outbox():
     """1.1.14 起回传发的是「这一次运行」，不是「这一周的累计」。
 
@@ -438,6 +481,14 @@ def test_outbox():
               and d["成"] == 8 and d["败"] == 1 and d["跳"] == 5, str(d))
         check("时间 / 版本 / 模式都在",
               bool(d["时间"]) and bool(d["版本"]) and d["模式"] == "全自动", str(d))
+        # ⚠ 界面上那五档一个都不能漏：漏了就在表里显示成英文原文。
+        #   confirm 是默认那一档（最常见），1.1.16 之前恰恰漏的就是它。
+        from src.report import MODE_TEXT
+        check("五种运行模式都有人话",
+              set(MODE_TEXT) == {"dry", "confirm", "sample", "auto", "step"}, str(MODE_TEXT))
+        check("confirm 是「逐条确认」、step 是「逐步试跑」，没搞反",
+              MODE_TEXT["confirm"] == "逐条确认" and MODE_TEXT["step"] == "逐步试跑",
+              str(MODE_TEXT))
         # ⚠ 机器秒是净时长：700 − 88。混成一个数就再也分不开「机器在跑」和「人在看」
         check("机器秒扣掉了等人确认的时间", d["机器秒"] == 612 and d["等人秒"] == 88, str(d))
         check("失败明细带上了", d.get("失败明细") == {"selector_miss": 1}, str(d))
@@ -579,7 +630,7 @@ def main():
                test_percentiles, test_status_alias, test_write_and_switch,
                test_share_dedupe, test_broken_file, test_saving,
                test_week_key_normalize, test_webhook_migration,
-               test_outbox, test_sheet_channel):
+               test_team_view, test_outbox, test_sheet_channel):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

@@ -237,7 +237,15 @@ def send_feedback(settings: dict, text: str) -> bool:
 
 
 # ── 一次运行一条：发件箱 ──────────────────────────────────────────
-MODE_TEXT = {"dry": "空跑", "step": "逐条确认", "sample": "抽样确认", "auto": "全自动"}
+# 界面上那排「运行模式」的取值 → 人话。⚠ 少一个就等于那一档在表里显示成英文原文。
+# ⚠ 这张表 1.1.16 修过一次，两处都错着：
+#     · 漏了 confirm —— 而它是**默认那一档**，也就是最常见的一种，表里一直写着 "confirm"
+#     · step 当时标成「逐条确认」，其实界面上 step 是「逐步试跑」（只有自制配置类型有），
+#       真正的「逐条确认」是 confirm
+#   取值的唯一出处是 assets/webui/app.js 的 state.runMode（dry/confirm/sample/auto/step），
+#   那边加一档，这里也要加一条。
+MODE_TEXT = {"dry": "空跑", "confirm": "逐条确认", "sample": "抽样确认",
+             "auto": "全自动", "step": "逐步试跑"}
 
 
 def outbox_path():
