@@ -165,68 +165,10 @@ def enabled(settings: dict) -> bool:
     return bool(webhook_url(settings) or sheet_webhook_url(settings))
 
 
-def _payload(header: list, row: list, form_names, extra: dict | None = None,
-             runs_by_form: dict | None = None) -> dict:
-    """一行（列顺序见 usage.report_header）→ 发出去的那个 JSON。
-
-    ⚠ 发的是「本机到目前为止的累计」，不是增量。收集端只取每人最近一条就够，
-      重复发同一周无害（幂等）。这是整条链路能容忍丢消息的根本原因。
-
-    ⚠ **不发「周」**：它是可推的 —— 「最后活跃」就是那一周桶里最大的那个
-      时间戳（见 usage.weekly_buckets），收集端 week_of 一下就还原了。
-      群里那条消息本来就短，少一个能算出来的字段就少一份噪音。
-      收集端两种消息都认（老消息还带着「周」），见 tools/collect_usage.py 的 _week。
-    ⚠ **不发「花名」**：实际上没人填，发出去的一直是空字符串；而且它是真人名字，
-      少发一处就少一处露出。本机那一列还留着（表结构没动），只是不出机器。
-    """
-    d = dict(zip(header, row))
-    forms = {n: d[n] for n in form_names if str(d.get(n, "")).strip() not in ("", "0")}
-    out = {
-        "指纹": d.get("指纹", ""),
-        "版本": d.get("版本", ""),
-        "次数": d.get("运行次数", 0),
-        "成功": d.get("成功", 0),
-        "失败": d.get("失败", 0),
-        "机器秒": d.get("机器代劳秒", 0),
-        "最后活跃": d.get("最后活跃", ""),
-        "分类型": forms,
-    }
-    # ⚠ 「分类型」记的是**成功条数**，全失败的那个类型在里面是 0、上面那行就把它
-    #   丢掉了 —— 结果是「今天跑的是资源位投放、一条没成」回传上来还是只有昨天的
-    #   「常规商广 27」，看着像回传坏了、每次都发同一份。所以再带一段「分类型跑了」
-    #   ={类型: 跑了几次}，跟成功与否无关，专门回答「这周动过哪几个配置类型」。
-    #   收集端不认这个键也无害（正表不受影响），见 tools/collect_usage.py 的 _merge。
-    if runs_by_form:
-        out["分类型跑了"] = {k: v for k, v in runs_by_form.items() if _num_ok(v)}
-
-    # 失败明细（fail_kinds / fail_fields，全是定长枚举 + 字段名，无业务值）。
-    # 有就带上，没有就不占位。
-    if extra:
-        out["失败明细"] = extra
-
-    def _too_big() -> bool:
-        return len(json.dumps(out, ensure_ascii=False).encode("utf-8")) > MAX_BYTES
-
-    # ⚠ 顶到长度上限时按重要性依次丢：失败明细 < 分类型明细 < 总数。
-    #   总数（次数/成功/失败/秒）永远发得出去。
-    if _too_big() and out.get("分类型跑了"):
-        out.pop("分类型跑了", None)
-        log.warning("上报内容超长，这一条不带「分类型跑了」")
-    if _too_big() and out.get("失败明细"):
-        out["失败明细"] = {}
-        log.warning("上报内容超长，这一条不带失败明细")
-    if _too_big():
-        out["分类型"] = {}
-        log.warning("上报内容超长，这一条只发总数不发分类型明细")
-    return out
-
-
-def _num_ok(v) -> bool:
-    try:
-        return int(v) > 0
-    except (TypeError, ValueError):
-        return False
-
+# ⚠ 1.1.14 之前这里有个 _payload()：把「某人某周的累计」拼成一条群消息。
+#   回传改成「一次运行一条」（run_payload）之后它就没人用了，1.1.16 删掉。
+#   还没升级的人发上来的仍是老格式，但那是**收集端**解析的事
+#   （tools/collect_usage.py --clipboard），客户端这边不再生产老格式。
 
 def _post_json(url: str, body: dict, timeout: int = TIMEOUT) -> dict:
     """POST 一个 JSON，返回解析后的响应。连不上/超时直接抛。"""

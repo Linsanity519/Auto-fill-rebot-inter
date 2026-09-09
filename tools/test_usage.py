@@ -284,113 +284,11 @@ def test_broken_file():
 
 
 # ============================================================ 上报到企微表格
-def test_report_roundtrip():
-    print("\n[上报格式] 建行 → TSV → 读回来，数要对得上")
-    from datetime import datetime, timedelta
-    from src import report
-    FORMS = ["DMP延期", "资源位投放", "原生商广"]
-    me = usage._uid()
-    now = datetime.now().astimezone()
+# ⚠ 1.1.16 删掉了三段测试：test_report_roundtrip / test_webhook_payload /
+#   test_report_header_mismatch。它们测的是「每周累计 + 上报记账 + 表头契约」，
+#   那套机制本身已经删了（回传改成一次运行一条）。老格式的**解析**还留着，
+#   由 tools/test_collect.py 那边和 collect_usage --clipboard 负责。
 
-    def ev(form, ok, days, sec=120, wait=0, failed=0):
-        return {"ts": (now - timedelta(days=days)).isoformat(timespec="seconds"),
-                "event": "run_finished", "uid": me, "form": form, "mode": "auto",
-                "ok": ok, "failed": failed, "skipped": 0, "dry": 0, "total": ok + failed,
-                "seconds": sec, "wait_seconds": wait}
-
-    usage.read_events = lambda s: [ev("DMP延期", 12, 0), ev("资源位投放", 3, 1, sec=600, wait=120),
-                                   ev("DMP延期", 7, 8, failed=1), ev("原生商广", 99, 400)]
-    tmp = Path(tempfile.mkdtemp(prefix="usage-report-"))
-    orig_mark = usage.reported_path
-    usage.reported_path = lambda: tmp / "usage-reported.json"
-    try:
-        header = usage.report_header(FORMS)
-        rows = usage.report_rows({}, FORMS, nickname="子凡")
-        check("表头列数 = 数据列数", all(len(r) == len(header) for r in rows),
-              f"表头 {len(header)}，行 {[len(r) for r in rows]}")
-        # ⚠ 2026-08-21 改了口径：欠着没上报的周**全部**补报，不再只报最近两周。
-        #   原来那样，上报失败超过两周的数据就永远补不回来了（实测真丢过）。
-        check("欠着的周全都补报（含 400 天前那次）", len(rows) == 3, f"报了 {len(rows)} 行")
-        check("400 天前那周在里面", any("2025" in r[0] for r in rows), str([r[0] for r in rows]))
-        # 本周两次：120 秒（没等人）+ 600 秒里扣掉 120 秒等人 = 600；不扣的话会是 720
-        this_week = [r for r in rows if r[0] == usage.week_of(now)][0]
-        check("机器代劳扣掉了等人的时间", this_week[7] == 600,
-              f"得到 {this_week[7]}，不扣应为 720")
-
-        # 记账之后就不该再报同样的内容；数据变了才重新报
-        usage.mark_reported(rows)
-        again = usage.report_rows({}, FORMS, nickname="子凡")
-        check("上报成功记账后不再重复贴", again == [], f"又报了 {len(again)} 行")
-        usage.read_events = lambda s: [ev("DMP延期", 12, 0), ev("资源位投放", 3, 1, sec=600, wait=120),
-                                       ev("DMP延期", 7, 8, failed=1), ev("原生商广", 99, 400),
-                                       ev("DMP延期", 5, 0)]
-        changed = usage.report_rows({}, FORMS, nickname="子凡")
-        check("这周又跑了就重新报这一周", [r[0] for r in changed] == [usage.week_of(now)],
-              str([r[0] for r in changed]))
-        check("失败没记账 → 下次仍然补报",
-              len(usage.report_rows({}, FORMS, nickname="子凡")) == 1)
-
-        # 往返：行 → webhook 那条单行 JSON → 收集端解析回行 → 汇总
-        # ⚠ 这一段就是线上真实链路的形状，别用别的方式凑数据来测
-        table = [header] + [_from_line(header, FORMS,
-                                       json.dumps(report._payload(header, r, FORMS),
-                                                  ensure_ascii=False))
-                            for r in rows]
-        got = usage.parse_report(table, FORMS)
-        check("往返后人数 = 1", got["people"] == 1)
-        check("往返后成功条数对得上", got["totals"]["items"] == sum(r[5] for r in rows),
-              f"{got['totals']['items']} vs {sum(r[5] for r in rows)}")
-        check("按配置类型分得开",
-              {f["name"]: f["ok"] for f in got["forms"] if f["ok"]}
-              == {"DMP延期": 19, "资源位投放": 3, "原生商广": 99},
-              str(got["forms"]))
-
-        # ---- 回归：什么算「这一周变了」 ----
-        # ⚠ 原来签名里含「版本」，于是每升一次级、全部历史周的签名同时失配，
-        #   几十周前的旧数据被原样重发一遍。实测 1.0.19 升级当天，统计群里
-        #   刷出了 08-17、08-24 两条早就发过的周 —— 这三条就是防它回来的。
-        usage.mark_reported(usage.report_rows({}, FORMS, nickname="子凡"))
-        real_ver = usage._app_version
-        usage._app_version = lambda: "9.9.9"
-        try:
-            after = usage.report_rows({}, FORMS, nickname="子凡")
-            check("升级之后不重发历史", after == [], f"又报了 {[r[0] for r in after]}")
-        finally:
-            usage._app_version = real_ver
-        renamed = usage.report_rows({}, FORMS, nickname="换了个花名")
-        check("改花名也不重发历史", renamed == [], f"又报了 {[r[0] for r in renamed]}")
-
-        # ⚠ 加一个新配置类型：每周那一段「分类型列」会整体右移，签名不能因此失配
-        #   （1.0.21 加「价格策略批量开关」当天，统计群里刷出 08-21、08-25 —— 就是这个）
-        more = usage.report_rows({}, FORMS + ["价格策略批量开关"], nickname="子凡")
-        check("加一个新配置类型也不重发历史", more == [],
-              f"又报了 {[r[0] for r in more]}")
-
-        # 老格式的记账要能迁过来 —— 不然「改签名口径」这个动作**自己**就会让所有
-        # 老记账失配，升级当天再刷一遍全历史
-        every = usage.report_rows({}, FORMS, nickname="子凡", only_changed=False)
-
-        def _v1(r):     # 1.0.19 之前：周|指纹|花名|版本|次数|成功|失败|秒|<分类型…>|最后活跃
-            return "|".join(str(v) for v in list(r)[:-1])
-
-        def _v2(r):     # 1.0.20 / 1.0.21：v2|周|指纹|次数|成功|失败|秒|<分类型…>|最后活跃
-            r = list(r)[:-1]
-            keep = [v for i, v in enumerate(r) if usage.REPORT_FIXED[i:i + 1] not in (["花名"], ["版本"])]
-            return "|".join(["v2"] + [str(v) for v in keep])
-
-        for tag, fn, forms in (("v1（含花名/版本）", _v1, FORMS),
-                               ("v2（含分类型列）+ 之后又加了配置类型", _v2, FORMS + ["价格策略批量开关"])):
-            usage.reported_path().write_text(
-                json.dumps({r[0]: fn(r) for r in every}, ensure_ascii=False), encoding="utf-8")
-            left = usage.report_rows({}, forms, nickname="子凡")
-            check(f"{tag} 的老记账能迁过来（升级当天不刷屏）", left == [],
-                  f"又报了 {[r[0] for r in left]}")
-    finally:
-        usage.reported_path = orig_mark
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-# ============================================================ 省时口径
 def test_saving():
     print("\n[省时口径] 省下 = 人工基准 × 条数（不减机器实跑）")
     conf = usage.saving_conf({"usage": {"saving": {
@@ -473,43 +371,6 @@ def _from_line(header, form_names, line):
             + [d.get("最后活跃", ""), ""])
 
 
-def test_webhook_payload():
-    print("\n[webhook 消息] 一行 JSON 发出去，复制回来还能解析")
-    from src import report
-    FORMS = ["DMP延期", "资源位投放"]
-    header = usage.report_header(FORMS)
-    row = ["2026-08-17", "abc12345", "子凡", "1.0.5", 3, 38, 1, 624, 38, 0,
-           "2026-08-20 21:43", "2026-08-21 13:00"]
-    pl = report._payload(header, row, FORMS)
-    check("字段对得上", pl["成功"] == 38 and pl["机器秒"] == 624, str(pl))
-    # 群里那条消息越短越好：能算出来的、和没人填的，都不发
-    check("不发「周」（收集端从最后活跃反推）", "周" not in pl, str(pl))
-    check("不发「花名」（真人名字，少露一处是一处）", "花名" not in pl, str(pl))
-    check("「版本」还在（判断谁没升级就靠它）", pl["版本"] == "1.0.5", str(pl))
-    check("零的配置类型不占位置", pl["分类型"] == {"DMP延期": 38}, str(pl["分类型"]))
-    line = json.dumps(pl, ensure_ascii=False)
-    check("一条消息就一行（换行会把群消息拆散、也没法逐行解析）", "\n" not in line)
-    check("没超过企微 2048 字节上限", len(line.encode("utf-8")) < 2048,
-          f"{len(line.encode('utf-8'))} 字节")
-    back = _from_line(header, FORMS, line)
-    # 花名那一列现在还原不回来（本来就没发过），其余七列必须原样回来
-    check("复制回来还原得回去", back[0] == row[0] and back[1] == row[1]
-          and back[3:8] == row[3:8], str(back[:8]))
-    check("周从最后活跃反推得对", back[0] == "2026-08-17", back[0])
-
-    # 配置类型多到顶上限时，宁可丢明细也要把总数发出去
-    many = [f"配置类型{i:02d}" for i in range(200)]
-    big_header = usage.report_header(many)
-    big_row = (["2026-08-17", "abc12345", "子" * 20, "1.0.5", 3, 38, 1, 624]
-               + [7] * len(many) + ["2026-08-20 21:43", ""])
-    big = report._payload(big_header, big_row, many)
-    check("超长时砍掉明细保住总数",
-          big["分类型"] == {} and big["成功"] == 38,
-          str(big)[:120])
-    check("砍完确实在上限内",
-          len(json.dumps(big, ensure_ascii=False).encode("utf-8")) < 2048)
-
-
 def test_webhook_migration():
     print("\n[换群迁移] 存量机器的 webhook.txt 还是旧 key 时，自动改用新地址")
     from src import report
@@ -547,15 +408,6 @@ def test_webhook_migration():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_report_header_mismatch():
-    print("\n[表头对不上] 宁可显示「还没有」，也不能把错位的列当真数据")
-    FORMS = ["DMP延期"]
-    check("空表返回空", usage.parse_report([], FORMS) == {})
-    check("表头不对返回空",
-          usage.parse_report([["时间", "谁", "干了啥"], ["x", "y", "z"]], FORMS) == {})
-
-
-# ============================================================ 回传：一次运行一条
 def test_outbox():
     """1.1.14 起回传发的是「这一次运行」，不是「这一周的累计」。
 
@@ -725,9 +577,9 @@ def main():
     for fn in (test_empty, test_single_user, test_multi_user, test_excluded, test_stopped,
                test_dirty, test_week_boundary, test_fail_kinds, test_bad_fields,
                test_percentiles, test_status_alias, test_write_and_switch,
-               test_share_dedupe, test_broken_file, test_report_roundtrip, test_saving,
-               test_week_key_normalize, test_webhook_payload, test_webhook_migration,
-               test_report_header_mismatch, test_outbox, test_sheet_channel):
+               test_share_dedupe, test_broken_file, test_saving,
+               test_week_key_normalize, test_webhook_migration,
+               test_outbox, test_sheet_channel):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
