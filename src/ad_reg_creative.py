@@ -310,15 +310,26 @@ class AdRegCreative:
                    self.timeout)
 
     def _switch_to(self, creative_cfg: dict, i: int):
-        """点左边第 i 张「创意N」卡，把那条创意的表单切出来。"""
+        """点左边第 i 张「创意N」卡，把那条创意的表单切出来。
+
+        ⚠ 这里等的**不能**是「可见的 .single-creative-wrapper 多于 0 个」：
+          点之前上一条创意的块本来就还在、还可见，这个条件恒真 —— 等于点完
+          一点都没等。后面 _fill_titles 立刻去找按钮，撞上表单还没渲染完就报
+          「没找到打开批量填标题抽屉的按钮」。刚传完 10 个视频那一下最慢，
+          所以整批的前几条都好好的、偏偏中间某一条炸（实测 1.1.16，第 3 条）。
+          换台快点的机器就复现不了 —— 是竞态，不是选择器错。
+        """
         sw = creative_cfg.get("switch_selector", ".every-card .material-card")
         cards = self.page.locator(sw)
         if cards.count() <= i:
             raise FillError(f"要切到第 {i + 1} 条创意，左侧只有 {cards.count()} 张切换卡")
         cards.nth(i).click()
-        wait_until(self.page,
-                   lambda: self.page.locator(".single-creative-wrapper").filter(
-                       visible=True).count() > 0, self.timeout)
+        # 等这条创意的表单**不再变**。拿不到「切换完成」的明确信号（没有可靠的
+        # active 类名可用，带哈希的那些按约定不能碰），所以等渲染安静下来。
+        wait_stable(self.page,
+                    lambda: self.page.locator(
+                        ".single-creative-wrapper").filter(visible=True).count(),
+                    timeout=self.timeout)
 
     @staticmethod
     def _opener_names(titles_cfg: dict) -> list[str]:
@@ -381,7 +392,14 @@ class AdRegCreative:
           按现在的别名（添加标题 / 批量添加 / 批量添加标题）天然撞不上，
           但别把匹配放宽到「标题」两个字。
         """
-        return self._find_button(w, self._opener_names(titles_cfg))
+        names = self._opener_names(titles_cfg)
+        # ⚠ 必须**轮询**，不能只看一眼：_find_button 是纯快照（count() 立刻返回），
+        #   而这个按钮所在的创意表单是异步渲染的。1.1.16 线上就是栽在这 ——
+        #   报错说「按钮没找到」，人去页面上一看按钮明明在，于是一路怀疑是不是
+        #   又改名了。名字没问题，是快照拍早了。
+        wait_until(self.page, lambda: self._find_button(w, names)[0] is not None,
+                   self.timeout)
+        return self._find_button(w, names)
 
     def _fill_titles(self, titles_cfg: dict, titles: list[str]):
         if not titles:
@@ -471,8 +489,23 @@ class AdRegCreative:
 
     # ------------------------------------------------------------ 内部
     def _wrapper(self):
-        """当前可见的那条创意块。"""
-        return self.page.locator(".single-creative-wrapper").filter(visible=True).first
+        """当前可见的那条创意块。页面约定一次只显示一条（见文件头）。
+
+        ⚠ 直接取 `.first` 曾经是个静默炸弹：切换动画没走完时**两条**创意块会
+          同时可见，`.first` 拿到的是**上一条** —— 于是标题/描述/落地页全填到
+          上一条上，页面不报任何错，人也看不出来（那一条本来就该有内容）。
+          比报错难查得多，所以在这儿把「不止一条」显式拦下来。
+        """
+        vis = self.page.locator(".single-creative-wrapper").filter(visible=True)
+        # 多于一条 = 还在切换中，等它收敛；等不到再报
+        wait_until(self.page, lambda: vis.count() == 1, self.timeout)
+        n = vis.count()
+        if n == 0:
+            raise FillError("页面上没有可见的创意块（表单还没渲染出来？）")
+        if n > 1:
+            raise FillError(f"页面上同时有 {n} 条创意块可见，分不清该填哪条 —— "
+                            f"创意切换没走完，或者页面结构变了")
+        return vis.first
 
     def _open_drawer(self, button_text: str):
         for attempt in (1, 2):

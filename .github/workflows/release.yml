@@ -106,6 +106,25 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "runtime=$runtime" >> $env:GITHUB_OUTPUT
 
+      - name: Check the payload really carries the sheet address
+        shell: pwsh
+        run: |
+          # ⚠ 光有 config/sheet_webhook.txt 是**不够**的：config/ 下只有 forms 和
+          #   team.json 在代码包的投递范围里，而日常升级走的就是代码包。1.1.15 就是
+          #   这么静默坏掉的 —— 包能打、能装、能跑，只是那张统计表一直没有数据，
+          #   过了两个版本才被人发现。所以在这儿真的打开 zip 看一眼。
+          $version = "${{ steps.build.outputs.version }}"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead(
+            (Resolve-Path "dist/ConfigAssistant-$version.zip"))
+          try {
+            $has = $zip.Entries | Where-Object { $_.FullName -eq "src/_bundled.py" }
+          } finally { $zip.Dispose() }
+          if (-not $has) {
+            throw "代码包里没有 src/_bundled.py —— 走代码包升级的人收不到表格回传地址，统计表会静默没数据。检查 tools/inject_release_config.py 有没有在 build 之前跑过。"
+          }
+          Write-Host "代码包带上了 src/_bundled.py"
+
       - name: Generate update manifest
         shell: pwsh
         run: |

@@ -621,6 +621,85 @@ def test_sheet_channel():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_sheet_channel_delivery():
+    """1.1.17 的两处：表格地址要能随代码包发下去；新开通道要能把历史补回去。
+
+    这两件事都是**静默**坏的（表里一直没数、没有任何报错），所以必须有测试盯着。
+    """
+    from src import report
+
+    print("\n[回传·投递] 地址随代码包发 / 新开通道补历史")
+    usage.read_events = _REAL_READ_EVENTS
+    tmp = Path(tempfile.mkdtemp(prefix="usage-deliver-"))
+    o_local, o_outbox = usage.local_path, report.outbox_path
+    o_post, o_pj = report._post, report._post_json
+    o_userpath, o_bundled = report.user_path, report._bundled_sheet_webhook
+    usage.local_path = lambda: tmp / "usage.jsonl"
+    report.outbox_path = lambda: tmp / "outbox.jsonl"
+    report.user_path = lambda *a: tmp / a[-1]
+    report._post = lambda url, text: True
+    report._post_json = lambda url, body, timeout=None: {"errcode": 0}
+    S = {"usage": {"webhook_url": "https://example.invalid/hook"}}
+    try:
+        # ── 地址解析：config/sheet_webhook.txt 收不到时，得落到随代码包发的那份 ──
+        report._bundled_sheet_webhook = lambda: ""
+        check("三处都没有地址时，表格通道确实是关着的",
+              report.sheet_webhook_url(S) == "")
+        report._bundled_sheet_webhook = lambda: "https://example.invalid/bundled"
+        check("config/sheet_webhook.txt 收不到时，用随代码包发的那份",
+              report.sheet_webhook_url(S) == "https://example.invalid/bundled",
+              report.sheet_webhook_url(S))
+        S2 = dict(S)
+        S2["usage"] = dict(S["usage"], sheet_webhook_url="https://example.invalid/mine")
+        check("settings.yaml 里显式配了就以它为准",
+              report.sheet_webhook_url(S2) == "https://example.invalid/mine")
+
+        # ── 补历史：按通道记账，而不是「一台机器只补一次」 ──
+        usage.record(S, "run_finished", run_id="h1", form="常规商广", mode="auto",
+                     total=3, ok=3, seconds=100.0)
+        usage.record(S, "run_finished", run_id="h2", form="常规商广", mode="auto",
+                     total=4, ok=4, seconds=100.0)
+
+        # 1.1.16 的现场：那时候只有群通道
+        report._bundled_sheet_webhook = lambda: ""
+        n = report.backfill(S)
+        check("只有群通道时，历史照样补进发件箱", n == 2, f"补了 {n} 条")
+        report.push(S)
+        check("发完之后发件箱空了（1.1.16 就是在这一步把历史弄丢的）",
+              report.pending(S) == 0)
+
+        # 升上来，表格通道开了 —— 历史必须能再补一趟
+        report._bundled_sheet_webhook = lambda: "https://example.invalid/bundled"
+        n2 = report.backfill(S)
+        check("新开表格通道后，历史被重新补进发件箱", n2 == 2, f"补了 {n2} 条")
+        left = report._read_outbox()
+        check("补出来的预先标了「群已发」，只会往表格补",
+              bool(left) and all(e["s"] == ["group"] for e in left), str(left[:1]))
+
+        posts = {"sheet": 0, "group": 0}
+        report._post_json = lambda url, body, timeout=None: (
+            posts.__setitem__("sheet", posts["sheet"] + 1) or {"errcode": 0})
+        report._post = lambda url, text: (
+            posts.__setitem__("group", posts["group"] + 1) or True)
+        report.push(S)
+        check("补的这趟只打了表格，群里没被历史刷屏",
+              posts["sheet"] >= 1 and posts["group"] == 0, str(posts))
+
+        n3 = report.backfill(S)
+        check("两个通道都补过了就不再补", n3 == 0, f"又补了 {n3} 条")
+
+        # 老标记（1.1.15/1.1.16 写的是个光秃秃的条数）当成「只补过群」
+        (tmp / report.BACKFILL_MARK).write_text("23\n", encoding="utf-8")
+        check("认得出老标记，并当成只补过群",
+              report._read_backfill_mark() == {"group"},
+              str(report._read_backfill_mark()))
+    finally:
+        usage.local_path, report.outbox_path, report.user_path = o_local, o_outbox, o_userpath
+        report._post, report._post_json = o_post, o_pj
+        report._bundled_sheet_webhook = o_bundled
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("=" * 56)
     print("埋点 / 统计口径 场景测试")
@@ -630,7 +709,8 @@ def main():
                test_percentiles, test_status_alias, test_write_and_switch,
                test_share_dedupe, test_broken_file, test_saving,
                test_week_key_normalize, test_webhook_migration,
-               test_team_view, test_outbox, test_sheet_channel):
+               test_team_view, test_outbox, test_sheet_channel,
+               test_sheet_channel_delivery):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

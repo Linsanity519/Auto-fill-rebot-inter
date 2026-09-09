@@ -106,6 +106,46 @@ def main() -> int:
         btn, got = filler._find_button(w, NAMES)
         check("一个别名都命不中时返回 None", btn is None, f"找到的是「{got}」")
 
+        print("\n[慢渲染] 按钮晚一点才挂上来，也得等到（1.1.16 的线上故障）")
+        filler.timeout = 6000
+        # 复现现场：刚传完 10 个视频，创意表单还在渲染，按钮此刻**还不在 DOM 里**。
+        # 老代码 _find_button 是一次性快照，这里直接返回 None → 报「没找到按钮」，
+        # 而人去页面上一看按钮明明在，于是一路怀疑是不是又改名了。
+        page.set_content(BLOCK.format(opener=""))
+        page.evaluate("""() => setTimeout(() => {
+            const b = document.createElement('button');
+            b.className = 'ivu-btn';
+            b.textContent = '+ 添加标题';
+            document.querySelector('.single-creative-wrapper').appendChild(b);
+        }, 900)""")
+        w = page.locator(".single-creative-wrapper").filter(visible=True).first
+        btn, got = filler._find_title_opener(w, {"open_buttons": NAMES})
+        check("晚 900ms 才渲染出来的按钮，等得到", btn is not None, f"找到的是「{got}」")
+        check("  等到的是对的那个，没误点「新增标题」",
+              btn is not None and "新增" not in (got or ""), f"找到的是「{got}」")
+
+        # 真的没有时不能死等到超时之后还假装找到了
+        page.set_content(BLOCK.format(opener=""))
+        filler.timeout = 600
+        w = page.locator(".single-creative-wrapper").filter(visible=True).first
+        btn, got = filler._find_title_opener(w, {"open_buttons": NAMES})
+        check("真的没有时，等满超时后老老实实返回 None", btn is None, f"找到的是「{got}」")
+
+        print("\n[切换中] 两条创意块同时可见时必须报错，不能填到上一条去")
+        filler.timeout = 600
+        page.set_content(BLOCK.format(opener="") + BLOCK.format(opener=""))
+        try:
+            filler._wrapper()
+            check("同时可见两条创意块时报错", False, "居然没报错，会静默填到上一条上")
+        except Exception as ex:
+            check("同时可见两条创意块时报错", "分不清该填哪条" in str(ex), str(ex))
+
+        page.set_content(BLOCK.format(opener='<button class="ivu-btn">批量添加</button>'))
+        try:
+            check("正常只有一条时照常返回", filler._wrapper().count() == 1)
+        except Exception as ex:
+            check("正常只有一条时照常返回", False, str(ex))
+
         print("\n[别名表] yaml 里配的那几个名字都读得出来")
         cfg = {"open_buttons": ["添加标题", "批量添加"]}
         check("open_buttons 优先", AdRegCreative._opener_names(cfg) == ["添加标题", "批量添加"])

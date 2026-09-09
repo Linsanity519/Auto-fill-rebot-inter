@@ -92,6 +92,28 @@ _RETIRED_WEBHOOK_KEYS = frozenset({
 })
 
 
+def _bundled_sheet_webhook() -> str:
+    """随代码包发出来的表格写入地址（src/_bundled.py，打包时生成、不进仓库）。
+
+    ⚠ 这一层不是可有可无的兜底，它是**存量用户唯一拿得到地址的途径**。
+      1.1.15 把地址放在 config/sheet_webhook.txt，而 config/ 下只有 forms 和
+      team.json 在代码包的投递范围里（见 tools/make_payload.py 的 MEMBERS）——
+      于是走 300KB 代码包升级的人（也就是绝大多数人）**永远收不到这个文件**，
+      表格通道从没打开过，而且完全静默：enabled() 只要群那条在就算开着，
+      push() 里 chans 少一条谁也不会发现。1.1.16 实测就是这样，表里一条没有。
+    ⚠ 那为什么不干脆把 config/sheet_webhook.txt 加进代码包？
+      因为用户机上跑的是**旧 updater**（tools/ 不在投递范围里，见同一个 MEMBERS），
+      而旧 updater 见到 PAYLOAD_MEMBERS 之外的成员会直接判包损坏、整包回滚。
+      加一个文件进去 = 存量用户全都更新失败。所以只能走 src/。
+    ⚠ 模块缺失是正常的：从源码跑、或者别人自己 clone 打的包都没有它。
+    """
+    try:
+        from ._bundled import SHEET_WEBHOOK      # type: ignore[attr-defined]
+    except Exception:
+        return ""
+    return (SHEET_WEBHOOK or "").strip()
+
+
 def _webhook_key(url: str) -> str:
     """取 ?key=... 的值，用来判断是不是废弃地址。取不到返回空串。"""
     try:
@@ -144,7 +166,11 @@ def sheet_webhook_url(settings: dict) -> str:
       表主随时能在界面上关掉它。所以它可以随包发出去。
       （文档机器人那把 apikey 覆盖持有人名下所有文档，绝不能进分发包，见文件头。）
     ⚠ 单独一个文件的理由同 webhook.txt：安装包升级不覆盖 settings.yaml。
-    ⚠ 文件缺失是正常情况（还没配 / 别人自己 clone 打的包），此时只发群、不写表格。
+    ⚠ 文件缺失是**常态**，不是异常：它不在代码包的投递范围里，走代码包升级的人
+      本来就没有。所以最后还要落到 _bundled_sheet_webhook() —— 那才是存量用户
+      真正拿到地址的地方，别把它当成可选的兜底删掉。
+
+    顺序：settings.yaml 显式配的 → config/sheet_webhook.txt → 随代码包发的常量。
     """
     explicit = (((settings or {}).get("usage") or {}).get("sheet_webhook_url") or "").strip()
     if explicit:
@@ -157,7 +183,7 @@ def sheet_webhook_url(settings: dict) -> str:
                 return line
     except OSError:
         pass
-    return ""
+    return _bundled_sheet_webhook()
 
 
 def enabled(settings: dict) -> bool:
@@ -331,21 +357,59 @@ def _legacy_run_id(row: dict) -> str:
     return "L" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:11]
 
 
+def _channels(settings: dict) -> set:
+    """这台机器现在开着哪几个回传通道。push() 里 chans 的取值来源同此。"""
+    out = set()
+    if sheet_webhook_url(settings):
+        out.add("sheet")
+    if webhook_url(settings):
+        out.add("group")
+    return out
+
+
+def _read_backfill_mark() -> set | None:
+    """补过历史的标记。返回「已经补进过哪几个通道」，None = 从没补过。
+
+    ⚠ 1.1.15/1.1.16 的标记里只有一个条数（"23\n"），认不出通道。那两版
+      **表格通道其实一次都没打开过**（地址收不到，见 _bundled_sheet_webhook），
+      所以老标记一律当成「只补过群」—— 这样升上来会把历史往表格补一次，
+      正是我们要的。个别用完整安装包、当时确实补进过表格的人会重复一次，
+      收集端按运行ID去重（见文件头，那是硬要求），没有影响。
+    """
+    try:
+        raw = user_path("output", BACKFILL_MARK).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return set()
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return {"group"}
+    if isinstance(d, dict):
+        return {str(c) for c in (d.get("chans") or [])}
+    return {"group"}
+
+
 def backfill(settings: dict) -> int:
-    """把本机 usage.jsonl 里的历史运行一次性补进发件箱，返回补了几条。
+    """把本机 usage.jsonl 里的历史运行补进发件箱，返回补了几条。
 
     ⚠ 为什么值得补：新表的粒度是「一次运行」，而收集端归档里的历史是**每人每周的
       累计**，粒度对不上，硬填进去只能编。但每台机器上的 usage.jsonl **本来就是
       一次运行一条**，是真的明细 —— 升级那一下把它补上去，新表就直接有了完整历史，
       不用拿周累计凑数。
-    ⚠ 只做一次：做完落一个标记文件。重复补会在表里多出一堆重复行（表格 webhook
-      没有去重，写进去就是新的一行）。万一标记文件丢了，run_id 相同的行在收集端
-      SQL 里也能去重（SELECT DISTINCT 运行ID），不至于把数据搞脏。
+    ⚠ 补的单位是**通道**，不是「一台机器只补一次」。1.1.16 踩过：那时候标记一落，
+      backfill 就永远返回 0；而当时表格通道压根没开，那 23 条历史只进了群，
+      发件箱随即被清空（push 里 want 只有 group，发完就划掉）—— 于是等表格通道
+      修好，历史已经永久地捞不回来了。所以这里记的是「补进过哪些通道」，
+      新开一个通道就为它再补一趟，已经补过的通道预先标成已发、不会重发。
     """
     if not enabled(settings):
         return 0
-    mark = user_path("output", BACKFILL_MARK)
-    if mark.exists():
+    want = _channels(settings)
+    done = _read_backfill_mark()
+    already = set() if done is None else done
+    if done is not None and not (want - already):
         return 0
     try:
         from . import usage
@@ -353,6 +417,9 @@ def backfill(settings: dict) -> int:
         rows = [r for r in usage._read_file(usage.local_path())
                 if isinstance(r, dict) and r.get("event") == "run_finished"]
         have = {(e.get("d") or {}).get("run") for e in _read_outbox()}
+        # 已经补进过的通道预先记成「发过了」，push 只会补新开的那个通道 ——
+        # 不这么做的话，群里会把全部历史再刷一遍。
+        sent_already = sorted(already & want)
         added = []
         for r in rows:
             d = run_payload(r)
@@ -361,17 +428,20 @@ def backfill(settings: dict) -> int:
             if d["run"] in have:
                 continue
             have.add(d["run"])
-            added.append({"d": d, "s": []})
+            added.append({"d": d, "s": list(sent_already)})
         if added:
             p = outbox_path()
             p.parent.mkdir(parents=True, exist_ok=True)
             with p.open("a", encoding="utf-8") as fh:
                 for e in added:
                     fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+        mark = user_path("output", BACKFILL_MARK)
         mark.parent.mkdir(parents=True, exist_ok=True)
-        mark.write_text(f"{len(added)}\n", encoding="utf-8")
+        mark.write_text(json.dumps({"n": len(added), "chans": sorted(already | want)},
+                                   ensure_ascii=False) + "\n", encoding="utf-8")
         if added:
-            log.info("补历史：把本机 %d 次历史运行放进了发件箱", len(added))
+            log.info("补历史：把本机 %d 次历史运行放进了发件箱（这趟补的通道：%s）",
+                     len(added), "、".join(sorted(want - already)) or "全部")
         return len(added)
     except Exception:
         log.warning("补历史失败（不影响运行，下次开程序再试）", exc_info=True)

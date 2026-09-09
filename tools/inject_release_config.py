@@ -69,6 +69,45 @@ def inject_sheet_webhook() -> str:
     return "未配置，本次打出来的包只发群、不写表格"
 
 
+def inject_bundled_module() -> str:
+    """把表格地址同时写进 src/_bundled.py。
+
+    ⚠ 这一份才是**存量用户真正收得到**的那份。config/sheet_webhook.txt 只有
+      45MB 完整安装包会铺，而日常升级走的是 300KB 代码包，它只投递
+      main.py / src / assets / config/forms / config/team.json
+      （见 tools/make_payload.py 的 MEMBERS）—— 所以 1.1.15 那版发出去之后，
+      走代码包升级的人一个都没打开表格通道，而且完全没有报错。
+    ⚠ 为什么不把 config/sheet_webhook.txt 加进代码包：用户机上跑的是**旧
+      updater**（tools/ 也不在投递范围里），旧 updater 遇到 PAYLOAD_MEMBERS
+      之外的成员会判包损坏、整包回滚 —— 等于存量用户全部更新失败。
+    ⚠ 这个文件不进仓库（.gitignore），和 config/sheet_webhook.txt 同一个理由。
+    """
+    target = ROOT / "src" / "_bundled.py"
+    url = ((os.environ.get("USAGE_SHEET_WEBHOOK_URL") or "").strip()
+           or _read_url(ROOT / "config" / "sheet_webhook.txt"))
+    if not url:
+        # 没有地址时**删掉**旧的，别让上一次构建的残留混进这次的包
+        if target.is_file():
+            target.unlink()
+        return "未配置，本次打出来的包只发群、不写表格"
+    target.write_text(
+        '"""打包时生成的地址表，别手改、也别提交（见 tools/inject_release_config.py）。"""\n'
+        f'SHEET_WEBHOOK = {url!r}\n', encoding="utf-8")
+    return "已写入 src/_bundled.py"
+
+
+def _read_url(path: Path) -> str:
+    """从 webhook 文本文件里读出第一条非注释行。读不到返回空串。"""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
+    except OSError:
+        pass
+    return ""
+
+
 def sync_settings_default() -> str:
     src = ROOT / "config" / "settings.yaml"
     dst = ROOT / "assets" / "settings.default.yaml"
@@ -82,6 +121,7 @@ def sync_settings_default() -> str:
 def main() -> int:
     print(f"  统计回传（群）：{inject_webhook()}")
     print(f"  统计回传（表格）：{inject_sheet_webhook()}")
+    print(f"  统计回传（表格·随代码包）：{inject_bundled_module()}")
     print(f"  默认配置：{sync_settings_default()}")
     return 0
 

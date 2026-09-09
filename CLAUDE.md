@@ -159,6 +159,21 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
    「点不到按钮」「以为界面卡住了」，而且**在开发机上看不出来** ——
    内容一短就一切正常，内容一长才现形。
 
+11. **要发给存量用户的东西，只能放 `src/` 或 `assets/`。**
+   300KB 代码包（日常升级走的就是它）只投递
+   `main.py` / `src` / `assets` / `config/forms` / `config/team.json`
+   —— 见 `tools/make_payload.py` 的 `MEMBERS`。放在 `config/` 下的其它文件
+   （`webhook.txt`、`sheet_webhook.txt`、`settings.yaml`）**只有 45MB 完整安装包才会铺**，
+   而绝大多数人从来不跑完整安装包。
+   踩过两次，两次都是**静默**的：
+     · `webhook.txt` 换群之后存量机器一直往旧群发 → 补了 `BUNDLED_WEBHOOK`（在 src/ 里）；
+     · 1.1.15 的 `sheet_webhook.txt` 走代码包发不到 → 表格通道全员没打开过，
+       两个版本之后才被发现 → 改成打包时生成 `src/_bundled.py`（gitignore，
+       由 `tools/inject_release_config.py` 写）。
+   ⚠ **别想着"那就把它加进 PAYLOAD_MEMBERS"**：用户机上跑的是**旧 updater**
+   （`tools/` 同样不在投递范围里），旧 updater 见到 `PAYLOAD_MEMBERS` 之外的成员会
+   判包损坏、整包回滚 —— 加一个文件进去等于存量用户全部更新失败。
+
 ---
 
 ## 弹窗与滚动（写界面时的硬规矩）
