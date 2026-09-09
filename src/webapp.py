@@ -1555,6 +1555,9 @@ class Api:
             from . import report
             if not report.enabled(self.settings):
                 return
+            # 升级上来的第一次：把本机 usage.jsonl 里的历史运行补进发件箱。
+            # 只做一次（见 report.backfill），做完和平时一样走 push 发出去。
+            report.backfill(self.settings)
             if not report.pending(self.settings):
                 return
             self._sync_sheet_async(quiet=True)

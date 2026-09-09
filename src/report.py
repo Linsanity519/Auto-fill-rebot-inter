@@ -27,6 +27,18 @@
 代价是：增量消息丢一条就永久少一条（累计消息天然幂等，丢了下一条自带全部历史）。
 所以配一个发件箱（output/usage-outbox.jsonl）：跑完先落盘，发出去才划掉，
 失败留着下次补。每条带 run（运行 id），收集端按它去重 —— 所以宁可多发一次。
+
+发到哪儿（两个通道，都是一个 POST，没有服务端）：
+  · 智能表格「接收外部数据」——主通道，一次运行一行，本身就是能打开看的看板；
+    收集端用 wecom-cli 的 SQL 直接聚合（records query）。
+  · 企微群机器人——留着当兜底，万一表被关了数据还有个落点。
+两个通道**各记各的账**（发件箱条目里的 "s"）：表格写成功、群失败时下次只补群，
+不然表里会多出一行重复记录。
+
+⚠⚠ 收集端聚合时**必须按「运行ID」去重**（COUNT(DISTINCT `运行ID`)）。
+  表格 webhook 没有幂等键：2026-09-09 实测，读超时那次其实服务端**已经写进去了**，
+  客户端以为失败、下次补发，于是同一次运行在表里有两行。这不是 bug 是常态 ——
+  只要聚合去重就没有任何影响，不去重就会把数字翻倍。
 """
 from __future__ import annotations
 
@@ -42,9 +54,31 @@ from .paths import user_path
 log = logging.getLogger(__name__)
 
 TIMEOUT = 3          # 内网偶尔抽风，三秒不通就算了，下次再补
+SHEET_TIMEOUT = 12   # ⚠ 表格那个接口比群机器人慢得多：3 秒实测必超时（读超时，
+                     #   不是连不上）。它也不在跑批的关键路径上（后台线程），等得起。
 MAX_BYTES = 1800     # 企微 text 消息上限 2048 字节，留点余量
 OUTBOX_FILE = "usage-outbox.jsonl"    # 还没发出去的运行，一行一条
-OUTBOX_MAX = 500     # 发件箱最多留这么多条。长期连不上网时别让它无限涨
+OUTBOX_MAX = 2000    # 发件箱最多留这么多条。长期连不上网时别让它无限涨
+                     # （一条约 250 字节，2000 条也就 500KB；升级那次要补历史，别卡太小）
+BACKFILL_MARK = "usage-backfilled.txt"     # 补过历史了的标记，只补一次
+SHEET_WEBHOOK_FILE = "sheet_webhook.txt"   # 智能表格「接收外部数据」的地址
+SHEET_MAX_ROWS = 200                        # 单次 POST 的行数。官方上限 500，留余量
+
+# 智能表格「运行流水」那张子表的字段 ID。
+# ⚠ 表格 webhook 的 values **按字段 ID 取键**，不是字段名（和 CLI 那套不一样）。
+#   这份映射来自表格「接收外部数据」页面给的 schema，2026-09-09 实测写入通过。
+#   ⚠ 重建那张子表的话字段 ID 会变，得回来改这里 —— 所以别重建，加列就行。
+SHEET_FIELDS = {
+    "运行ID": "f6018f", "时间": "f2a459", "指纹": "fd54d5", "版本": "fd8f4f",
+    "配置类型": "f285a3", "模式": "ff2a94", "总": "fe1c44", "成": "f0c37c",
+    "败": "fc8440", "跳": "fcd05c", "机器秒": "fef939", "等人秒": "fff32c",
+    "失败明细": "fa4270", "范围": "ftWp0x", "重跑": "fTM5FR", "来源": "fB2cMJ",
+}
+
+# 表格列名 → 消息里的字段名。⚠ 两边**不是全都同名**：表里叫「运行ID / 配置类型」，
+# 消息里叫「run / 类型」（消息要短，一条要塞进企微 2048 字节）。
+# 对不上的后果是那一列静默空着 —— 表里看着有数据，其实少了最关键的两列。
+SHEET_KEY = {"运行ID": "run", "配置类型": "类型"}
 
 # ── 存量迁移：换群时把旧 key 挂到这里 ──────────────────────────────
 # config/webhook.txt 不在 300KB 代码包的更新范围内（见 tools/updater.py 的
@@ -102,8 +136,33 @@ def webhook_url(settings: dict) -> str:
     return explicit or _webhook_from_file()
 
 
+def sheet_webhook_url(settings: dict) -> str:
+    """智能表格的写入地址。settings 里显式填了就用它，否则读 config/sheet_webhook.txt。
+
+    ⚠ 为什么是**另一个**地址、不复用群那个：这是「接收外部数据」给的**表级**写入 key，
+      权限比群机器人还小 —— 只能往那一张子表追加行，读不了、删不了、改不了结构，
+      表主随时能在界面上关掉它。所以它可以随包发出去。
+      （文档机器人那把 apikey 覆盖持有人名下所有文档，绝不能进分发包，见文件头。）
+    ⚠ 单独一个文件的理由同 webhook.txt：安装包升级不覆盖 settings.yaml。
+    ⚠ 文件缺失是正常情况（还没配 / 别人自己 clone 打的包），此时只发群、不写表格。
+    """
+    explicit = (((settings or {}).get("usage") or {}).get("sheet_webhook_url") or "").strip()
+    if explicit:
+        return explicit
+    p = user_path("config", SHEET_WEBHOOK_FILE)
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
+    except OSError:
+        pass
+    return ""
+
+
 def enabled(settings: dict) -> bool:
-    return bool(webhook_url(settings))
+    """两个通道有一个能发就算开着。"""
+    return bool(webhook_url(settings) or sheet_webhook_url(settings))
 
 
 def _payload(header: list, row: list, form_names, extra: dict | None = None,
@@ -169,12 +228,18 @@ def _num_ok(v) -> bool:
         return False
 
 
-def _post(url: str, text: str) -> bool:
-    body = json.dumps({"msgtype": "text", "text": {"content": text}}).encode("utf-8")
-    req = urllib.request.Request(url, data=body,
+def _post_json(url: str, body: dict, timeout: int = TIMEOUT) -> dict:
+    """POST 一个 JSON，返回解析后的响应。连不上/超时直接抛。"""
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        res = json.loads(r.read().decode("utf-8", "replace") or "{}")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace") or "{}")
+
+
+def _post(url: str, text: str) -> bool:
+    """往群里发一条文本消息。"""
+    res = _post_json(url, {"msgtype": "text", "text": {"content": text}})
     if res.get("errcode") not in (0, None):
         raise RuntimeError(f"企微返回 {res.get('errcode')}：{res.get('errmsg')}")
     return True
@@ -270,6 +335,7 @@ def run_payload(row: dict) -> dict:
         out["重跑"] = str(row["retry_of"])
     if row.get("stopped"):
         out["中途停止"] = True
+    out["来源"] = "实时"
     # 失败明细：定长枚举（selector_miss / page_rejected…）+ 字段 label，无业务值。
     # 有就带上，没有不占位 —— 一条消息里多一个空对象就是多一分噪音。
     if row.get("fail_kinds"):
@@ -298,11 +364,68 @@ def enqueue(settings: dict, row: dict) -> bool:
         p = outbox_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(run_payload(row), ensure_ascii=False) + "\n")
+            fh.write(json.dumps({"d": run_payload(row), "s": []},
+                                ensure_ascii=False) + "\n")
         return True
     except Exception:
         log.warning("回传发件箱写不进去（这一次运行的统计会丢）", exc_info=True)
         return False
+
+
+def _legacy_run_id(row: dict) -> str:
+    """老埋点没有 run_id（1.0.x 那阵）。拿「谁 + 什么时候 + 哪个类型」凑一个稳定的，
+    这样补历史重跑一次也不会在表里多出一行。"""
+    import hashlib
+
+    raw = f"{row.get('uid')}|{row.get('ts')}|{row.get('form')}"
+    return "L" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:11]
+
+
+def backfill(settings: dict) -> int:
+    """把本机 usage.jsonl 里的历史运行一次性补进发件箱，返回补了几条。
+
+    ⚠ 为什么值得补：新表的粒度是「一次运行」，而收集端归档里的历史是**每人每周的
+      累计**，粒度对不上，硬填进去只能编。但每台机器上的 usage.jsonl **本来就是
+      一次运行一条**，是真的明细 —— 升级那一下把它补上去，新表就直接有了完整历史，
+      不用拿周累计凑数。
+    ⚠ 只做一次：做完落一个标记文件。重复补会在表里多出一堆重复行（表格 webhook
+      没有去重，写进去就是新的一行）。万一标记文件丢了，run_id 相同的行在收集端
+      SQL 里也能去重（SELECT DISTINCT 运行ID），不至于把数据搞脏。
+    """
+    if not enabled(settings):
+        return 0
+    mark = user_path("output", BACKFILL_MARK)
+    if mark.exists():
+        return 0
+    try:
+        from . import usage
+
+        rows = [r for r in usage._read_file(usage.local_path())
+                if isinstance(r, dict) and r.get("event") == "run_finished"]
+        have = {(e.get("d") or {}).get("run") for e in _read_outbox()}
+        added = []
+        for r in rows:
+            d = run_payload(r)
+            d["run"] = d.get("run") or _legacy_run_id(r)
+            d["来源"] = "补历史"
+            if d["run"] in have:
+                continue
+            have.add(d["run"])
+            added.append({"d": d, "s": []})
+        if added:
+            p = outbox_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with p.open("a", encoding="utf-8") as fh:
+                for e in added:
+                    fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text(f"{len(added)}\n", encoding="utf-8")
+        if added:
+            log.info("补历史：把本机 %d 次历史运行放进了发件箱", len(added))
+        return len(added)
+    except Exception:
+        log.warning("补历史失败（不影响运行，下次开程序再试）", exc_info=True)
+        return 0
 
 
 def _read_outbox() -> list[dict]:
@@ -319,8 +442,11 @@ def _read_outbox() -> list[dict]:
                 d = json.loads(line)
             except ValueError:
                 continue          # 半行/乱码，跳过就是了
-            if isinstance(d, dict):
-                out.append(d)
+            if not isinstance(d, dict):
+                continue
+            # ⚠ 1.1.14 的发件箱里存的是**裸 payload**，没有 {"d":…,"s":[…]} 这层壳。
+            #   升级上来时文件里可能两种混着，都得认 —— 认不出来就等于把那几条丢了。
+            out.append(d if "d" in d else {"d": d, "s": []})
     except OSError:
         log.warning("回传发件箱读不了", exc_info=True)
     return out[-OUTBOX_MAX:]
@@ -365,35 +491,108 @@ def _batches(rows: list[dict]) -> list[list[dict]]:
     return out
 
 
+def _ms(text: str) -> str:
+    """「2026-09-09 14:30:00」→ 毫秒时间戳字符串。表格的日期字段只认这个。
+
+    ⚠ 和 CLI 那套不一样（CLI 收的是可读日期串），别混用。解析不了就返回空串，
+      让那一格空着 —— 为一个时间戳把整条统计丢掉不值当。
+    """
+    from datetime import datetime
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return str(int(datetime.strptime(str(text or "").strip(), fmt).timestamp() * 1000))
+        except ValueError:
+            continue
+    return ""
+
+
+def _sheet_body(payloads: list[dict]) -> dict:
+    """一批运行 → 智能表格 webhook 的报文。
+
+    ⚠ 只发 SHEET_FIELDS 里认得的列。表里没有的字段（比如「范围」「重跑」）直接丢掉，
+      不是错 —— 表结构是收集侧的事，客户端不该因为多一个字段就发不出去。
+    """
+    recs = []
+    for d in payloads:
+        vals = {}
+        for name, fid in SHEET_FIELDS.items():
+            key = SHEET_KEY.get(name, name)
+            if name == "时间":
+                v = _ms(d.get(key))
+            elif name == "失败明细":
+                v = json.dumps(d.get(key), ensure_ascii=False) if d.get(key) else ""
+            else:
+                v = d.get(key)
+            if v is None or v == "":
+                continue
+            vals[fid] = v
+        if vals:
+            recs.append({"values": vals})
+    return {"add_records": recs}
+
+
+def _post_sheet(url: str, payloads: list[dict]):
+    """往智能表格写一批。失败抛异常，由 push 决定留不留。"""
+    body = _sheet_body(payloads)
+    if not body["add_records"]:
+        return
+    res = _post_json(url, body, SHEET_TIMEOUT)
+    if res.get("errcode") not in (0, None):
+        raise RuntimeError(f"表格返回 {res.get('errcode')}：{res.get('errmsg')}")
+
+
 def push(settings: dict, form_names=None, nickname: str = "") -> dict:
     """把发件箱里还没发出去的运行发掉，返回 {sent, failed, error}。
 
-    ⚠ 发成功的才划掉。划早了就等于把失败的那几条当成已上报、下次不再补 ——
-      那正是老方案静默丢数据的成因。
-    ⚠ 一批里有一条失败就整批留着下次重发：收集端按 run 去重，重发无害。
-    form_names / nickname 是老签名留下的，现在用不上（回传里不带花名，
-    分类型由收集端按「类型」自己聚）。
+    ⚠ 两个通道**各记各的账**（条目里的 "s" 记着已经发成功的通道）：表格写成功、
+      群发失败时，下次只补群那一条 —— 不然重发会在表里多出一行重复记录，
+      而群那边重发是无害的（收集端按 run 去重）。两个都发成功了才划掉。
+    ⚠ 一批里有一条失败就整批留着：宁可重发，不可丢。
+    form_names / nickname 是老签名留下的，现在用不上。
     """
-    url = webhook_url(settings)
-    if not url:
-        return {"sent": 0, "failed": 0, "error": "没配 usage.webhook_url"}
+    group_url = webhook_url(settings)
+    sheet_url = sheet_webhook_url(settings)
+    if not group_url and not sheet_url:
+        return {"sent": 0, "failed": 0, "error": "没配回传地址"}
 
-    rows = _read_outbox()
-    if not rows:
+    entries = _read_outbox()
+    if not entries:
         return {"sent": 0, "failed": 0, "error": ""}
 
-    left, sent, bad, first_err = [], 0, 0, ""
-    for batch in _batches(rows):
-        body = batch[0] if len(batch) == 1 else batch
-        try:
-            _post(url, json.dumps(body, ensure_ascii=False))
-            sent += len(batch)
-        except Exception as e:
-            bad += len(batch)
-            first_err = first_err or str(e)
-            left.extend(batch)
-            log.warning("回传失败，%d 条留着下次补", len(batch), exc_info=True)
+    chans = []
+    if sheet_url:
+        # 表格是主通道，先发：它是有结构的那份，群里那条只是给人扫一眼
+        chans.append(("sheet", lambda b: _post_sheet(sheet_url, [e["d"] for e in b]),
+                      lambda rows: [rows[i:i + SHEET_MAX_ROWS]
+                                    for i in range(0, len(rows), SHEET_MAX_ROWS)]))
+    if group_url:
+        chans.append(("group",
+                      lambda b: _post(group_url, json.dumps(
+                          b[0]["d"] if len(b) == 1 else [e["d"] for e in b],
+                          ensure_ascii=False)),
+                      lambda rows: _batches(rows)))
+
+    bad, first_err = 0, ""
+    for name, send, split in chans:
+        todo = [e for e in entries if name not in (e.get("s") or [])]
+        for batch in split(todo):
+            if not batch:
+                continue
+            try:
+                send(batch)
+                for e in batch:
+                    e.setdefault("s", []).append(name)
+            except Exception as ex:
+                bad += len(batch)
+                first_err = first_err or f"{'表格' if name == 'sheet' else '群'}：{ex}"
+                log.warning("回传到%s失败，%d 条留着下次补",
+                            "表格" if name == "sheet" else "群", len(batch), exc_info=True)
+
+    want = {name for name, _, _ in chans}
+    left = [e for e in entries if not want.issubset(set(e.get("s") or []))]
+    sent = len(entries) - len(left)
     _write_outbox(left)
     if sent:
-        log.info("回传已发 %d 次运行", sent)
+        log.info("回传已发 %d 次运行（通道：%s）", sent, "、".join(sorted(want)))
     return {"sent": sent, "failed": bad, "error": first_err}

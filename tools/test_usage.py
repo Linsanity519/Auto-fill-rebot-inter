@@ -559,16 +559,19 @@ def test_report_header_mismatch():
 def test_outbox():
     """1.1.14 起回传发的是「这一次运行」，不是「这一周的累计」。
 
-    这一段盯死三件事：发的内容对不对、发不出去会不会丢、发成功了会不会重发。
+    这一段盯死四件事：发的内容对不对、发不出去会不会丢、发成功了会不会重发、
+    两个通道（企微群 / 智能表格）各记各的账。
     """
     from src import report
 
     print("\n[回传] 一次运行一条 + 发件箱（发出去才划掉）")
     usage.read_events = _REAL_READ_EVENTS
     tmp = Path(tempfile.mkdtemp(prefix="usage-outbox-"))
-    o_local, o_outbox, o_post = usage.local_path, report.outbox_path, report._post
+    o_local, o_outbox = usage.local_path, report.outbox_path
+    o_post, o_pj, o_sheet = report._post, report._post_json, report.sheet_webhook_url
     usage.local_path = lambda: tmp / "usage.jsonl"
     report.outbox_path = lambda: tmp / "outbox.jsonl"
+    report.sheet_webhook_url = lambda s: ""          # 默认只测群通道，别打到真表上
     S = {"usage": {"webhook_url": "https://example.invalid/hook"}}
     try:
         row = usage.record(
@@ -586,29 +589,29 @@ def test_outbox():
         # ⚠ 机器秒是净时长：700 − 88。混成一个数就再也分不开「机器在跑」和「人在看」
         check("机器秒扣掉了等人确认的时间", d["机器秒"] == 612 and d["等人秒"] == 88, str(d))
         check("失败明细带上了", d.get("失败明细") == {"selector_miss": 1}, str(d))
+        check("标了来源是实时", d.get("来源") == "实时", str(d))
         check("一条消息不会超企微上限",
               len(json.dumps(d, ensure_ascii=False).encode("utf-8")) < 1800)
 
         report.enqueue(S, row)
         check("进了发件箱", report.pending(S) == 1)
 
-        # 发不出去：必须原样留着
         sent = []
+
         def boom(url, text):
             raise RuntimeError("内网抽风")
+
         report._post = boom
         res = report.push(S)
         check("发失败时如实回报", res["sent"] == 0 and res["failed"] == 1)
         check("发失败不丢数据，下次还在", report.pending(S) == 1)
 
-        # 再攒两条，一次补发；且只发一次
         usage.record(S, "run_finished", run_id="r2", form="DMP延期", mode="dry",
                      total=3, ok=3, seconds=30.0, wait_seconds=0)
         report.enqueue(S, usage.record(S, "run_finished", run_id="r3", form="预定会议室",
                                        mode="auto", total=1, ok=0, failed=1,
                                        seconds=600.0, wait_seconds=0))
-        check("空跑那条没有被入队（record 的返回值没交给 enqueue 就不入队）",
-              report.pending(S) == 2)
+        check("没交给 enqueue 的那条不会自己进队", report.pending(S) == 2)
 
         report._post = lambda url, text: sent.append(text) or True
         res = report.push(S)
@@ -623,12 +626,95 @@ def test_outbox():
         report.push(S)
         check("没东西可发时不发空消息", len(sent) == 1)
 
-        # 不能挡业务
         report.outbox_path = lambda: Path("Z:/根本不存在的盘/outbox.jsonl")
         report.enqueue(S, row)                 # 不能抛
         check("发件箱写不进去也不抛异常", True)
     finally:
-        usage.local_path, report.outbox_path, report._post = o_local, o_outbox, o_post
+        usage.local_path, report.outbox_path = o_local, o_outbox
+        report._post, report._post_json, report.sheet_webhook_url = o_post, o_pj, o_sheet
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_sheet_channel():
+    """智能表格通道：报文格式、两个通道各记各的账、补历史只做一次。"""
+    from src import report
+
+    print("\n[回传·表格] 字段 ID / 毫秒时间戳 / 两个通道各记各的账")
+    usage.read_events = _REAL_READ_EVENTS
+    tmp = Path(tempfile.mkdtemp(prefix="usage-sheet-"))
+    o_local, o_outbox = usage.local_path, report.outbox_path
+    o_post, o_pj, o_sheet = report._post, report._post_json, report.sheet_webhook_url
+    o_userpath = report.user_path
+    usage.local_path = lambda: tmp / "usage.jsonl"
+    report.outbox_path = lambda: tmp / "outbox.jsonl"
+    report.user_path = lambda *a: tmp / a[-1]         # 补历史的标记文件也落到 tmp
+    report.sheet_webhook_url = lambda s: "https://example.invalid/sheet"
+    S = {"usage": {"webhook_url": "https://example.invalid/hook"}}
+    try:
+        row = usage.record(S, "run_finished", run_id="r1", form="常规商广", mode="auto",
+                           scope="unit", total=14, ok=8, failed=1, skipped=5,
+                           seconds=700.0, wait_seconds=88.0)
+        body = report._sheet_body([report.run_payload(row)])
+        vals = body["add_records"][0]["values"]
+        F = report.SHEET_FIELDS
+        # ⚠ 表格 webhook 按**字段 ID** 取键，不是字段名 —— 这是它和 CLI 最容易混的一处
+        check("values 的 key 是字段 ID 不是字段名",
+              F["配置类型"] in vals and "配置类型" not in vals, str(list(vals)[:4]))
+        check("类型/条数都映射对了",
+              vals[F["配置类型"]] == "常规商广" and vals[F["成"]] == 8
+              and vals[F["机器秒"]] == 612, str(vals))
+        # ⚠ 表格的日期只认毫秒时间戳字符串，CLI 那套可读日期串在这儿写不进去
+        check("时间是毫秒时间戳字符串",
+              vals[F["时间"]].isdigit() and len(vals[F["时间"]]) == 13, vals[F["时间"]])
+        check("表里没有的字段直接丢掉，不是报错",
+              all(k in F.values() for k in vals), str(list(vals)))
+
+        # 表格通 / 群不通：下次只补群，表格不能重发（重发会在表里多一行）
+        report.enqueue(S, row)
+        posts = {"sheet": 0, "group": 0}
+
+        def ok_json(url, body, timeout=None):
+            posts["sheet"] += 1
+            return {"errcode": 0}
+
+        def bad_post(url, text):
+            posts["group"] += 1
+            raise RuntimeError("群不通")
+
+        report._post_json, report._post = ok_json, bad_post
+        report.push(S)
+        check("表格发成功了，但整条还留着（群还没发出去）", report.pending(S) == 1)
+
+        report._post = lambda url, text: True
+        report.push(S)
+        check("补发只补群，表格不重发", posts["sheet"] == 1, f"表格被打了 {posts['sheet']} 次")
+        check("两个通道都成了才划掉", report.pending(S) == 0)
+
+        # 补历史：只做一次
+        report._post_json = lambda url, body, timeout=None: {"errcode": 0}
+        n1 = report.backfill(S)
+        n2 = report.backfill(S)
+        check("补历史把本机的历史运行捞出来了", n1 >= 1, f"补了 {n1} 条")
+        check("补历史只做一次", n2 == 0, f"第二次又补了 {n2} 条")
+        left = report._read_outbox()
+        check("补出来的标了来源",
+              bool(left) and all(e["d"].get("来源") == "补历史" for e in left), str(left[:1]))
+
+        # 老埋点没有 run_id 时，凑一个稳定的
+        old = {"uid": "abc", "ts": "2026-08-01T10:00:00+08:00", "form": "X"}
+        check("老埋点没 run_id 也能凑出稳定的一个",
+              report._legacy_run_id(old) == report._legacy_run_id(dict(old)))
+
+        # 1.1.14 的裸 payload 也要认
+        (tmp / "outbox.jsonl").write_text(
+            json.dumps({"v": 2, "run": "old1", "类型": "X"}, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+        e = report._read_outbox()
+        check("1.1.14 那种裸 payload 也认得出来",
+              len(e) == 1 and e[0]["d"].get("run") == "old1" and e[0]["s"] == [], str(e))
+    finally:
+        usage.local_path, report.outbox_path, report.user_path = o_local, o_outbox, o_userpath
+        report._post, report._post_json, report.sheet_webhook_url = o_post, o_pj, o_sheet
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -641,7 +727,7 @@ def main():
                test_percentiles, test_status_alias, test_write_and_switch,
                test_share_dedupe, test_broken_file, test_report_roundtrip, test_saving,
                test_week_key_normalize, test_webhook_payload, test_webhook_migration,
-               test_report_header_mismatch, test_outbox):
+               test_report_header_mismatch, test_outbox, test_sheet_channel):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

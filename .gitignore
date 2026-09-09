@@ -43,3 +43,7 @@ tools/.mcp_key
 
 # 打包时从 config/settings.yaml 拷过去的默认值副本，见 src/settings.py
 assets/settings.default.yaml
+
+# 智能表格回传地址：打包时由 tools/inject_release_config.py 从 USAGE_SHEET_WEBHOOK_URL 生成。
+# 和 config/webhook.txt 不同，这个不提交 —— 它能往统计表里写行（只能写那一张表）。
+config/sheet_webhook.txt
