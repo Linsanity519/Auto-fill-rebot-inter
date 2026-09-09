@@ -607,10 +607,10 @@ class Api:
         """
         try:
             from . import report
-            names = [f["name"] for f in self.list_forms()]
             return {
                 "on": report.enabled(self.settings),
-                "pending": usage.pending_weeks(self.settings, names),
+                # 还有几**次运行**没发出去（1.1.14 前这里是「几周」，见 report.py 文件头）
+                "pending": report.pending(self.settings),
                 # 团队那份是随包分发的快照，不是本机同步来的，这里给的是快照的日期
                 "snapshot_at": (usage.load_team() or {}).get("synced_at", ""),
                 "error": self._sync_error,
@@ -1481,7 +1481,7 @@ class Api:
         """一次运行落一条埋点。⚠ 只记数量和状态，业务内容一个字都不带 ——
         这份文件是要汇总给所有人看的，理由见 src/usage.py 开头。"""
         counts = usage.count_status(self.last_results)
-        usage.record(
+        row = usage.record(
             self.settings, "run_finished",
             run_id=run_id, retry_of=retry_of,
             form=self.form_name, mode=mode, scope=self.scope,
@@ -1499,17 +1499,24 @@ class Api:
             # 单条耗时分位数：区分「整体慢」和「个别卡死」
             **usage.percentiles(self.ui.item_seconds if self.ui else []),
         )
+        # 同一条东西进发件箱等着回传（回传发的就是「这一次运行是什么」）。
+        # ⚠ 先落盘、后发送：跑完那一下人常常直接叉掉窗口，后台线程跟着没了。
+        try:
+            from . import report
+            report.enqueue(self.settings, row)
+        except Exception:
+            log.warning("回传入队失败（不影响运行）", exc_info=True)
 
     def _sync_sheet_async(self, quiet: bool = False):
-        """把自己欠着的那几周发到统计群。跑完一轮之后、启动时各调一次。
+        """把发件箱里还没发出去的运行发到统计群。跑完一轮之后、启动时各调一次。
 
         ⚠ 2026-08-21 换了通道：原来是开浏览器操作企微文档（十几秒、要登录态、
           页面结构一变就废），现在是一个 urllib POST，几百毫秒，前端完全无感知。
           原委见 src/report.py 的文件头。
         ⚠ 仍然放后台线程：内网偶尔抽风，三秒超时也不该挡着界面上「跑完了」的提示。
         ⚠ 不吞掉失败的**事实**：异常不往上抛（统计不能挡业务），但要记进
-          self._sync_error，首页会显示「还有 N 周没上报」。欠着的周不会丢 ——
-          usage.report_rows 按差异补报，下次连上就全补齐。
+          self._sync_error，首页会显示「还有 N 次运行没上报」。欠着的不会丢 ——
+          发件箱里发成功才划掉，下次连上就全补齐。
         """
         from . import report
         if not report.enabled(self.settings):
@@ -1520,9 +1527,7 @@ class Api:
         def work():
             self._syncing = True
             try:
-                names = [f["name"] for f in self.list_forms()]
-                res = report.push(self.settings, names,
-                                  (self.settings.get("usage") or {}).get("nickname") or "")
+                res = report.push(self.settings)
                 self._sync_error = res.get("error") or ""
                 if res.get("sent"):
                     log.info("统计已上报 %d 周", res["sent"])
@@ -1550,8 +1555,7 @@ class Api:
             from . import report
             if not report.enabled(self.settings):
                 return
-            names = [f["name"] for f in self.list_forms()]
-            if not usage.pending_weeks(self.settings, names):
+            if not report.pending(self.settings):
                 return
             self._sync_sheet_async(quiet=True)
         except Exception:

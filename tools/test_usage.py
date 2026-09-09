@@ -555,6 +555,83 @@ def test_report_header_mismatch():
           usage.parse_report([["时间", "谁", "干了啥"], ["x", "y", "z"]], FORMS) == {})
 
 
+# ============================================================ 回传：一次运行一条
+def test_outbox():
+    """1.1.14 起回传发的是「这一次运行」，不是「这一周的累计」。
+
+    这一段盯死三件事：发的内容对不对、发不出去会不会丢、发成功了会不会重发。
+    """
+    from src import report
+
+    print("\n[回传] 一次运行一条 + 发件箱（发出去才划掉）")
+    usage.read_events = _REAL_READ_EVENTS
+    tmp = Path(tempfile.mkdtemp(prefix="usage-outbox-"))
+    o_local, o_outbox, o_post = usage.local_path, report.outbox_path, report._post
+    usage.local_path = lambda: tmp / "usage.jsonl"
+    report.outbox_path = lambda: tmp / "outbox.jsonl"
+    S = {"usage": {"webhook_url": "https://example.invalid/hook"}}
+    try:
+        row = usage.record(
+            S, "run_finished", run_id="r1", form="常规商广", mode="auto", scope="unit",
+            total=14, ok=8, failed=1, skipped=5, seconds=700.0, wait_seconds=88.0,
+            fail_kinds={"selector_miss": 1})
+        check("record 会把落盘那一行还回来", isinstance(row, dict) and row.get("run_id") == "r1")
+
+        d = report.run_payload(row)
+        check("发的是这一次运行，不是累计",
+              d["run"] == "r1" and d["类型"] == "常规商广" and d["总"] == 14
+              and d["成"] == 8 and d["败"] == 1 and d["跳"] == 5, str(d))
+        check("时间 / 版本 / 模式都在",
+              bool(d["时间"]) and bool(d["版本"]) and d["模式"] == "全自动", str(d))
+        # ⚠ 机器秒是净时长：700 − 88。混成一个数就再也分不开「机器在跑」和「人在看」
+        check("机器秒扣掉了等人确认的时间", d["机器秒"] == 612 and d["等人秒"] == 88, str(d))
+        check("失败明细带上了", d.get("失败明细") == {"selector_miss": 1}, str(d))
+        check("一条消息不会超企微上限",
+              len(json.dumps(d, ensure_ascii=False).encode("utf-8")) < 1800)
+
+        report.enqueue(S, row)
+        check("进了发件箱", report.pending(S) == 1)
+
+        # 发不出去：必须原样留着
+        sent = []
+        def boom(url, text):
+            raise RuntimeError("内网抽风")
+        report._post = boom
+        res = report.push(S)
+        check("发失败时如实回报", res["sent"] == 0 and res["failed"] == 1)
+        check("发失败不丢数据，下次还在", report.pending(S) == 1)
+
+        # 再攒两条，一次补发；且只发一次
+        usage.record(S, "run_finished", run_id="r2", form="DMP延期", mode="dry",
+                     total=3, ok=3, seconds=30.0, wait_seconds=0)
+        report.enqueue(S, usage.record(S, "run_finished", run_id="r3", form="预定会议室",
+                                       mode="auto", total=1, ok=0, failed=1,
+                                       seconds=600.0, wait_seconds=0))
+        check("空跑那条没有被入队（record 的返回值没交给 enqueue 就不入队）",
+              report.pending(S) == 2)
+
+        report._post = lambda url, text: sent.append(text) or True
+        res = report.push(S)
+        check("连上之后一次补齐", res["sent"] == 2 and res["failed"] == 0, str(res))
+        check("补发是打包发的，不是一条一个消息刷屏", len(sent) == 1, f"发了 {len(sent)} 条消息")
+        check("发成功就划掉了", report.pending(S) == 0)
+        got = json.loads(sent[0])
+        check("打包发出去的是个数组", isinstance(got, list) and len(got) == 2)
+        check("run 都带着（收集端按它去重）",
+              {x["run"] for x in got} == {"r1", "r3"}, str([x["run"] for x in got]))
+
+        report.push(S)
+        check("没东西可发时不发空消息", len(sent) == 1)
+
+        # 不能挡业务
+        report.outbox_path = lambda: Path("Z:/根本不存在的盘/outbox.jsonl")
+        report.enqueue(S, row)                 # 不能抛
+        check("发件箱写不进去也不抛异常", True)
+    finally:
+        usage.local_path, report.outbox_path, report._post = o_local, o_outbox, o_post
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     print("=" * 56)
     print("埋点 / 统计口径 场景测试")
@@ -564,7 +641,7 @@ def main():
                test_percentiles, test_status_alias, test_write_and_switch,
                test_share_dedupe, test_broken_file, test_report_roundtrip, test_saving,
                test_week_key_normalize, test_webhook_payload, test_webhook_migration,
-               test_report_header_mismatch):
+               test_report_header_mismatch, test_outbox):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

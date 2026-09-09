@@ -15,11 +15,24 @@
 
 三条铁律照旧（见 src/usage.py 开头）：只发条数和耗时、身份只有匿名指纹、
 **回传绝不能挡业务**（这里任何异常都只写日志，不往上抛）。
+
+发什么（1.1.14 改的，别改回去）：**一次运行一条消息**，内容就是这一次运行本身 ——
+什么时候跑的、什么版本、哪个配置类型、什么模式、几条、机器花了多久。
+在这之前发的是「本机某一周的累计快照」，于是：
+  · 想知道刚才那轮干了什么，只能拿两条消息相减；
+  · 每轮的类型/模式/耗时/时刻全被压掉了（埋点文件里明明都有）；
+  · 一轮全跳过或空跑，因为「数字没变」压根不发 —— 而那正是最该查的那种。
+累计是**收集端**该干的活，不是本机该发的东西。
+
+代价是：增量消息丢一条就永久少一条（累计消息天然幂等，丢了下一条自带全部历史）。
+所以配一个发件箱（output/usage-outbox.jsonl）：跑完先落盘，发出去才划掉，
+失败留着下次补。每条带 run（运行 id），收集端按它去重 —— 所以宁可多发一次。
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
@@ -30,6 +43,8 @@ log = logging.getLogger(__name__)
 
 TIMEOUT = 3          # 内网偶尔抽风，三秒不通就算了，下次再补
 MAX_BYTES = 1800     # 企微 text 消息上限 2048 字节，留点余量
+OUTBOX_FILE = "usage-outbox.jsonl"    # 还没发出去的运行，一行一条
+OUTBOX_MAX = 500     # 发件箱最多留这么多条。长期连不上网时别让它无限涨
 
 # ── 存量迁移：换群时把旧 key 挂到这里 ──────────────────────────────
 # config/webhook.txt 不在 300KB 代码包的更新范围内（见 tools/updater.py 的
@@ -214,42 +229,171 @@ def send_feedback(settings: dict, text: str) -> bool:
         return False
 
 
-def push(settings: dict, form_names, nickname: str = "") -> dict:
-    """把「还没成功发出去的那几周」发一遍，返回 {sent, failed, error}。
+# ── 一次运行一条：发件箱 ──────────────────────────────────────────
+MODE_TEXT = {"dry": "空跑", "step": "逐条确认", "sample": "抽样确认", "auto": "全自动"}
 
-    ⚠ 只有真发出去了才记账（usage.mark_reported）。记早了就会把失败的周
-      当成已上报、下次不再补 —— 那正是老方案静默丢数据的成因。
-    ⚠ 一周一条，分开发：其中一条失败不连累其它周。
+
+def outbox_path():
+    return user_path("output", OUTBOX_FILE)
+
+
+def run_payload(row: dict) -> dict:
+    """把一条 run_finished 埋点，变成要发出去的那个 JSON。
+
+    ⚠ 这里**只挑**要发的字段，不是把埋点整行发出去 —— 埋点里以后可能加别的东西，
+      发出去的内容必须是这一处说了算的（三条铁律见文件头）。
+    ⚠ 「机器秒」是净时长（墙钟 − 等人点确认），「等人秒」单独给：逐条确认模式下
+      人就坐在旁边，那段时间不能算机器代劳。两个混成一个数就再也分不开了。
     """
     from . import usage
 
+    row = row or {}
+    ts = str(row.get("ts") or "")
+    out = {
+        "v": 2,
+        "run": row.get("run_id", ""),
+        "指纹": row.get("uid", ""),
+        "版本": row.get("ver", ""),
+        "时间": ts[:19].replace("T", " "),
+        "类型": row.get("form") or "(未知)",
+        "模式": MODE_TEXT.get(str(row.get("mode") or ""), str(row.get("mode") or "")),
+        "总": _int(row.get("total")),
+        "成": _int(row.get("ok")),
+        "败": _int(row.get("failed")),
+        "跳": _int(row.get("skipped")),
+        "机器秒": int(round(usage._net_seconds(row))),
+        "等人秒": _int(row.get("wait_seconds")),
+    }
+    if row.get("scope"):
+        out["范围"] = str(row["scope"])
+    if row.get("retry_of"):
+        out["重跑"] = str(row["retry_of"])
+    if row.get("stopped"):
+        out["中途停止"] = True
+    # 失败明细：定长枚举（selector_miss / page_rejected…）+ 字段 label，无业务值。
+    # 有就带上，没有不占位 —— 一条消息里多一个空对象就是多一分噪音。
+    if row.get("fail_kinds"):
+        out["失败明细"] = row["fail_kinds"]
+    if row.get("fail_fields"):
+        out["失败字段"] = row["fail_fields"]
+    return out
+
+
+def _int(v) -> int:
+    try:
+        return int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def enqueue(settings: dict, row: dict) -> bool:
+    """把一次运行放进发件箱。发送是另一回事（push），这里只负责别丢。
+
+    ⚠ 先落盘再发，不是先发再落盘：跑完那一下人常常直接叉掉窗口，
+      后台线程跟着没了 —— 落了盘的下次开机会补上，没落盘的就真没了。
+    """
+    if not enabled(settings) or not row or row.get("event") != "run_finished":
+        return False
+    try:
+        p = outbox_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(run_payload(row), ensure_ascii=False) + "\n")
+        return True
+    except Exception:
+        log.warning("回传发件箱写不进去（这一次运行的统计会丢）", exc_info=True)
+        return False
+
+
+def _read_outbox() -> list[dict]:
+    out = []
+    try:
+        p = outbox_path()
+        if not p.exists():
+            return out
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue          # 半行/乱码，跳过就是了
+            if isinstance(d, dict):
+                out.append(d)
+    except OSError:
+        log.warning("回传发件箱读不了", exc_info=True)
+    return out[-OUTBOX_MAX:]
+
+
+def _write_outbox(rows: list[dict]):
+    try:
+        p = outbox_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n"
+                               for r in rows[-OUTBOX_MAX:]), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        log.warning("回传发件箱写不回去（下次会重发，不丢数据）", exc_info=True)
+
+
+def pending(settings: dict) -> int:
+    """还有几次运行没发出去。首页拿它提醒人 —— 静默失败是最难发现的那种坏。"""
+    if not enabled(settings):
+        return 0
+    try:
+        return len(_read_outbox())
+    except Exception:
+        return 0
+
+
+def _batches(rows: list[dict]) -> list[list[dict]]:
+    """把待发的按字节数打包。一条一条发的话，攒了几十条时会把群刷屏、
+    还可能撞上群机器人的频率限制。"""
+    out, cur = [], []
+    for r in rows:
+        cand = cur + [r]
+        text = json.dumps(cand[0] if len(cand) == 1 else cand, ensure_ascii=False)
+        if cur and len(text.encode("utf-8")) > MAX_BYTES:
+            out.append(cur)
+            cur = [r]
+        else:
+            cur = cand
+    if cur:
+        out.append(cur)
+    return out
+
+
+def push(settings: dict, form_names=None, nickname: str = "") -> dict:
+    """把发件箱里还没发出去的运行发掉，返回 {sent, failed, error}。
+
+    ⚠ 发成功的才划掉。划早了就等于把失败的那几条当成已上报、下次不再补 ——
+      那正是老方案静默丢数据的成因。
+    ⚠ 一批里有一条失败就整批留着下次重发：收集端按 run 去重，重发无害。
+    form_names / nickname 是老签名留下的，现在用不上（回传里不带花名，
+    分类型由收集端按「类型」自己聚）。
+    """
     url = webhook_url(settings)
     if not url:
         return {"sent": 0, "failed": 0, "error": "没配 usage.webhook_url"}
 
-    header = usage.report_header(form_names)
-    rows = usage.report_rows(settings, form_names, nickname=nickname)
+    rows = _read_outbox()
     if not rows:
         return {"sent": 0, "failed": 0, "error": ""}
 
-    fails = usage.weekly_fail_summary(settings)      # {周: {fail_kinds, fail_fields}}
-    runs = usage.weekly_form_runs(settings)          # {周: {配置类型: 跑了几次}}
-
-    ok, bad, first_err = [], 0, ""
-    for row in rows:
-        line = json.dumps(
-            _payload(header, row, form_names, fails.get(str(row[0])),
-                     runs.get(str(row[0]))),
-            ensure_ascii=False)
+    left, sent, bad, first_err = [], 0, 0, ""
+    for batch in _batches(rows):
+        body = batch[0] if len(batch) == 1 else batch
         try:
-            _post(url, line)
-            ok.append(row)
+            _post(url, json.dumps(body, ensure_ascii=False))
+            sent += len(batch)
         except Exception as e:
-            bad += 1
+            bad += len(batch)
             first_err = first_err or str(e)
-            log.warning("第 %s 周上报失败（下次会补）", row[0], exc_info=True)
-
-    if ok:
-        usage.mark_reported(ok)
-        log.info("统计已上报 %d 周（%s）", len(ok), "、".join(r[0] for r in ok))
-    return {"sent": len(ok), "failed": bad, "error": first_err}
+            left.extend(batch)
+            log.warning("回传失败，%d 条留着下次补", len(batch), exc_info=True)
+    _write_outbox(left)
+    if sent:
+        log.info("回传已发 %d 次运行", sent)
+    return {"sent": sent, "failed": bad, "error": first_err}

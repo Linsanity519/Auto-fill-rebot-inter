@@ -136,7 +136,14 @@ def extract(text: str) -> list[dict]:
             continue
         try:
             d = json.loads(text[start:end])
-            if isinstance(d, dict) and d.get("指纹") and _week(d):
+            # ⚠ v2 = 1.1.14 起的「一次运行一条」消息（见 src/report.py 文件头）。
+            #   这个收集端还是按「每人每周一行」聚的，认不了它 —— 明着跳过，
+            #   别让它掉进下面那句凭「指纹」认的口子里，攒出一堆周为空的脏行。
+            #   ⚠ 单次运行的数据现在只在群里、没有进 team.json，
+            #     等按 run 聚合那套做好了再接上（那是数据统计侧的事）。
+            if isinstance(d, dict) and _num(d.get("v")) >= 2:
+                pass
+            elif isinstance(d, dict) and d.get("指纹") and _week(d):
                 out.append(d)
         except json.JSONDecodeError:
             pass

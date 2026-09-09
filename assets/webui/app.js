@@ -2009,7 +2009,7 @@
     if (rep.pending) {
       const warn = el("div", "home-foot");
       warn.style.cssText = "padding:0;color:var(--bad)";
-      warn.textContent = `还有 ${rep.pending} 周的使用统计没回传成功`
+      warn.textContent = `还有 ${rep.pending} 次运行的使用统计没回传成功`
         + (rep.error ? `（${rep.error}）` : "")
         + "。数据没丢，都在本机记着，下次开程序会自动补 —— 一直是这句话就找开发看看。";
       wrap.appendChild(warn);

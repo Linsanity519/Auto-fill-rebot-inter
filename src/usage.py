@@ -82,9 +82,14 @@ def local_path() -> Path:
 
 
 def record(settings: dict, event: str, **fields):
-    """落一条事件。任何异常都吞掉——统计不能挡业务。"""
+    """落一条事件，并把落下去的那一行返回给调用方。
+
+    ⚠ 返回值是给回传用的（见 src/report.py 的 enqueue）：回传发的就是「这一次
+      运行是什么」，和这里写进文件的是同一份东西，不要各拼一遍。
+    任何异常都吞掉 —— 统计不能挡业务，返回 None。
+    """
     if not enabled(settings):
-        return
+        return None
     try:
         row = {
             "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -101,9 +106,10 @@ def record(settings: dict, event: str, **fields):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:
         log.warning("埋点写入失败（不影响运行）", exc_info=True)
-        return
+        return None
 
     _sync_async(settings)
+    return row
 
 
 # 六个 Runner 各写各的结果字典，但「状态」这一列的字面值就这几种。
@@ -806,6 +812,10 @@ def weekly_fail_summary(settings: dict) -> dict:
 def report_rows(settings: dict, form_names, nickname: str = "",
                 only_changed: bool = True) -> list:
     """把本机的统计压成「每周一行」，返回**还没成功写进表格的那些周**。
+
+    ⚠ 1.1.14 起这**不再是回传通道** —— 回传改成「一次运行发一条」（见 src/report.py）。
+      这一套留着是因为它还是「把本机历史压成周表」的唯一实现（重建整张表、
+      以后做对账都用得上），但没有任何代码在发它了。
 
     ⚠ 2026-08-21 改成「按差异补报全部历史」，原来是「只报本周和上周」。
       原因：实测有人用过一天、数据没进表。只报最近两周的话，凡是上报失败
