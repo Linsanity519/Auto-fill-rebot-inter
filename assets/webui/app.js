@@ -39,7 +39,7 @@
     {"name": "常规资源位批量开关", "mode": "dl_toggle", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": true, "flow": false, "health": true, "reversible": false, "levels": true, "activity_id": true, "strategy_scope": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "逗号分隔，子串命中单元名称；留空 = 这个活动下所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "活动ID 留空也行 —— 只要范围选「按清单」、填的是纯数字ID，就一个ID查一次列表、查到就点。点的是「更多」里的启动投放 / 暂停投放，每条都有一次二次确认（工具会自己核对弹窗文字再确认）。已是目标状态的自动跳过；「未开始 / 已完成 / 已终止」这三种状态后台没给开关，也跳过。「终止投放」不可逆，工具永远不点。层级=创意时，因为创意表没有活动ID，会先去单元表按活动ID查出活动名称和单元清单，再回创意表筛", "toggle_title": "批量开关", "toggle_subtitle": "把一个活动下的单元 / 创意，批量启动 或 暂停投放", "dir_on_label": "开启", "dir_off_label": "关闭", "dir_on_hint": "把已暂停的重新投起来", "dir_off_hint": "把投放中的暂停掉", "level_label": "层级", "activity_label": "活动ID", "activity_placeholder": "一次只跑一个活动；留空 = 按下面的 ID 清单逐个查", "list_placeholder": "一行一个 ID 或名称：纯数字按 ID 精确匹配，其余当名称子串；活动ID 留空时只认纯数字 ID", "ledger_hint": "挑的是本工具反方向动过的那批：现在方向=开启，就找上次被本工具暂停的；日期留空 = 不限", "ledger_empty": "还没有记录 —— 用这个工具暂停 / 启动过一批之后，这里会列出那几批，方便反着来一次"}, "group": "大会员资源位", "group_order": 4, "label": "常规资源位批量开关", "order": 2, "desc": "大会员投放系统 - 把一个活动下的单元 / 创意批量启动 或 暂停投放", "scopes": [["按名称关键词", "keyword"], ["按清单", "list"], ["本工具操作过的", "ledger"]], "levels": [["单元", "unit"], ["创意", "creative"]]},
     {"name": "原生商广新", "mode": "ad_v2", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false, "levels": false, "activity_id": false, "strategy_scope": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "", "toggle_title": "批量开关", "toggle_subtitle": "把已配好的行批量开 / 关", "dir_on_label": "开启", "dir_off_label": "关闭", "dir_on_hint": "把还没开的行开起来", "dir_off_hint": "把已开启的行关掉", "level_label": "层级", "activity_label": "活动ID", "activity_placeholder": "只跑这个活动下的行", "list_placeholder": "一行一个名称，从别处粘过来即可", "ledger_hint": "", "ledger_empty": "还没有记录 —— 本工具跑过一轮之后，这里会列出它动过哪些"}, "group": "商业化广告", "group_order": 5, "label": "原生商广新", "order": 1, "desc": "三连竞价推广(auto-v2) - 一次建一个项目，Excel 的 avid/标题/封面汇进素材池", "scopes": [], "levels": []},
     {"name": "原生商广", "mode": "ad_native", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false, "levels": false, "activity_id": false, "strategy_scope": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "", "toggle_title": "批量开关", "toggle_subtitle": "把已配好的行批量开 / 关", "dir_on_label": "开启", "dir_off_label": "关闭", "dir_on_hint": "把还没开的行开起来", "dir_off_hint": "把已开启的行关掉", "level_label": "层级", "activity_label": "活动ID", "activity_placeholder": "只跑这个活动下的行", "list_placeholder": "一行一个名称，从别处粘过来即可", "ledger_hint": "", "ledger_empty": "还没有记录 —— 本工具跑过一轮之后，这里会列出它动过哪些"}, "group": "商业化广告", "group_order": 5, "label": "原生商广老", "order": 2, "desc": "商广投放系统 - 一个内容一个单元，每单元最多 10 条创意", "scopes": [], "levels": []},
-    {"name": "常规商广", "mode": "ad_regular", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": true, "toggle": false, "flow": false, "health": true, "reversible": false, "levels": false, "activity_id": false, "strategy_scope": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "填准备参数 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "", "toggle_title": "批量开关", "toggle_subtitle": "把已配好的行批量开 / 关", "dir_on_label": "开启", "dir_off_label": "关闭", "dir_on_hint": "把还没开的行开起来", "dir_off_hint": "把已开启的行关掉", "level_label": "层级", "activity_label": "活动ID", "activity_placeholder": "只跑这个活动下的行", "list_placeholder": "一行一个名称，从别处粘过来即可", "ledger_hint": "", "ledger_empty": "还没有记录 —— 本工具跑过一轮之后，这里会列出它动过哪些"}, "group": "商业化广告", "group_order": 5, "label": "常规商广", "order": 3, "desc": "常规商广投放 - 三层商广，每 10 个视频一个单元，视频取自「我的视频」", "scopes": [], "levels": []},
+    {"name": "常规商广", "mode": "ad_regular", "caps": {"strategy": false, "prep": true, "positions": false, "activity": false, "task_list": false, "excel": false, "toggle": false, "flow": false, "health": true, "reversible": false, "levels": false, "activity_id": false, "strategy_scope": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "填准备参数（含素材文案）→ 载入并检查 → 跑，不用 Excel", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "fill", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "", "toggle_title": "批量开关", "toggle_subtitle": "把已配好的行批量开 / 关", "dir_on_label": "开启", "dir_off_label": "关闭", "dir_on_hint": "把还没开的行开起来", "dir_off_hint": "把已开启的行关掉", "level_label": "层级", "activity_label": "活动ID", "activity_placeholder": "只跑这个活动下的行", "list_placeholder": "一行一个名称，从别处粘过来即可", "ledger_hint": "", "ledger_empty": "还没有记录 —— 本工具跑过一轮之后，这里会列出它动过哪些"}, "group": "商业化广告", "group_order": 5, "label": "常规商广", "order": 3, "desc": "常规商广投放 - 三层商广，每 10 个视频一个单元，视频取自「我的视频」", "scopes": [], "levels": []},
     {"name": "预定会议室", "mode": "meeting_reserve", "caps": {"strategy": false, "prep": false, "positions": false, "activity": false, "task_list": true, "excel": false, "toggle": false, "flow": false, "health": false, "reversible": false, "levels": false, "activity_id": false, "strategy_scope": false}, "ui": {"deliver_label": "投放配置", "deliver_hint": "配好策略 → 生成模板 → 填好 Excel → 载入并检查 → 跑", "strategy_hint": "配在这里的字段，模板里就不用逐个单元填了", "run_kind": "grab", "params_label": "名称关键词", "params_placeholder": "一行一个关键词，命中即算。留空 = 整页所有行", "strategy_label": "策略", "strategy_placeholder": "留空 = 当前打开的策略页。跨策略：一行一个，编辑页URL / 路由ID / 业务ID", "toggle_hint": "", "toggle_title": "批量开关", "toggle_subtitle": "把已配好的行批量开 / 关", "dir_on_label": "开启", "dir_off_label": "关闭", "dir_on_hint": "把还没开的行开起来", "dir_off_hint": "把已开启的行关掉", "level_label": "层级", "activity_label": "活动ID", "activity_placeholder": "只跑这个活动下的行", "list_placeholder": "一行一个名称，从别处粘过来即可", "ledger_hint": "", "ledger_empty": "还没有记录 —— 本工具跑过一轮之后，这里会列出它动过哪些"}, "group": "日常办公", "group_order": 6, "label": "预定会议室", "order": 1, "desc": "哔哩哔哩行政管理平台 - 掐着开放时刻抢会议室", "scopes": [], "levels": []},
   ];
 
@@ -117,8 +117,17 @@
       { name: "投放起止时间", type: "text", when: ["投放时间", "设置起止时间"] },
       { name: "指定人群", type: "text" },
       { name: "排除人群", type: "text" },
+      // ⚠ 这几项是常规商广的（textarea / number），放这儿是为了让普通浏览器也能
+      //   走到 prepControl 的每一条分支。textarea 那条分支就是靠肉眼在开发机上
+      //   核对不出来才出的事：代码被插进了 renderPrepFields，语法合法、
+      //   node --check 全过，一进界面就 ReferenceError 卡在「读取中…」。
+      { name: "视频数量", type: "number", required: true },
+      { name: "素材标题", type: "textarea", required: true, ph: "一行一条，最多 6 条" },
+      { name: "素材描述", type: "text", required: true, ph: "2~10 字" },
+      { name: "落地页", type: "text", required: true, ph: "https:// 开头" },
     ],
-    values: { 转化目标: "表单提交", 出价: "200", 投放时间: "设置起止时间" },
+    values: { 转化目标: "表单提交", 出价: "200", 投放时间: "设置起止时间",
+              视频数量: "150", 素材标题: "大会员年卡低至6折\n大会员×百度网盘季卡" },
     grouping: {},
   };
 
@@ -203,7 +212,9 @@
     if (name === "flow_start_record" || name === "flow_stop_record") return Promise.resolve({ ok: true, flow: { name: args[0], status: "draft", steps: [], data: {} }, issues: [] });
     if (name === "flow_record_status") return Promise.resolve({ running: false, done: true, steps: 0 });
     if (name === "flow_submit") return Promise.resolve({ ok: true, where: "wecom", url: "" });
-    if (name === "prep_save") return Promise.resolve({ ok: true, values: {}, issues: [] });
+    // ⚠ 回显 args[1]，别返回 {} —— 真实后端回的是存下来的值，返回空会把浏览器里
+    //   刚填的准备参数清掉（syncPrep 每次载入检查都会调它）
+    if (name === "prep_save") return Promise.resolve({ ok: true, values: args[1] || {}, issues: [] });
     if (name === "strategy_get") return Promise.resolve({ ok: true, path: "config/strategies/…json", doc: STUB_STRATEGY });
     // ⚠ 统计的样子货只在网址带 ?demo 时给。别的样子货最多让界面长得不对，
     //   这一份不一样 —— 它会变成首页上一串**看起来像真的**的数字。
@@ -2069,7 +2080,7 @@
       renderPrepFields();
     });
 
-    $("#btnSavePrep").onclick = savePrep;
+    $("#btnSavePrep").onclick = () => savePrep(false);
   }
 
   function renderPrepFields() {
@@ -2170,6 +2181,17 @@
       return wrap;
     }
 
+    // 多行文本：一个单元格里换行写多条（常规商广的「素材标题」最多 6 条）
+    if (kind === "textarea") {
+      const ta = el("textarea", "field-multi");
+      ta.value = cur;
+      ta.placeholder = f.ph || "";
+      ta.addEventListener("input", () => {
+        state.prepValues[f.name] = ta.value;
+        renderPrepHint();
+      });
+      return ta;
+    }
     const opts = prepOptions(f);
 
     // 分段控件：只给「静态、3 项以内」的 select（投放时间那种）。联动下拉不用 ——
@@ -2234,26 +2256,44 @@
       .map((f) => f.name);
     $("#adPrepHint").textContent = missing.length
       ? "还没填：" + missing.join("、")
-      : "改完记得点保存；生成模板和载入检查都读保存后的值";
+      : "生成模板 / 载入并检查 会自动保存这里的值";
   }
 
-  // ⚠ 必须显式保存：生成模板和「载入并检查」都是 Python 端重新读盘上的 json，
-  //   不保存就会拿到上一次的值 —— renderPrepHint 里那句提示说的就是这件事。
-  function savePrep() {
-    if (!hasPrepCard()) return;
-    callApi("prep_save", state.activeForm, state.prepValues).then((r) => {
-      if (!r) return;
+  // 生成模板和「载入并检查」都是 Python 端重新读盘上的 json —— 界面里改了没落盘，
+  // 后端看到的就是上一次的值。以前靠一句提示让人自己记得点「保存」，结果是
+  // **填了却报「没填」**：json 压根还没生成，validate 拿到的是 yaml 的 default
+  // （计划名称=空 → 「没填」；视频数量=默认 10 → 和 Excel 行数对不上）。
+  // 现在改成：这两个动作之前由 syncPrep() 自动存一次，「保存」按钮只是手动兜底。
+  // ⚠ 别把这里改回「只提示不保存」，那条路走过，代价是用户看不懂的假报错。
+  function savePrep(quiet) {
+    if (!hasPrepCard()) return Promise.resolve(null);
+    return callApi("prep_save", state.activeForm, state.prepValues).then((r) => {
+      if (!r) return null;
       if (!r.ok) {
         appendLog("准备参数保存失败：" + (r.error || ""), "error");
-        return;
+        return r;
       }
       state.prepValues = Object.assign({}, r.values || state.prepValues);
       renderPrepFields();
       const issues = r.issues || [];
-      appendLog(issues.length ? "准备参数已保存，但还有问题：" + issues.join("；") : "准备参数已保存",
-                issues.length ? "warn" : "ok");
+      // 自动保存时不刷「已保存」那条日志，只在真有问题时说话
+      if (!quiet || issues.length) {
+        appendLog(issues.length ? "准备参数已保存，但还有问题：" + issues.join("；") : "准备参数已保存",
+                  issues.length ? "warn" : "ok");
+      }
       $("#adPrepHint").textContent = issues.length ? issues.join("；") : "已保存";
+      return r;
     });
+  }
+
+  /** 「生成模板」「载入并检查」之前先把准备页上填的东西落盘。
+   *  两张卡（准备参数 / 抢占任务清单）同一个毛病，一起兜。
+   *  永远 resolve —— 存盘失败已经有日志了，不该把主流程卡死。 */
+  function syncPrep() {
+    const jobs = [];
+    if (hasPrepCard()) jobs.push(savePrep(true));
+    if (hasTaskList()) jobs.push(saveMeetingTasks(true));
+    return Promise.all(jobs).catch(() => null);
   }
 
   // ---------------- 准备页：预定会议室卡片（抢占任务清单）----------------
@@ -2268,7 +2308,10 @@
     if (!hasTaskList()) {
       card.classList.add("hidden");
       $("#dataSourceTitle").textContent = "配置来源";
-      $("#dataSourceHint").textContent = "选择数据文件，勾选延期范围（如果有）";
+      // 不吃 Excel 的类型（常规商广：规模和文案都在上面那张卡里）别再让人找数据文件
+      $("#dataSourceHint").textContent = needsExcel()
+        ? "选择数据文件，勾选延期范围（如果有）"
+        : "这个配置类型不用 Excel，上面填完直接点「载入并检查」";
       state.meetingMeta = null;
       state.meetingTasks = [];
       return;
@@ -2290,7 +2333,7 @@
     });
 
     $("#btnAddMeetingTask").onclick = addMeetingTask;
-    $("#btnSaveMeeting").onclick = saveMeetingTasks;
+    $("#btnSaveMeeting").onclick = () => saveMeetingTasks(false);
   }
 
   // 「价格策略批量开关」专用：方向 + 名称关键词 + 策略 三个控件。
@@ -2718,25 +2761,28 @@
     const bad = active.filter((t) => meetingIssues(t).length).length;
     $("#meetingHint").textContent = bad
       ? `${bad} 条还有问题，标红的那几行`
-      : `启用 ${active.length} 条 · 改完记得点保存，「载入并检查」读的是保存后的清单`;
+      : `启用 ${active.length} 条 · 「载入并检查」会自动保存这份清单`;
   }
 
-  function saveMeetingTasks() {
-    if (!hasTaskList()) return;
-    callApi("meeting_save", state.activeForm, state.meetingTasks).then((r) => {
-      if (!r) return;
+  function saveMeetingTasks(quiet) {
+    if (!hasTaskList()) return Promise.resolve(null);
+    return callApi("meeting_save", state.activeForm, state.meetingTasks).then((r) => {
+      if (!r) return null;
       if (!r.ok) {
         appendLog("抢占任务保存失败：" + (r.error || ""), "error");
-        return;
+        return r;
       }
       state.meetingTasks = (r.tasks || state.meetingTasks).map((t) => Object.assign({}, t));
       renderMeetingTasks();
       const bad = (r.issues || []).filter((x) => (x.items || []).length);
-      appendLog(bad.length
-        ? `抢占任务已保存，但有 ${bad.length} 条有问题：` +
-          bad.map((x) => `第${x.index}条 ${x.items.join("；")}`).join(" / ")
-        : `抢占任务已保存（${state.meetingTasks.length} 条）`,
-        bad.length ? "warn" : "ok");
+      if (!quiet || bad.length) {
+        appendLog(bad.length
+          ? `抢占任务已保存，但有 ${bad.length} 条有问题：` +
+            bad.map((x) => `第${x.index}条 ${x.items.join("；")}`).join(" / ")
+          : `抢占任务已保存（${state.meetingTasks.length} 条）`,
+          bad.length ? "warn" : "ok");
+      }
+      return r;
     });
   }
 
@@ -3168,6 +3214,11 @@
     // 这里只负责按已选好的东西出一份 Excel
     $("#btnMakeTemplate").addEventListener("click", () => {
       if (!state.activeForm) return;
+      // 模板里「准备阶段当前的值」那一页读的是盘上的 json，不先存就出的是上一次的值
+      syncPrep().then(() => makeTemplate());
+    });
+
+    function makeTemplate() {
       if (hasPositions()) {
         if (!state.positions.length) {
           appendLog("先在上面勾选本次要投的资源位，再生成模板", "warn");
@@ -3185,7 +3236,7 @@
         return;
       }
       callApi("make_template", state.activeForm, state.scopeValue).then(handleTemplateResult);
-    });
+    }
 
     $("#btnLoadCheck").addEventListener("click", doLoadCheck);
     { const hb = $("#btnHealthCheck"); if (hb) hb.addEventListener("click", doHealthCheck); }
@@ -3300,6 +3351,12 @@
     const btn = $("#btnLoadCheck");
     btn.disabled = true;
     appendLog("正在载入并检查…", "info");
+    // ⚠ 先把准备页上填的东西落盘再查 —— 后端是重新读盘的，不存就会拿上一次的值，
+    //   表现是「界面上明明填了，日志说没填」（1.1.9 之前一直是这样）
+    return syncPrep().then(() => doLoadCheckInner(btn));
+  }
+
+  function doLoadCheckInner(btn) {
     const opts = wizardOptions() || {};
     if (hasToggle()) {
       const sc = state.tgScope;
@@ -3377,6 +3434,8 @@
       '<th class="num" style="width:56px">明细</th><th style="width:260px">校验结果</th>' +
       '</tr></thead><tbody>';
     filtered.forEach((r) => {
+      // issues = 硬伤（这一行整个不跑）；warnings = 提醒（照跑），和「自制流程」那边一个口径
+      const warns = r.warnings || [];
       let cls = "", verdict;
       if (r.issues.length) {
         cls = "bad";
@@ -3384,6 +3443,8 @@
       } else if (r.done) {
         cls = "skip";
         verdict = "— 已完成，本次跳过";
+      } else if (warns.length) {
+        verdict = "✓ 可以跑 · 提醒：" + warns.slice(0, 2).join("；") + (warns.length > 2 ? "…" : "");
       } else {
         verdict = "✓ 校验通过";
       }
@@ -3405,7 +3466,13 @@
     callApi("row_detail", index).then((d) => {
       if (!d) return;
       $("#detailTitle").textContent = `第 ${d.index} 条 · ${d.name}`;
-      $("#detailIssues").textContent = d.issues.length ? "问题：" + d.issues.join("；") : "校验通过，没有发现问题。";
+      const dw = d.warnings || [];
+      const box = $("#detailIssues");
+      box.textContent = d.issues.length
+        ? "问题：" + d.issues.join("；")
+        : (dw.length ? "提醒（不影响跑）：" + dw.join("；") : "校验通过，没有发现问题。");
+      // 只有硬伤才标红 —— 提醒标红的话，人还是会以为「这条跑不了」
+      box.style.color = d.issues.length ? "var(--bad)" : (dw.length ? "var(--sub)" : "");
       let html = "<div style='margin-bottom:6px;color:var(--sub)'>主表</div>";
       Object.entries(d.header || {}).forEach(([k, v]) => {
         if (String(v).trim()) html += `${escapeHtml(k)}：${escapeHtml(v)}<br>`;

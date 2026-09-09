@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -49,11 +50,31 @@ class AdRegRunner(StateMixin):
         self.created = []
         self._init_state()
 
+    # ---------------- 断点的 key ----------------
+    @staticmethod
+    def _batch_id(prep: dict) -> str:
+        """这一批的指纹：换了计划名 / 视频范围就算另一批。
+
+        ⚠ 断点的 key 不能只用单元名。单元名是 `常规商广_{日期}_{序号}`，
+          **同一天重跑就一模一样** —— 于是「先拿 20 个试跑一轮，再改成 150
+          正式跑」时，正式那轮会把 _1、_2 当成「已经建过了」直接跳过，
+          用户看到的是「前 10 个视频莫名其妙没配」（2026-09-08 实际发生）。
+          带上指纹之后，改了视频数量就是另一批，不会串。
+        """
+        raw = "|".join(str(prep.get(k, "")).strip()
+                       for k in ("计划名称", "已有计划ID", "视频数量", "跳过前几个"))
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()[:8]
+
+    def _key(self, prep: dict, unit_name: str) -> str:
+        return f"{self._batch_id(prep)}/{unit_name}"
+
     # ---------------- 预检 ----------------
     def preview(self) -> list[PreviewRow]:
         prep = self.s.get("ad_prep") or P.load(self.f)
-        data = D.load(self.s["data_file"], self.f, self.s)
+        # ⚠ 不读 data_file：这个类型 data_source: none，规模和文案都来自准备页
+        data = D.load("", self.f, self.s)
         issues = D.validate(self.f, data, prep)
+        warns = D.warnings(self.f, data, prep)
         head = P.validate(self.f, prep)
 
         rows = []
@@ -64,13 +85,21 @@ class AdRegRunner(StateMixin):
             rows.append(PreviewRow(
                 index=i + 1, name=u["name"], kind=f"我的视频 {span}（{len(cs)} 条创意）",
                 detail_count=len(cs), issues=[],
-                done=self.state.is_done(u["name"]), payload=u,
+                done=self.state.is_done(self._key(prep, u["name"])), payload=u,
             ))
+        # 准备参数和素材文案是**全批共用**的，出问题就是每一个单元都跑不了 ——
+        # 所以挂到每一行上，不是只挂第一行。
+        # ⚠ 只挂第一行会变成「第 1 个单元被拦下，第 2~15 个照样拿着空标题去跑」：
+        #   start_run 是逐行筛的（good = [r for r in rows if not r.issues]）。
+        # ⚠ 提醒挂 warnings、别并进 issues：issues 非空 = 这一行整个不跑
         if rows:
-            rows[0].issues = head + issues + rows[0].issues
-        elif head or issues:
+            for r in rows:
+                r.issues = head + issues + r.issues
+            rows[0].warnings = warns + rows[0].warnings
+        elif head or issues or warns:
             rows.append(PreviewRow(index=1, name="（准备参数）", kind="", detail_count=0,
-                                   issues=head + issues, done=False, payload={}))
+                                   issues=head + issues, warnings=warns,
+                                   done=False, payload={}))
 
         self._data = data
         self._prep = prep
@@ -88,6 +117,9 @@ class AdRegRunner(StateMixin):
         stats = {"ok": 0, "failed": 0, "skipped": 0, "dry": 0}
         results = []
 
+        # ⚠ 指纹要用**没展开 {今天} 之前**的 prep —— preview() 算 done 时用的就是
+        #   原始值，这儿展开完再算就对不上了，断点会永远命中不了
+        batch_prep = dict(prep)
         prep = self._resolve_prep(prep)
         campaign_id = str(prep.get("已有计划ID", "")).strip()
         plan_name = str(prep.get("计划名称", "")).strip()
@@ -104,7 +136,7 @@ class AdRegRunner(StateMixin):
             with Browser(self.s["cdp_url"], self.s["timeout"]) as b:
                 b.page.on("dialog", _accept_dialog)
                 af = AdFiller(b.page, self.s["timeout"])
-                cr = AdRegCreative(b.page, self.s["timeout"])
+                cr = AdRegCreative(b.page, self.s["timeout"], skip=data.get("skip", 0))
 
                 for i, u in enumerate(units):
                     self.ui.checkpoint()
@@ -150,7 +182,7 @@ class AdRegRunner(StateMixin):
                         self._submit(af, b.page)
                         stats["ok"] += 1
                         results.append(self._row(i, name, "ok", note))
-                        self.state.mark_done(name)
+                        self.state.mark_done(self._key(batch_prep, name))
                         self.created.append((name, note))
                         self.ui.log(f"{label} 已保存", "ok")
 
@@ -170,7 +202,7 @@ class AdRegRunner(StateMixin):
                         shot = self._shot(b.page, i + 1, "error")
                         stats["failed"] += 1
                         results.append(self._row(i, name, "failed", msg))
-                        self.state.mark_failed(name, name, msg)
+                        self.state.mark_failed(self._key(batch_prep, name), name, msg)
                         self.ui.log(f"{label} 失败：{msg}", "error")
                         self.ui.log(f"    截图：{shot}")
                         if not self.ui.ask_continue(msg):
