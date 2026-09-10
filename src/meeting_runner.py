@@ -10,10 +10,20 @@
    直到用户点停止 —— 这就是它的正常形态，不是卡住了。
 4. 「抢不到」也要有个头。掐 10:00 那种要一直守（别人随时可能取消），但目标日
    **本来就在可预定范围内**时守下去毫无意义 —— 该试的一轮就试完了。所以这种
-   情况连着 give_up_rounds 轮没有能打的候选就收摊，报「没有符合条件的会议室」
-   并说清楚是「一间空的都没有」还是「有空房但服务端拒了」，见 _nothing_left()。
+   情况**把当轮候选整整扫过一遍**（或连着 give_up_rounds 轮没有能打的候选）就收摊，
+   报「没有符合条件的会议室」并说清楚是「一间空的都没有」还是「有空房但服务端拒了」，
+   见 _nothing_left()。
    2026-08-24 之前没有这一条：一次抢不到就是雷打不动空转满 600 秒，而且每轮取到
    的还是同样那几间房（_rank 是确定性的），46 秒能对它们发三百多次预定请求。
+   2026-09-10 又发现只有 idle_rounds 那条判据的话，**真机上永远不会触发**
+   （扫完一圈的耗时 ≥ retry_room_seconds，冷却早过期了，fresh 永远非空），
+   于是补了「当轮候选全在 tried 里」这条，见 _grab() 里 swept 那一段。
+
+5. **理由一律引用后台原话，不替它下结论。** 「这间房被占了」这个判断是照后台
+   口气猜的关键词匹配（TAKEN_HINTS），docs 里写明了从没抓到过真实回话。所以
+   每一句没见过的拒绝原文都要**打到界面上**（同一句只打一次），心跳和结论文案
+   里也只引用原文，不写「N 间刚被占」这种转述 —— 2026-09-10 那次 15 间空房
+   全被拒，用户看到的只有「15 间刚被占」，真正的回话一个字都没露出来。
 
 抢占窗口（后端 2026-08-20 自己吐出来的原文）：
     「10点之前只能预定5个工作日之内的会议室，10点之后才可预定第6个工作日的会议室」
@@ -54,7 +64,23 @@ log = logging.getLogger(__name__)
 
 # 「抢不到」的正常回话，遇到就换下一个候选，不当异常。别的报错（签名不对、
 # 登录态掉了）要原样冒出来，不能被这个清单吞掉。
-TAKEN_HINTS = ("已被预定", "已预定", "不可预定", "已被占用", "冲突", "请刷新")
+#
+# ⚠ 2026-09-10 把「请刷新」从这串词里**删掉**了。它当初是照后台口气猜的，
+#   结果真机上撞见的是这一句：
+#       「预定失败，浏览器安全校验未通过，请刷新页面后重试」
+#   —— 一个和「房被占」毫无关系的**提交前置条件没满足**，却因为带了「请刷新」
+#   被判成「刚被占」，于是冷却 20 秒再打一枪，15 间房全这么循环到超时，
+#   界面上显示「15 间刚被占」。往这串词里塞宽泛的词，代价就是这个。
+#   以后要加词，只加**明确指向"这个时段这间房已经有人了"**的原文。
+TAKEN_HINTS = ("已被预定", "已预定", "不可预定", "已被占用", "冲突")
+
+# 「这一轮怎么试都不会成」的回话：不是某一间房的问题，是提交本身缺前置条件。
+# 换哪间房、等多久都一样，必须立刻停下来把原话报给人看。
+# 目前已知的一条：会议后台 2026-08 之后新增了浏览器端签名（webpack 模块 1693 的
+# signBookingOrder），它建在 WebCrypto 上，而 WebCrypto 只在 https 安全上下文里存在；
+# 标签页落在 http 时签名函数静默返回 null，后台就回这句。详见
+# docs/预定会议室-接口抓取.md 的「浏览器安全校验」一节。
+BLOCKED_HINTS = ("安全校验", "校验未通过")
 
 # 「窗口还没开」的回话。这类不能当成「这间房没了」去换下一个候选 —— 换谁都一样，
 # 应该继续等。后端原文见 meeting_data.RULE_TEXT。
@@ -345,6 +371,13 @@ class MeetingRunner:
         cooling: dict = {}             # roomId -> 可以再试的 monotonic 时刻
         dead: dict = {}                # roomId -> 摘掉它的原因（连着两次同类失败才摘）
         rejected: dict = {}            # roomId -> 最近一次「非被占」的失败原文
+        # ⚠ errs 和 rejected 不是一回事，别合并：rejected 只收「非被占」的，
+        #   是用来判 dead 的；errs 收**每一次**失败的原文（含被判成「被占」的），
+        #   只用来说人话。分开是因为「被占」这个判断本身是照后台口气猜的
+        #   （TAKEN_HINTS，见 docs/预定会议室-接口抓取.md），猜错时 rejected 会是空的，
+        #   而结论里必须仍然能把后台的原话端出来 —— 2026-09-10 那次就是栽在这儿：
+        #   15 间空房全被拒，界面上只有一句「15 间刚被占」，真正的回话一个字没露。
+        errs: dict = {}                # roomId -> 最近一次失败原文（不分类型）
         strikes: dict = {}             # roomId -> 非「被占」的失败次数
         logged: set = set()            # 已经落过盘的失败原文，避免刷屏 run.log
         started = _time.monotonic()
@@ -354,7 +387,18 @@ class MeetingRunner:
             self.ui.checkpoint()
             rounds += 1
             try:
-                rooms = api.spaces(day_str, task["min_capacity"])
+                # ⚠ 把时段交给服务端筛（bookTimeLength）。原来是整包拉回来本地筛，
+                #   2026-09-10 实测那样必超时；顺带返回的房本来就是空的，
+                #   下面的 need_free 只当二次校验。
+                # ⚠ want/keep：拿够能打的就停，别把分页翻满。这个接口一页要
+                #   9~17 秒（2026-09-10 实测），翻满 14 页 = 三分多钟，
+                #   一轮轮询就废了。带了时段筛之后第一页回来的本来就都是空房，
+                #   够挑 tries_per_round 间就足矣。楼栋筛不了（服务端那个条件是坏的，
+                #   见 meeting_api.spaces），所以限定楼栋时靠 keep 多翻几页。
+                rooms = api.spaces(day_str, task["min_capacity"],
+                                   slot=(task["start"], task["end"]),
+                                   want=max(self.tries_per_round * 2, 10),
+                                   keep=lambda r: self._matches(r, task))
             except ApiError as e:
                 last_err = str(e)
                 self.ui.log(f"  查询失败，稍后重试：{e}", "warn")
@@ -386,6 +430,7 @@ class MeetingRunner:
                     cooling.clear()
                     dead.clear()
                     rejected.clear()
+                    errs.clear()
                     strikes.clear()
                     idle_rounds = 0
                     # ⚠ 预算重新计时。不重置的话，等窗口这段（可能几十分钟）是从
@@ -399,10 +444,26 @@ class MeetingRunner:
                 #   事后没法回答「到底是被抢走了还是参数不对」。而 TAKEN_HINTS 是
                 #   照着后台的口气猜的（接口文档只抓到了成功和窗口外两种原文），
                 #   猜漏了就会一直走下面的「非正常失败」分支。所以每种原文落一次盘。
+                errs[rid] = last_err
                 if last_err not in logged:
                     logged.add(last_err)
                     log.info("预定被拒：%s(roomId=%s) %s → %s",
                              room.get("roomName"), rid, label, last_err)
+                    # ⚠ 界面上也要打。只落 run.log 等于没有：run.log 在 exe 旁边的
+                    #   output/ 里，装在别人机器上的人根本不会去翻，而界面上唯一
+                    #   看得见的只有心跳那句「N 间刚被占」—— 那是**猜**出来的分类，
+                    #   不是后台的原话。2026-09-10 就是这么被卡住三分钟没线索的。
+                    #   同一句只打一次（logged 去重），不会刷屏。
+                    self.ui.log(f"  服务端回话：{last_err}"
+                                f"（{room.get('roomName')}，同样的话不再重复打）", "warn")
+
+                # ⚠ 这一档必须排在 _is_taken 前面。真机上撞见的那句
+                #   「预定失败，浏览器安全校验未通过，请刷新页面后重试」
+                #   以前会被「请刷新」判成「被占」，于是 15 间房冷却重试到超时。
+                #   它是提交前置条件没满足，换哪间房都一样，直接收摊。
+                if self._is_blocked(last_err):
+                    return {"ok": False, "error": f"{last_err}｜这不是「没抢到」，是提交本身被挡住了："
+                                                  f"换哪间会议室都一样，先解决它再重跑"}
 
                 if self._is_taken(last_err):
                     cooling[rid] = now_m + self.retry_room_s
@@ -419,8 +480,9 @@ class MeetingRunner:
                     self.ui.log(f"  {room.get('roomName')} 连着 {strikes[rid]} 次"
                                 f"「{last_err}」，不再试它", "warn")
                 else:
+                    # 原文已经由上面那条「服务端回话」打过了，这里不再重复一遍 ——
+                    # 同一句话按房间刷一遍，正是 2026-08-24 抱怨的那种滚屏。
                     cooling[rid] = now_m + self.retry_room_s
-                    self.ui.log(f"  {room.get('roomName')}：{last_err}", "warn")
 
             # ---- 收摊判定 ----
             idle_rounds = 0 if fresh else idle_rounds + 1
@@ -439,19 +501,34 @@ class MeetingRunner:
                 return {"ok": False,
                         "error": f"符合条件的 {len(cands)} 间全被服务端拒绝：{why}"}
 
-            # 目标日已经在可预定范围内（不是掐点抢），连着几轮没有能打的候选 ——
-            # 说明该试的都试过了，继续空转到 10 分钟超时没有任何意义。
-            if not was_waiting and idle_rounds >= self.give_up_rounds:
+            # ⚠ 这一轮的候选**全都试过了**，就是「该试的都试过了」——不管它们现在
+            #   是不是还在冷却里。这一条是 2026-09-10 补的，原来只有下面那条
+            #   idle_rounds 判据，而它在真机上**根本不会触发**：
+            #     15 间 ÷ tries_per_round(5) = 3 轮才扫完一圈，每轮 5 次真实网络往返，
+            #     扫完一圈的耗时 ≥ retry_room_seconds(20)，于是回头看时第一批的冷却
+            #     早就过期了 → fresh 永远非空 → idle_rounds 永远被清零。
+            #   结果就是明明一圈就试完了，却要拿同样 15 间房反复挨同一句拒绝，
+            #   一直挨满 grab_timeout_seconds(600)。界面上是三分钟纹丝不动的
+            #   「已试 15 间」，看着像卡死。
+            #   ⚠ 只对「目标日已在窗口内」生效。掐 10:00 抢的场景绝不能提前收 ——
+            #     那时候别人随时可能取消，守着就是这东西存在的意义。
+            swept = bool(cands) and all(r["roomId"] in tried for r in cands)
+            if not was_waiting and (swept or idle_rounds >= self.give_up_rounds):
                 return {"ok": False,
-                        "error": self._nothing_left(task, seen_cands, tried, rejected)}
+                        "error": self._nothing_left(task, seen_cands, tried, rejected, errs)}
 
             if _time.monotonic() >= next_beat:
                 next_beat = _time.monotonic() + self.heartbeat_s
+                # ⚠ 别再写「N 间刚被占」。cooling 里装的是「被判成被占」的房，
+                #   而那个判断是照后台口气猜的关键词匹配（TAKEN_HINTS）——
+                #   猜错时这句话就是在替后台编理由。心跳只报事实（试了几间、
+                #   在冷却），理由一律**引用**后台原话，不做转述。
                 self.ui.log(f"  「{label}」还盯着：符合条件 {seen_cands} 间"
-                            f"（{len(cooling)} 间刚被占、{len(dead)} 间已排除），"
+                            f"（{len(cooling)} 间冷却中、{len(dead)} 间已排除），"
                             f"已试 {len(tried)} 间，"
                             f"已等 {self._human(_time.monotonic() - started)}，"
-                            f"还剩 {self._human(deadline - _time.monotonic())}")
+                            f"还剩 {self._human(deadline - _time.monotonic())}"
+                            + (f"；最近一次回话：{last_err}" if tried else ""))
 
             if rounds == 1 and not cands:
                 self.ui.log("  当前没有满足条件的空房，继续盯着（别人取消就立刻补上）")
@@ -463,12 +540,18 @@ class MeetingRunner:
         return {"ok": False, "error": f"{last_err}（试过 {len(tried)} 间，等了"
                                       f" {self._human(self.grab_timeout)}）"}
 
-    def _nothing_left(self, task: dict, seen: int, tried: set, rejected: dict) -> str:
+    def _nothing_left(self, task: dict, seen: int, tried: set, rejected: dict,
+                      errs: dict | None = None) -> str:
         """目标日已经在可预定范围内、却一间也拿不下时的结论文案。
 
         ⚠ 这句话是用户唯一能看到的结论，不能是「超时没抢到」这种等于没说的话 ——
           「一间空的都没有」和「有空房但都被拒」要让人一眼分得开：前者该放宽条件，
           后者该去看是不是自己同时段已经有会了。
+
+        ⚠ 最后那一档以前写死成「全被占用」，那是**替后台下结论**：能走到那一档，
+          恰恰说明每一句回话都被 TAKEN_HINTS 判成了「被占」，而那串词是猜的。
+          2026-09-10 真机上 15 间空房全被拒，用户看到的就是这句「全被占用」，
+          而后台到底说了什么，界面和结论里一个字都没有。现在改成引用原话。
         """
         where = task.get("room") or (
             f"{task['building']}{'（只要这栋）' if task.get('building_only') else '（优先）'}"
@@ -481,9 +564,23 @@ class MeetingRunner:
             reasons = list(rejected.values())
             why = max(set(reasons), key=reasons.count)
             rest = seen - len(rejected)
+            # 其余那几间也别说成「被占」——同样只引用它们自己的回话
+            other = [m for r, m in (errs or {}).items() if r not in rejected]
+            tail = ""
+            if rest > 0:
+                tail = (f"，其余 {rest} 间的回话是「{max(set(other), key=other.count)}」"
+                        if other else f"，其余 {rest} 间没试到")
             return (f"没有符合条件的会议室：{cond} 符合的 {seen} 间里，"
-                    f"{len(rejected)} 间被服务端拒绝（{why}）"
-                    + (f"，其余 {rest} 间被占" if rest > 0 else ""))
+                    f"{len(rejected)} 间被服务端拒绝（{why}）" + tail)
+        reasons = list((errs or {}).values())
+        if reasons:
+            why = max(set(reasons), key=reasons.count)
+            same = reasons.count(why)
+            head = (f"符合的 {seen} 间试过 {len(tried)} 间，全被服务端拒绝"
+                    if same == len(reasons) and len(reasons) >= len(tried)
+                    else f"符合的 {seen} 间试过 {len(tried)} 间都没拿下，其中 {same} 间")
+            return (f"没有符合条件的会议室：{cond} {head}，"
+                    f"回话是「{why}」（目标日已在可预定范围内，不再空等）")
         return (f"没有符合条件的会议室：{cond} 符合的 {seen} 间全被占用，"
                 f"试过 {len(tried)} 间都没拿下（目标日已在可预定范围内，不再空等）")
 
@@ -502,7 +599,10 @@ class MeetingRunner:
             probe = self.furthest or date.today()
             note = f"（{day} 的窗口 {openat:%m-%d %H:%M} 才开，这里拿最远可订的 {probe} 当样本）"
 
-        rooms = api.spaces(probe.isoformat(), task["min_capacity"])
+        # 空跑要给人一个「有多少间」的实感，所以比抢占时多翻几页，但也不翻满
+        rooms = api.spaces(probe.isoformat(), task["min_capacity"],
+                           slot=(task["start"], task["end"]),
+                           want=40, keep=lambda r: self._matches(r, task))
         cands = self._candidates(rooms, task, need_free=rng)
         names = "、".join(f"{c.get('roomName')}（{c.get('location')}）" for c in cands[:5])
         self.ui.log(f"  [空跑] 「{label}」符合条件且空着的有 {len(cands)} 间{note}")
@@ -513,6 +613,16 @@ class MeetingRunner:
     @staticmethod
     def _is_taken(err: str) -> bool:
         return any(h in str(err) for h in TAKEN_HINTS)
+
+    @staticmethod
+    def _is_blocked(err: str) -> bool:
+        """这条报错是不是「换哪间房都一样」的提交前置条件没满足。
+
+        和 _is_taken / _is_not_open 的区别：那两种都还有救（换一间、再等等），
+        这一种没有 —— 再试一百间也是同一句。必须当场收摊、原样报给人看，
+        而不是拿它去冷却重试到超时。
+        """
+        return any(h in str(err) for h in BLOCKED_HINTS)
 
     @staticmethod
     def _is_not_open(err: str) -> bool:
@@ -560,6 +670,22 @@ class MeetingRunner:
                 api.ensure_page(self.s["timeout"])
                 me = api.me()
                 self.ui.log(f"登录身份：{me['user_name']}（userId={me['user_id']}）")
+
+                # ⚠ 开跑前先验「安全上下文」，别等窗口开了扣扳机时才发现。
+                #   会议后台 2026-08 之后要求提交带浏览器签名，那套签名建在
+                #   WebCrypto 上，而 WebCrypto 只在安全上下文里存在；这套后台的
+                #   SSO 又一定把标签页落到明文 http。所以 Chrome 必须带
+                #   --unsafely-treat-insecure-origin-as-secure 启动
+                #   （src/chrome.py 的 INSECURE_ORIGINS_AS_SECURE 已经加了）。
+                #   ⚠ 光升级程序不够：浏览器**已经开着**的话那个参数不会生效，
+                #     必须把 Chrome 整个关掉再点「启动浏览器并登录」。
+                #     不在这儿拦住的话，用户看到的还是「一间都抢不到」。
+                if not dry and not api.secure_context():
+                    raise ApiError(
+                        "这个浏览器订不了会议室：页面不是「安全上下文」，"
+                        "后台要求的浏览器签名生成不出来（提交会被回「浏览器安全校验未通过」）。"
+                        "解决办法：把 Chrome **整个关掉**（任务栏图标也退掉），"
+                        "再点「启动浏览器并登录」重开一次 —— 新版本会用带安全上下文的参数启动它。")
 
                 self.skew = api.clock_skew()
                 if abs(self.skew) >= 1:
@@ -718,8 +844,14 @@ class MeetingRunner:
           和日期无关，所以用今天查完全够用，拿的是 roomId/容量/位置这些静态信息。
         """
         need = min((int(t.get("min_capacity") or 1) for t in tasks), default=1)
-        rooms = api.spaces(date.today().isoformat(), need)
-        self.ui.log(f"会议室花名册：{len(rooms)} 间（容纳 ≥{need} 人）")
+        # ⚠ 花名册只用来排候选顺序和「盲抢」头几枪，不需要全站 318 间都拿到。
+        #   翻满要三分多钟（2026-09-10 实测），开跑前干等这么久没意义。
+        rooms = api.spaces(date.today().isoformat(), need,
+                           want=60, keep=lambda r: any(self._matches(r, t) for t in tasks))
+        # ⚠ 措辞别写成「花名册：N 间」——现在拿够就停止翻页了，N 不是全站总数，
+        #   那么写等于又在界面上说一句不准的话（这次修的就是这一类毛病）。
+        self.ui.log(f"会议室花名册：先取了 {len(rooms)} 间备选（容纳 ≥{need} 人；"
+                    f"够用就停，不翻完全站）")
         return rooms
 
     def _read_horizon(self, api: MeetingApi, rooms: list[dict]):

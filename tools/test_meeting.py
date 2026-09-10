@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time as _t
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -37,8 +38,14 @@ def check(name, cond, detail=""):
 
 
 class QuietUI(BaseUI):
+    """把界面上打的每一句都记下来 —— 有几条断言就是冲着「界面上到底看得见什么」去的。"""
+
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
     def log(self, msg: str, level: str = "info"):
-        pass
+        self.lines.append(msg)
 
 
 def room(rid, name, cap=10, loc="国正中心/2号楼", free=True):
@@ -116,18 +123,22 @@ def test_dead_vs_cands():
                   {1: ["您在该时间段已有会议"], 2: ["已被预定"]},
                   busy_after={1: 2})
     res = r._grab(api, dict(TASK), day, ME, [room(1, "A"), room(2, "B")])
+    err = res.get("error") or ""
     check("死房退出候选后，不把剩下的房也算成「被服务端拒绝」",
-          "全被服务端拒绝" not in (res.get("error") or ""), res.get("error"))
-    check("结论也不会拿死房的理由去解释别的房",
-          "已有会议" not in (res.get("error") or ""), res.get("error"))
+          "全被服务端拒绝" not in err, err)
+    # ⚠ 断言的是「别把 A 的理由安到 B 头上」，不是「结论里不许出现 A 的理由」——
+    #   A 确实被这么拒过，抹掉它反而是漏报。要求是：两间房各自的回话分开说。
+    check("A 的理由只安在 A 头上，B 的回话另说",
+          "1 间被服务端拒绝（您在该时间段已有会议）" in err
+          and "其余 1 间的回话是「已被预定」" in err, err)
 
     # 两间都被硬拒 → 这才是真的「全被拒绝」，要立刻收摊并原样报原因
     api2 = FakeApi([room(1, "A"), room(2, "B")],
                    {1: ["您在该时间段已有会议"], 2: ["您在该时间段已有会议"]})
     res2 = r._grab(api2, dict(TASK), day, ME, [room(1, "A"), room(2, "B")])
+    err2 = res2.get("error") or ""
     check("两间都被硬拒时确实收摊并报原因",
-          "全被服务端拒绝" in (res2.get("error") or "")
-          and "已有会议" in (res2.get("error") or ""), res2.get("error"))
+          "2 间被服务端拒绝" in err2 and "已有会议" in err2, err2)
 
 
 def test_success():
@@ -172,11 +183,76 @@ def test_candidates():
           == ["刚好", "大"])
 
 
+def test_swept_stops():
+    print("\n[收摊判定] 当轮候选扫完一遍就收摊，不再空转到超时")
+    tmp = tempfile.mkdtemp()
+    # ⚠ 关键在 retry_room_seconds 设得比 grab_timeout 还长：这就是真机上的形态 ——
+    #   冷却还没过，idle_rounds 那条判据永远等不到「连着几轮没得打」。
+    #   2026-09-10 之前这里会一路空转到 grab_timeout。
+    r = runner(tmp)
+    r.retry_room_s = 999
+    r.grab_timeout = 30
+    r.tries_per_round = 5
+    rooms = [room(i, f"R{i}") for i in range(1, 16)]
+    api = FakeApi(rooms, {i: ["该时段已被预定"] for i in range(1, 16)})
+    t0 = _t.monotonic()
+    res = r._grab(api, dict(TASK), date.today() + timedelta(days=1), ME, rooms)
+    cost = _t.monotonic() - t0
+    check("15 间扫完一圈就收摊，不等满 grab_timeout", cost < 10, f"{cost:.1f}s")
+    check("15 间每间只打一枪，不反复挨同一句", len(api.reserved) == 15,
+          f"发了 {len(api.reserved)} 次预定")
+    check("结论引用后台原话，不写「全被占用」",
+          "该时段已被预定" in (res.get("error") or "")
+          and "全被占用" not in (res.get("error") or ""), res.get("error"))
+
+
+def test_reply_surfaced():
+    print("\n[说人话] 后台的拒绝原文要浮到界面上，且同一句不刷屏")
+    tmp = tempfile.mkdtemp()
+    r = runner(tmp)
+    r.retry_room_s = 999
+    r.heartbeat_s = 0          # 让心跳每轮都打，好验它的措辞
+    rooms = [room(i, f"R{i}") for i in range(1, 6)]
+    # 5 间房、两种回话：界面上应该正好出现两条「服务端回话」
+    api = FakeApi(rooms, {1: ["空间异常，预定失败"], 2: ["该时段已被预定"],
+                          3: ["该时段已被预定"], 4: ["该时段已被预定"],
+                          5: ["该时段已被预定"]})
+    r._grab(api, dict(TASK), date.today() + timedelta(days=1), ME, rooms)
+    said = [x for x in r.ui.lines if "服务端回话" in x]
+    check("每种没见过的原文都打到界面上", len(said) == 2, str(said))
+    check("原文是后台的原话", any("空间异常，预定失败" in x for x in said)
+          and any("该时段已被预定" in x for x in said), str(said))
+    beats = [x for x in r.ui.lines if "还盯着" in x]
+    check("心跳不再说「刚被占」这种替后台下的结论",
+          not any("刚被占" in x for x in r.ui.lines), str(beats))
+
+
+def test_blocked_stops_now():
+    print("\n[提交被挡] 安全校验这类回话，换房没用，必须当场收摊")
+    tmp = tempfile.mkdtemp()
+    r = runner(tmp)
+    r.retry_room_s = 999
+    rooms = [room(i, f"R{i}") for i in range(1, 16)]
+    # 2026-09-10 真机原话。注意它带「请刷新」——以前正是这三个字把它误判成「被占」。
+    msg = "预定失败，浏览器安全校验未通过，请刷新页面后重试"
+    api = FakeApi(rooms, {i: [msg] for i in range(1, 16)})
+    res = r._grab(api, dict(TASK), date.today() + timedelta(days=1), ME, rooms)
+    check("第一间就收摊，不再挨个试", len(api.reserved) == 1,
+          f"发了 {len(api.reserved)} 次预定")
+    check("结论带上后台原话", msg in (res.get("error") or ""), res.get("error"))
+    check("说清这不是「没抢到」", "换哪间会议室都一样" in (res.get("error") or ""),
+          res.get("error"))
+    check("「请刷新」不再被当成「被占」", not MeetingRunner._is_taken(msg))
+
+
 def main():
     test_candidates()
     test_success()
     test_dead_vs_cands()
     test_given_up_only_weekly()
+    test_swept_stops()
+    test_reply_surfaced()
+    test_blocked_stops_now()
     print("\n" + "=" * 56)
     print(f"通过 {PASS} 项，失败 {FAIL} 项")
     return 1 if FAIL else 0

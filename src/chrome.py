@@ -89,6 +89,29 @@ def find_browser() -> str | None:
 
 LOGIN_MARKERS = ("login.html", "/login", "passport", "sso")
 
+# 这些**明文 http** 源要被 Chrome 当成「安全上下文」来对待。
+#
+# ⚠ 这不是图省事，是「预定会议室」能不能用的开关。2026-09-10 查出来的：
+#   会议后台 2026-08 之后给提交预定加了浏览器端签名（webpack 模块 1693 的
+#   signBookingOrder），而那套签名建在 **WebCrypto (crypto.subtle)** 上 ——
+#   `crypto.subtle` 只在安全上下文（https / localhost）里存在，
+#   在明文 http 页面上是 undefined。
+#
+#   而这套后台的 SSO **一定会把标签页落到 http**：
+#     · https://administration.bilibili.co  根本没开（连不上）
+#     · https://administration.biliapi.net  是通的，但导航过去会被 SSO
+#       弹回 http://administration.bilibili.co（实测连试 3 次，次次如此）
+#   于是页面上 isSecureContext=false、crypto.subtle=undefined，
+#   signBookingOrder() 静默返回 null，提交少了签名字段，后台一律回
+#   「预定失败，浏览器安全校验未通过，请刷新页面后重试」。
+#
+#   加这个参数之后这个源就有了 crypto.subtle，页面自己的签名函数才跑得起来
+#   （我们**调用页面自己的函数**，不去仿造人家的安全方案）。
+#
+# ⚠ 只对这一个内网源开口子，且只作用于我们这个**专用的 .chrome-profile**，
+#   不影响用户平时那个 Chrome。别往这里加通配符，也别加公网域名。
+INSECURE_ORIGINS_AS_SECURE = ("http://administration.bilibili.co",)
+
 
 def list_pages(cdp_url: str, timeout: float = 1.5) -> list[dict]:
     """列出当前所有标签页（走 CDP 的 HTTP 接口，比起 Playwright 轻量得多）。"""
@@ -197,6 +220,12 @@ def launch(cdp_url: str, profile_dir: str | Path, start_url: str | None = None) 
         "--no-first-run",
         "--no-default-browser-check",
     ]
+    if INSECURE_ORIGINS_AS_SECURE:
+        # ⚠ 这两个必须成对给：只给 --unsafely-treat-insecure-origin-as-secure
+        #   的话 Chrome 会忽略它。见上面 INSECURE_ORIGINS_AS_SECURE 的注释。
+        args.append("--unsafely-treat-insecure-origin-as-secure="
+                    + ",".join(INSECURE_ORIGINS_AS_SECURE))
+        args.append("--disable-features=BlockInsecurePrivateNetworkRequests")
     if start_url:
         args.append(start_url)
 

@@ -62,9 +62,16 @@ SLOTS_PER_DAY = 48          # 一天 48 个半小时格，index 0 = 00:00~00:30
 # ⚠ 不要在这里 throw：任何一次网络抖动都不该让整轮抢占崩掉，一律返回结构化结果，
 #   由调用方决定是重试还是放弃。
 _FETCH_JS = r"""
-async ({method, path, body}) => {
+async ({method, path, body, timeoutMs}) => {
+  // ⚠ 必须给 fetch 一个上限。2026-09-10 实测：spaces 接口 pageSize=100 时会
+  //   25 秒、90 秒都不返回；而 page.evaluate 是不受 Playwright 默认超时管的，
+  //   于是整轮抢占挂在这一行上，界面上连心跳都不打，看着就是彻底卡死。
+  //   超时按普通失败返回，由调用方决定重试还是放弃。
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs || 30000);
   try {
-    const opt = {method, credentials: 'include', headers: {'Content-Type': 'application/json'}};
+    const opt = {method, credentials: 'include', signal: ctl.signal,
+                 headers: {'Content-Type': 'application/json'}};
     if (body !== null && body !== undefined) opt.body = JSON.stringify(body);
     const t0 = Date.now();
     const r = await fetch(path, opt);
@@ -75,7 +82,79 @@ async ({method, path, body}) => {
     return {ok: r.ok, status: r.status, body: parsed,
             date: r.headers.get('date'), sentAt: t0, doneAt: Date.now()};
   } catch (e) {
-    return {ok: false, status: 0, body: {message: String(e)}};
+    const aborted = e && e.name === 'AbortError';
+    return {ok: false, status: 0, timeout: !!aborted,
+            body: {message: aborted ? `接口 ${timeoutMs || 30000}ms 没返回（后台在变慢）` : String(e)}};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+"""
+
+
+# 提交预定前，问页面自己要一份「浏览器签名」。
+#
+# ⚠⚠ 这一段是 2026-09-10 补的，不补的话**一间也订不到**。会议后台在 2026-08 之后
+#   给提交预定加了浏览器端签名：前端 createMeeting() 现在是
+#       i = md5(roomId+start+end+reminderTime+userId)      // 老 sign，一直都有
+#       r = await signBookingOrder(t)                       // ★ 新增
+#       $.ajax({url:"/meeting/order", data: {...t, sign:i, ...(r||{})}})
+#   r 里是四个字段：browserSign / browserSignVersion / browserSignTime /
+#   browserSignClientId。少了它们，后台一律回
+#       「预定失败，浏览器安全校验未通过，请刷新页面后重试」
+#   —— 而这句话带「请刷新」，早先会被 MeetingRunner 判成「这间房刚被占」，
+#   于是 15 间空房冷却重试到超时，界面上显示「15 间刚被占」，真原因一个字不露。
+#
+# ⚠ 我们**调用页面自己的函数**，绝不在 Python 侧仿造这套签名：它建在 WebCrypto 上、
+#   带版本号和客户端 id，仿一遍既不可靠也会在人家改版时静默失效。
+#
+# ⚠ 前提是页面得是**安全上下文**（crypto.subtle 只在 https/localhost 存在）。
+#   而这套后台的 SSO 一定把标签页落到明文 http，所以启动 Chrome 时必须带
+#   --unsafely-treat-insecure-origin-as-secure，见 src/chrome.py 的
+#   INSECURE_ORIGINS_AS_SECURE。少了那个参数，下面这段会返回「不是安全上下文」。
+#
+# ⚠ 模块 id（当时是 1693）**不写死**：前端一发版 webpack id 就变，写死等于埋一颗
+#   静默地雷。这里先翻已实例化的模块缓存 req.c，再按**工厂函数源码**里有没有
+#   'signBookingOrder' 去找 —— 只 require 命中的那一个，不会把全站模块都跑一遍。
+_SIGN_JS = r"""
+async (payload) => {
+  try {
+    let req = window.__cfgbot_wr__;
+    if (!req) {
+      if (!window.webpackJsonp || !window.webpackJsonp.push) return {err: '页面上没有 webpackJsonp'};
+      const id = '__cfgbot__' + Date.now();
+      window.webpackJsonp.push([[id], {[id]: function(e, t, n) { window.__cfgbot_wr__ = n; }}, [[id]]]);
+      req = window.__cfgbot_wr__;
+    }
+    if (!req) return {err: '没能从 webpackJsonp 借到 __webpack_require__'};
+    let mod = null;
+    for (const k in (req.c || {})) {
+      const m = req.c[k] && req.c[k].exports;
+      if (m && typeof m.signBookingOrder === 'function') { mod = m; break; }
+    }
+    if (!mod) {
+      for (const k in (req.m || {})) {
+        let src = '';
+        try { src = String(req.m[k]); } catch (e) { continue; }
+        if (src.indexOf('signBookingOrder') === -1) continue;
+        try {
+          const cand = req(k);
+          if (cand && typeof cand.signBookingOrder === 'function') { mod = cand; break; }
+        } catch (e) {}
+      }
+    }
+    if (!mod) return {err: '页面里找不到 signBookingOrder（前端可能又改版了，去 docs 重新抓一次）'};
+    try { await mod.prepareBookingKey(); } catch (e) {}
+    const extra = await mod.signBookingOrder(payload);
+    if (!extra || !Object.keys(extra).length) {
+      return {err: window.isSecureContext
+        ? '页面的签名函数返回了空（登录态或绑定的浏览器密钥可能失效了，刷新页面重试）'
+        : '这个页面不是安全上下文，crypto.subtle 用不了 —— 启动 Chrome 时缺了 '
+          + '--unsafely-treat-insecure-origin-as-secure，见 src/chrome.py'};
+    }
+    return {extra: extra, secure: window.isSecureContext};
+  } catch (e) {
+    return {err: String((e && (e.reason || e.message)) || e).slice(0, 200)};
   }
 }
 """
@@ -128,14 +207,14 @@ class MeetingApi:
         except Exception:
             self.page.wait_for_timeout(2000)
 
-    def _call(self, method: str, path: str, body=None) -> dict:
+    def _call(self, method: str, path: str, body=None, timeout_ms: int = 30000) -> dict:
         """发一个请求。页面正好在跳转时重试一次。
 
         ⚠ 只重试「上下文没了」这一类：那是页面自己在跳转，重试是对的。业务失败
           （被人抢先）绝不能在这里重试 —— 那是 reserve() 的语义，重试会变成
           对同一间房连打两枪。
         """
-        arg = {"method": method, "path": BASE + path, "body": body}
+        arg = {"method": method, "path": BASE + path, "body": body, "timeoutMs": timeout_ms}
         for attempt in (0, 1):
             try:
                 return self.page.evaluate(_FETCH_JS, arg) or {"ok": False, "status": 0, "body": {}}
@@ -244,17 +323,37 @@ class MeetingApi:
             self._call("GET", f"/meeting/order/{room_id}/reservable/date"), "查可预定截止日"))
 
     def spaces(self, book_date: str, min_capacity: int | None = None,
-               page_size: int = 100, max_pages: int = 8) -> list[dict]:
-        """某天所有会议室 + 每间 48 个半小时格的占用状态。翻页翻到底。
+               page_size: int = 20, max_pages: int = 20,
+               slot: tuple[str, str] | None = None,
+               want: int | None = None, keep=None) -> list[dict]:
+        """某天的会议室 + 每间 48 个半小时格的占用状态。翻页翻到底。
 
-        ⚠ 全站 318 间（2026-08-19 实测），page_size=100 要翻 4 页。max_pages 是防跑飞的
-          保险，不是业务上限；真到上限会记一条警告，不静默截断。
+        slot=("14:00","15:00") 时**让服务端按时段筛**，只返回那段空着的房。
+
+        ⚠ 2026-09-10 改的两处，都是实测逼出来的：
+
+        1. **加 bookTimeLength**。页面上「预定时间段」那个筛选走的就是它，
+           格式是 `"14:00:00~15:00:00"`（前端 bookTimeChange()：
+           `startTime + ":00~" + endTime + ":00"`）。原来我们从不传它，
+           每次把全站 318 间整包拉回来再在本地按 available 筛 —— 又慢又白费。
+
+        2. **page_size 从 100 降到 20**，和页面自己用的一致。实测 2026-09-10：
+             · pageSize=100（不管带不带 capacity）→ 25 秒不返回，直接超时
+             · pageSize=50                        → 25 秒不返回
+             · pageSize=20 + 时段筛                → 每页 9~17 秒，正常返回
+           而 _FETCH_JS 里的 fetch 是**没有超时**的，所以一旦慢成这样，
+           整轮抢占会挂在 page.evaluate 上一声不吭。宁可多翻几页。
+           max_pages 跟着提到 20（20×20=400 > 全站 318 间）。
         """
         conds = [{"field": "bookDate", "opt": "=", "values": [book_date]}]
+        if slot:
+            conds.append({"field": "bookTimeLength", "opt": "=",
+                          "values": [f"{slot[0]}:00~{slot[1]}:00"]})
         if min_capacity:
             conds.append({"field": "capacity", "opt": "=", "values": [str(int(min_capacity))]})
 
         out: list[dict] = []
+        kept = 0
         for pn in range(1, max_pages + 1):
             body = {"conditions": conds, "columns": [], "draw": 2,
                     "offset": 0, "pageNumber": pn, "pageSize": page_size}
@@ -262,7 +361,14 @@ class MeetingApi:
             if not isinstance(data, list) or not data:
                 break
             out.extend(data)
+            kept += sum(1 for r in data if keep(r)) if keep else len(data)
             if len(data) < page_size:
+                break
+            # ⚠ 够用就别翻了。抢占是按秒算的，而这个接口一页要 9~17 秒
+            #   （2026-09-10 实测），翻满 14 页 = 三分多钟，一轮轮询就废了。
+            #   带了时段筛之后，第一页回来的 20 间**本来就都是空的**，
+            #   对「挑几间发预定」来说早就够了。want 由调用方按它真正要几间来定。
+            if want and kept >= want:
                 break
         else:
             log.warning("查询会议室翻到了 %s 页上限，可能还有没取到的", max_pages)
@@ -279,6 +385,29 @@ class MeetingApi:
         raw = f"{room_id}{start}{end}{reminder}{user_id}"
         return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
+    def secure_context(self) -> bool:
+        """这个页面算不算「安全上下文」（crypto.subtle 能不能用）。
+
+        ⚠ 开跑前先问一次，别等扣扳机时才发现。不是安全上下文的话，
+          signBookingOrder() 会静默返回空，**一间也订不到** —— 而那种失败
+          发生在窗口刚开的那几秒，等于整轮白抢。见 _SIGN_JS 的注释。
+        """
+        try:
+            return bool(self.page.evaluate(
+                "() => !!(window.isSecureContext && window.crypto && window.crypto.subtle)"))
+        except Exception:
+            return False
+
+    def browser_sign(self, payload: dict) -> dict:
+        """问页面自己要一份浏览器签名。返回 {'extra': {...}} 或 {'err': '一句人话'}。
+
+        见 _SIGN_JS 的注释：这是 2026-08 之后提交预定的硬前置条件，缺了必被拒。
+        """
+        try:
+            return self.page.evaluate(_SIGN_JS, payload) or {"err": "签名脚本没有返回值"}
+        except Exception as e:
+            return {"err": f"取浏览器签名时出错：{str(e)[:160]}"}
+
     def reserve(self, room_id: int, start: str, end: str, subject: str, user_id,
                 reminder: int = 2, content: str = "", remarks: str = "",
                 attendees: list | None = None) -> dict:
@@ -293,8 +422,15 @@ class MeetingApi:
             "attendeeList": attendees or [], "reminderTime": reminder,
             "services": [], "remarks": remarks or "", "userId": user_id,
             "attachments": [],
-            "sign": self.sign(room_id, start, end, reminder, user_id),
         }
+        # ⚠ 先问页面要浏览器签名，再把老 sign 拼上 —— 顺序照抄前端 createMeeting()。
+        #   拿不到就**别提交**：没有签名的提交必被拒，白打一枪还会被上层误判成
+        #   「这间房被占了」。直接把原因报上去，让 runner 当场收摊。
+        got = self.browser_sign(body)
+        if got.get("err"):
+            return {"ok": False, "error": f"浏览器安全校验没通过：{got['err']}"}
+        body["sign"] = self.sign(room_id, start, end, reminder, user_id)
+        body.update(got.get("extra") or {})
         res = self._call("POST", "/meeting/order", body)
         rb = res.get("body") or {}
         msg = str(rb.get("message") or "")
