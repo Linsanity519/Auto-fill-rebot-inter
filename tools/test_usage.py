@@ -464,9 +464,15 @@ def test_outbox():
     tmp = Path(tempfile.mkdtemp(prefix="usage-outbox-"))
     o_local, o_outbox = usage.local_path, report.outbox_path
     o_post, o_pj, o_sheet = report._post, report._post_json, report.sheet_webhook_url
+    o_userpath = report.user_path
     usage.local_path = lambda: tmp / "usage.jsonl"
     report.outbox_path = lambda: tmp / "outbox.jsonl"
     report.sheet_webhook_url = lambda s: ""          # 默认只测群通道，别打到真表上
+    report.user_path = lambda *a: tmp / a[-1]
+    # 没有表格地址时每天会往群里补一句「回传诊断」（见 test_sheet_diag）。
+    # 这一段只测运行消息本身，所以先当作今天已经报过了
+    from datetime import date as _date
+    (tmp / report.SHEET_DIAG_MARK).write_text(_date.today().isoformat(), encoding="utf-8")
     S = {"usage": {"webhook_url": "https://example.invalid/hook"}}
     try:
         row = usage.record(
@@ -534,6 +540,105 @@ def test_outbox():
         check("发件箱写不进去也不抛异常", True)
     finally:
         usage.local_path, report.outbox_path = o_local, o_outbox
+        report._post, report._post_json, report.sheet_webhook_url = o_post, o_pj, o_sheet
+        report.user_path = o_userpath
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_sheet_diag():
+    """1.1.19：表格这一路不通时，原因要进群；一条坏数据不能卡死整个发件箱。
+
+    1.1.18 线上：一台机器 4 次运行都进了群、表里一条没有，原因只在那台机器的
+    run.log 里，谁也看不到。
+    """
+    from src import report
+
+    print("\n[回传·诊断] 表格不通要进群 / 坏数据不卡死发件箱")
+    usage.read_events = _REAL_READ_EVENTS
+    tmp = Path(tempfile.mkdtemp(prefix="usage-diag-"))
+    o_local, o_outbox = usage.local_path, report.outbox_path
+    o_post, o_pj, o_sheet = report._post, report._post_json, report.sheet_webhook_url
+    o_userpath = report.user_path
+    usage.local_path = lambda: tmp / "usage.jsonl"
+    report.outbox_path = lambda: tmp / "outbox.jsonl"
+    report.user_path = lambda *a: tmp / a[-1]
+    S = {"usage": {"webhook_url": "https://example.invalid/hook"}}
+    group = []
+    report._post = lambda url, text: group.append(json.loads(text)) or True
+
+    def run(rid, **kw):
+        report.enqueue(S, usage.record(S, "run_finished", run_id=rid, form="DMP延期",
+                                       mode="auto", total=1, ok=1, seconds=10.0, **kw))
+
+    def diags():
+        return [m for m in group if isinstance(m, dict) and m.get("类型") == "(回传诊断)"]
+
+    try:
+        # ① 没有表格地址（从源码跑就是这样）→ 群里补一句，每天一句
+        report.sheet_webhook_url = lambda s: ""
+        run("a1")
+        report.push(S)
+        run("a2")
+        report.push(S)
+        d = diags()
+        check("没有表格地址 → 群里有一句诊断", len(d) == 1 and "没有表格回传地址" in d[0]["表格"],
+              str(d))
+        check("诊断每天最多一句", len(d) == 1, f"{len(d)} 句")
+        check("诊断是 v2（收集端会跳过，不算运行数据）", d and d[0].get("v") == 2)
+
+        # ② 表格返回错误 → 原因进群，而且不带 key
+        (tmp / report.SHEET_DIAG_MARK).unlink()
+        group.clear()
+        report.sheet_webhook_url = lambda s: "https://example.invalid/sheet?key=SECRET123"
+
+        def sheet_down(url, body, timeout=None):
+            raise RuntimeError(f"表格返回 40058：invalid key, url {url}")
+
+        report._post_json = sheet_down
+        run("b1")
+        res = report.push(S)
+        d = diags()
+        check("表格不通 → 如实回报失败", res["failed"] >= 1, str(res))
+        check("表格不通 → 原因进了群", len(d) == 1 and "40058" in d[0]["表格"], str(d))
+        check("进群的原因里没有 key / 地址",
+              d and "SECRET123" not in json.dumps(d, ensure_ascii=False)
+              and "example.invalid" not in json.dumps(d, ensure_ascii=False), str(d))
+        check("表格没发出去的留着下次补", report.pending(S) >= 1)
+
+        # ③ 一批里只有一条坏数据 → 只放弃那一条，其余照常进表，发件箱不再卡住
+        for f in tmp.glob("outbox.jsonl"):
+            f.unlink()
+        (tmp / report.SHEET_DIAG_MARK).unlink()
+        group.clear()
+        written = []
+
+        def picky(url, body, timeout=None):
+            recs = body["add_records"]
+            runs = [r["values"].get(report.SHEET_FIELDS["运行ID"]) for r in recs]
+            if "bad" in runs:
+                return {"errcode": 2022004, "errmsg": "field value invalid"}
+            written.extend(runs)
+            return {"errcode": 0}
+
+        report._post_json = picky
+        run("c1")
+        run("bad")
+        run("c2")
+        res = report.push(S)
+        check("好的两条进了表", sorted(written) == ["c1", "c2"], str(written))
+        check("坏的那条不再卡住发件箱", report.pending(S) == 0, f"还剩 {report.pending(S)}")
+        check("被拒的那条原因进了群", any("拒收" in m.get("表格", "") for m in diags()),
+              str(diags()))
+
+        # ④ 一条都发不出去（key 失效 / 限流）→ 不是数据的问题，一条都不能扔
+        report._post_json = lambda url, body, timeout=None: {"errcode": 45009, "errmsg": "limit"}
+        run("d1")
+        run("d2")
+        report.push(S)
+        check("整批都被拒 → 全部留着下次补，不扔", report.pending(S) == 2,
+              f"还剩 {report.pending(S)}")
+    finally:
+        usage.local_path, report.outbox_path, report.user_path = o_local, o_outbox, o_userpath
         report._post, report._post_json, report.sheet_webhook_url = o_post, o_pj, o_sheet
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -710,7 +815,7 @@ def main():
                test_share_dedupe, test_broken_file, test_saving,
                test_week_key_normalize, test_webhook_migration,
                test_team_view, test_outbox, test_sheet_channel,
-               test_sheet_channel_delivery):
+               test_sheet_channel_delivery, test_sheet_diag):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")

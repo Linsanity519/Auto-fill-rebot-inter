@@ -92,19 +92,20 @@ BY_MODE = {
         "submit_button", "urls",
     },
     "dmp_extension": {
-        "active_status", "after_each_wait", "after_filter_wait", "after_open_wait",
-        "after_pick_wait", "after_save_wait", "cancel_texts", "confirm_texts",
-        "creator_column", "date_field_label", "date_input_selectors", "empty_selector",
-        "error_selectors", "extension_menu_text", "id_column", "known_status",
-        "latest_date_selectors", "list_ready_timeout", "max_forward_months",
-        "menu_item_selector", "menu_open_wait", "mine_creator", "mine_filter_texts",
-        "mine_radio_selector", "mine_status", "month_wait", "name_column",
+        # ⚠ 1.1.19 删掉了一批「点完固定等 N 毫秒」的键（after_filter_wait / menu_open_wait /
+        #   after_save_wait / page_settle_wait / month_wait …），改成按条件等 + 围栏上限。
+        #   别再加回来 —— 见 src/dmp_runner.py 文件头。
+        "active_status", "after_each_wait", "cancel_texts", "confirm_texts",
+        "creator_column", "date_field_label", "date_input_selectors",
+        "error_selectors", "expire_column", "extension_menu_text", "id_column", "known_status",
+        "latest_date_selectors", "list_api", "list_ready_timeout", "max_forward_months",
+        "menu_item_selector", "mine_creator", "mine_filter_texts",
+        "mine_radio_selector", "mine_status", "modal_selector", "name_column",
         "next_month_selectors", "next_page_selectors", "non_extendable_status",
-        "op_trigger_selector", "page_change_timeout", "page_settle_wait",
-        "panel_header_selectors", "panel_open_wait", "panel_selectors",
-        "prev_month_selectors", "row_key_attribute", "row_selector", "save_texts", "scope",
-        "search_attempts", "search_button_selector", "search_input_selector",
-        "search_max_rows", "search_timeout",
+        "op_trigger_selector", "page_retries", "panel_header_selectors", "panel_selectors",
+        "prev_month_selectors", "prev_page_selectors", "row_key_attribute", "row_selector",
+        "save_texts", "scope", "search_attempts", "search_button_selector",
+        "search_input_selector",
     },
     "meeting_reserve": {
         "buildings", "data_source", "grab",

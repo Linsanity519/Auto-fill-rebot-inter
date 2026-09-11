@@ -16,6 +16,8 @@ import logging
 import re
 from datetime import date, datetime
 
+from .fill_core import wait_until
+
 log = logging.getLogger(__name__)
 
 # 面板月份标题，如 antd 的「2026年8月」/ Element 的「2026 年 8 月」
@@ -65,12 +67,17 @@ class DatePanel:
     """一个打开着的日期选择面板。
 
     cfg 是 config/forms/DMP延期.yaml 里那几个 selector 列表，页面改版只改 yaml。
+
+    ⚠ 这里不写「点完等 N 毫秒」：开面板等「浮层出现」，翻月等「标题换月」，
+      选日期等「输入框变成这个日期」。timeout 只是上限，条件一成立立刻往下走。
     """
 
-    def __init__(self, page, cfg: dict):
+    def __init__(self, page, cfg: dict, timeout: int = 15000):
         self.page = page
         self.c = cfg
+        self.timeout = int(timeout)
         self.max_forward = int(cfg.get("max_forward_months", 24))
+        self.input = None       # 有效期输入框，选完日期拿它回读核对
 
     # ---------------- 打开 ----------------
     def open(self, label: str | None = None):
@@ -82,23 +89,22 @@ class DatePanel:
         ⚠ 点击是「切换」不是「打开」：面板已经开着时再点会把它关掉。
           所以先判状态，开着就直接用。
         """
-        if self.is_open():
-            return None
-
         inp = self._input_by_label(label) if label else None
         if inp is None:
             inp = self._input_by_selectors()
+        if inp is not None:
+            self.input = inp
+        if self.is_open():
+            return None
         if inp is None:
             raise DateError("人群延期弹窗里找不到有效期输入框（检查 yaml 的 date_field_label / date_input_selectors）")
 
         inp.click()
-        self.page.wait_for_timeout(int(self.c.get("panel_open_wait", 500)))
-        if not self.is_open():
-            # 有的组件第一次点只聚焦不展开，再点一次
+        # 有的组件第一次点只聚焦不展开：短围栏内没开就再点一次
+        if not wait_until(self.page, self.is_open, min(3000, self.timeout)):
             inp.click()
-            self.page.wait_for_timeout(500)
-        if not self.is_open():
-            raise DateError("点了有效期输入框但日期面板没出来（检查 yaml 的 panel_selectors / latest_date_selectors）")
+            if not wait_until(self.page, self.is_open, self.timeout):
+                raise DateError("点了有效期输入框但日期面板没出来（检查 yaml 的 panel_selectors / latest_date_selectors）")
         return inp
 
     PANEL_FALLBACK = ("[class*=picker-dropdown]:not([class*=picker-dropdown-hidden])",
@@ -220,22 +226,22 @@ class DatePanel:
                     if "disabled" in cls or btn.get_attribute("disabled") is not None:
                         continue
                     btn.click()
-                    self.page.wait_for_timeout(int(self.c.get("month_wait", 260)))
                     return True
                 except Exception:
                     continue
         return False
 
     def _step(self, forward: bool) -> bool:
-        """翻一个月。翻不动（到边界 / 按钮禁用）返回 False。"""
+        """翻一个月。翻不动（到边界 / 按钮禁用 / 点了标题不换月）返回 False。"""
         before = self.header_month()
         key = "next_month_selectors" if forward else "prev_month_selectors"
         if not self._click_arrow(key):
             return False
-        after = self.header_month()
-        if before and after and before == after:
-            return False        # 点了但没动，当成到头了
-        return True
+        if before is None:
+            return True         # 读不到月份标题，没法核对，交给调用方按格子判断
+        # 标题和格子是同一次渲染出来的：标题换了月，格子也就换好了
+        return wait_until(self.page, lambda: self.header_month() not in (None, before),
+                          min(3000, self.timeout))
 
     def goto_month(self, target: date) -> bool:
         """把面板翻到目标日期所在的月份。"""
@@ -297,9 +303,21 @@ class DatePanel:
         for idx, d in self.cells():
             if d == target:
                 self.page.locator(selector).nth(idx).click()
-                self.page.wait_for_timeout(int(self.c.get("after_pick_wait", 300)))
+                self._verify(d)
                 return d
         raise DateError(f"{fmt(target)} 在面板里不可选")
+
+    def _verify(self, d: date):
+        """点完格子，等输入框里真的变成这个日期 —— 点了没生效就当场报，别带着错日期去保存。"""
+        inp, want = self.input, fmt(d)
+        if inp is None:
+            return
+        if not wait_until(self.page, lambda: want in (inp.input_value() or ""), self.timeout):
+            try:
+                got = inp.input_value()
+            except Exception:
+                got = "（读不到）"
+            raise DateError(f"点了 {want}，但有效期输入框里是「{got}」，没选上")
 
     def pick_capped(self, target: date | None,
                     limit: date | None = None) -> tuple[date, bool, date]:

@@ -45,11 +45,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
 
-from .paths import user_path
+from .paths import FROZEN, user_path
 
 log = logging.getLogger(__name__)
 
@@ -562,6 +563,87 @@ def _post_sheet(url: str, payloads: list[dict]):
         raise RuntimeError(f"表格返回 {res.get('errcode')}：{res.get('errmsg')}")
 
 
+SHEET_DIAG_MARK = "sheet-diag.txt"   # 今天已经往群里报过「表格通道有问题」了
+
+
+def _scrub(text: str, limit: int = 120) -> str:
+    """错误原文进群之前去掉地址和 key —— 表格写入 key 不能出现在群消息里。"""
+    s = re.sub(r"https?://\S+", "<地址>", str(text or ""))
+    s = re.sub(r"key=[\w\-]+", "key=***", s)
+    return s.replace("\n", " ")[:limit]
+
+
+def _sheet_diag(settings: dict, group_url: str, why: str, left: int):
+    """表格通道不通时，往群里补一句「为什么」，每台机器每天最多一句。
+
+    ⚠ 为什么需要：两个通道各记各的账，群那条发成功、表格那条失败时，
+      群里照常看得到这次运行，表格里却一直没有 —— 失败原因只写在那台机器自己的
+      output/run.log 里，谁也看不到。1.1.18 线上就是这样：一台机器 4 次运行进了群、
+      表里一条没有，查不出原因。
+    ⚠ v=2 的消息收集端（tools/collect_usage.py）会整条跳过，不会被当成运行数据。
+    """
+    if not group_url:
+        return
+    from datetime import date
+
+    today = date.today().isoformat()
+    mark = user_path("output", SHEET_DIAG_MARK)
+    try:
+        if mark.read_text(encoding="utf-8").strip() == today:
+            return
+    except OSError:
+        pass
+    try:
+        from . import __version__, usage
+
+        msg = {"v": 2, "类型": "(回传诊断)", "指纹": usage._uid(), "版本": __version__,
+               "表格": _scrub(why), "表格待补": left}
+        _post(group_url, json.dumps(msg, ensure_ascii=False))
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text(today, encoding="utf-8")
+    except Exception:
+        log.info("回传诊断没发出去", exc_info=True)
+
+
+def _send_sheet_batch(sheet_url: str, batch: list[dict]) -> tuple[int, str]:
+    """发一批到表格，返回 (被表格拒掉而放弃的条数, 错误)。整批都没发出去就抛。
+
+    ⚠ 一条坏数据不能把整个发件箱卡死：原来一批里只要有一条被表格拒掉，
+      整批就留着下次重发，下次还是这一批、还是被拒 —— 这台机器之后的
+      所有运行都永远进不了表。所以整批被拒时拆开一条一条发：
+        · 有的成、有的被拒 → 被拒的那几条是坏数据，放弃表格这一路（群里已经有），
+          标上 sheet_rejected 留个记录；
+        · 一条都发不出去 → 不是数据的问题（key 失效、限流、断网），整批留着下次补。
+    """
+    try:
+        _post_sheet(sheet_url, [e["d"] for e in batch])
+        for e in batch:
+            e.setdefault("s", []).append("sheet")
+        return 0, ""
+    except Exception as ex:
+        if len(batch) == 1 or not str(ex).startswith("表格返回"):
+            raise
+        whole = ex
+
+    ok, bad = [], []
+    for e in batch:
+        try:
+            _post_sheet(sheet_url, [e["d"]])
+            ok.append(e)
+        except Exception as ex:
+            bad.append((e, ex))
+    if not ok:
+        raise whole
+    for e in ok:
+        e.setdefault("s", []).append("sheet")
+    for e, ex in bad:
+        e.setdefault("s", []).append("sheet")
+        e["sheet_rejected"] = _scrub(ex)
+        log.warning("表格拒收了运行 %s，放弃这一条的表格回传（群里有）：%s",
+                    (e.get("d") or {}).get("run"), ex)
+    return len(bad), f"表格拒收 {len(bad)} 条：{_scrub(bad[0][1])}"
+
+
 def push(settings: dict, form_names=None, nickname: str = "") -> dict:
     """把发件箱里还没发出去的运行发掉，返回 {sent, failed, error}。
 
@@ -581,9 +663,16 @@ def push(settings: dict, form_names=None, nickname: str = "") -> dict:
         return {"sent": 0, "failed": 0, "error": ""}
 
     chans = []
+    rejected = {"n": 0, "why": ""}
     if sheet_url:
         # 表格是主通道，先发：它是有结构的那份，群里那条只是给人扫一眼
-        chans.append(("sheet", lambda b: _post_sheet(sheet_url, [e["d"] for e in b]),
+        def send_sheet(b):
+            n, why = _send_sheet_batch(sheet_url, b)
+            if n:
+                rejected["n"] += n
+                rejected["why"] = rejected["why"] or why
+
+        chans.append(("sheet", send_sheet,
                       lambda rows: [rows[i:i + SHEET_MAX_ROWS]
                                     for i in range(0, len(rows), SHEET_MAX_ROWS)]))
     if group_url:
@@ -593,7 +682,7 @@ def push(settings: dict, form_names=None, nickname: str = "") -> dict:
                           ensure_ascii=False)),
                       lambda rows: _batches(rows)))
 
-    bad, first_err = 0, ""
+    bad, first_err, sheet_err = 0, "", ""
     for name, send, split in chans:
         todo = [e for e in entries if name not in (e.get("s") or [])]
         for batch in split(todo):
@@ -602,10 +691,13 @@ def push(settings: dict, form_names=None, nickname: str = "") -> dict:
             try:
                 send(batch)
                 for e in batch:
-                    e.setdefault("s", []).append(name)
+                    if name not in e.setdefault("s", []):
+                        e["s"].append(name)
             except Exception as ex:
                 bad += len(batch)
                 first_err = first_err or f"{'表格' if name == 'sheet' else '群'}：{ex}"
+                if name == "sheet":
+                    sheet_err = sheet_err or f"{type(ex).__name__}：{ex}"
                 log.warning("回传到%s失败，%d 条留着下次补",
                             "表格" if name == "sheet" else "群", len(batch), exc_info=True)
 
@@ -615,4 +707,18 @@ def push(settings: dict, form_names=None, nickname: str = "") -> dict:
     _write_outbox(left)
     if sent:
         log.info("回传已发 %d 次运行（通道：%s）", sent, "、".join(sorted(want)))
+
+    # 表格这一路有问题：往群里补一句为什么（每天最多一句），不然只有本机日志知道
+    sheet_left = sum(1 for e in left if "sheet" not in (e.get("s") or []))
+    if not sheet_url:
+        # ⚠ 从源码跑（git clone 下来 python main.py）是最常见的情形：群地址 config/webhook.txt
+        #   在仓库里、表格地址 src/_bundled.py 故意不进仓库 —— 于是群里有、表里永远没有。
+        _sheet_diag(settings, group_url,
+                    "没有表格回传地址：" + ("安装目录里缺 src/_bundled.py" if FROZEN else
+                                   "从源码运行（表格地址只在打包时生成），"
+                                   "在 config/sheet_webhook.txt 里填上地址即可"), 0)
+    elif sheet_err:
+        _sheet_diag(settings, group_url, sheet_err, sheet_left)
+    elif rejected["n"]:
+        _sheet_diag(settings, group_url, rejected["why"], 0)
     return {"sent": sent, "failed": bad, "error": first_err}

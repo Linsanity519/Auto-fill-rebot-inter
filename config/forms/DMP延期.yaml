@@ -13,11 +13,14 @@ mode: dmp_extension
 
 form_url: 'https://bangumi-mng.bilibili.co/marin/s/full-ogv-data/user-assets/crowd-manage/crowd-list'
 # ⚠ 这是个 SPA：DOM 里先有空的 table 骨架，数据行要等接口回来才渲染（实测十几秒）。
-#   所以只等 ready_selector 不够，程序还会轮询等行出现，上限 list_ready_timeout。
+#   所以程序不等 table 标签，而是盯住下面这个列表接口：请求回来了、表格里的行和
+#   接口给的一模一样，才算列表刷新完（打开、点「我创建的」、翻页、搜索都走这一套）。
+#   list_ready_timeout 是这件事的上限（围栏），不是固定要等这么久。
+# ⚠ 1.1.18 之前这里是一堆「点完等 N 毫秒」：点「我创建的」固定等 2.5 秒，
+#   接口实测要 4.7 秒才回来，读到的是「全部」那一屏 —— 线上大面积「找不到人群」。
 ready_selector: 'table'
+list_api: '/crowd/list/page'           # 实际是 manager.bilibili.co/dmp/admin/crowd/list/page
 list_ready_timeout: 45000
-empty_selector: '.full_ogv_data_antd-empty'
-after_open_wait: 1500
 
 # ⚠ 这套页面的 antd 是带前缀打包的：class 前缀是 full_ogv_data_antd-，不是 ant-。
 #   所以下面所有选择器都带这个前缀，照抄通用 antd 写法会全部落空。
@@ -44,6 +47,7 @@ row_key_attribute: 'data-row-key'      # 值就是人群ID
 #              9 更新人 / 10 人群设置 / 11 操作
 id_column: 1
 name_column: 2
+expire_column: 8      # 失效时间。已经是系统最晚可选日期的人群直接跳过，不开弹窗
 creator_column: 9
 active_status: '生效中'
 known_status: ['生效中', '已失效', '未生效', '计算中']
@@ -54,16 +58,15 @@ non_extendable_status: ['已失效']
 # ---------------- 操作入口 ----------------
 # ⚠ 「操作」是 antd Dropdown.Button：左边「操 作」是主按钮，右边省略号才是菜单触发器，
 #   而且是 hover 展开不是 click。菜单项：查看/删除/更新/共享人群/导出/重试/推广人群/缩放人群/人群延期
+#   程序 hover 之后等「人群延期」这一项变成可见（上限 settings.timeout），不固定等。
 op_trigger_selector: 'button.full_ogv_data_antd-dropdown-trigger'
 menu_item_selector: 'li.full_ogv_data_antd-dropdown-menu-item'
 extension_menu_text: '人群延期'
-menu_open_wait: 1200
 
 # ---------------- scope=mine 怎么认「我创建的」 ----------------
 # 列表顶部有 antd Radio 组：全部 / 我创建的 / 分享给我的 —— 直接点它
 mine_filter_texts: ['我创建的']
 mine_radio_selector: 'label[class*=radio-wrapper]'
-after_filter_wait: 2500
 # 页面万一改版没有这个筛选了，退回按「更新人」列比对（填你的域账号，如 linzifan01）
 mine_creator: ''
 # scope=mine 时是否还要求「生效中」；留空 = 不按状态过滤
@@ -73,28 +76,30 @@ mine_status: '生效中'
 # ⚠ 列表有 21 页，靠翻页去找第 19 页上的某个人群要等一分多钟。
 #   scope=id_list 时改成直接搜人群ID，一步到位，也不受排序变化影响。
 # 后端接口是 /dmp/admin/crowd/list/page?id_or_name=<关键词>，按人群ID搜只会返回 1 条。
-# ⚠ 程序会确认列表「确实换成了搜索结果」才继续 —— 只等「列表不再变化」是不够的：
+# ⚠ 程序等的是「这次搜索发出的请求」回来并渲染完 —— 只等「列表不再变化」是不够的：
 #   搜索响应回来之前，搜索前那一屏本来就是静止的，一判就过，会误判成搜不到。
-#   没等到生效就重发搜索，最多 search_attempts 次。
+#   没等到就重发搜索，最多 search_attempts 次。
 search_input_selector: "input[placeholder*='人群名称或人群ID']"
 search_button_selector: '.full_ogv_data_antd-input-search-button'
-search_timeout: 15000
 search_attempts: 3
-search_max_rows: 5
 
 # ---------------- 翻页 ----------------
 # ⚠ li 本身点了没反应，真正响应的是它里面的 button（程序会自动往里找）。
-# ⚠ 翻页后不能按固定时间往下走：重渲染要 3 秒以上，早读一步会拿到上一页的数据。
-#   程序会一直等到「第一行的 key 变了」才认为翻页成功。
+# ⚠ 「是不是最后一页」按列表接口给的 total_num 算，不靠「翻不动」猜。
+#   1.1.18 之前翻页 15 秒没等到就当成到底了 —— 29 个只做了 6 个就「成功」收工。
+#   现在翻页失败会报错，没走到的人群记成失败。
+# 上一页：保存后页面若把列表刷回了第 1 页，程序会翻回原来那一页。
 next_page_selectors:
   - 'li.full_ogv_data_antd-pagination-next:not(.full_ogv_data_antd-pagination-disabled)'
-page_change_timeout: 15000
-page_settle_wait: 800
+prev_page_selectors:
+  - 'li.full_ogv_data_antd-pagination-prev:not(.full_ogv_data_antd-pagination-disabled)'
 
 # ---------------- 人群延期弹窗 ----------------
 # 弹窗结构：标题「有效期更改」/ 人群名称 / 人群有效期至[日期选择器] / 取 消 · 保 存
 # ⚠ 没有「确认」这一步，选完日期直接保存。confirm_texts 留空即可。
 # ⚠ 日期输入框是 readOnly，只能点面板选，填不进去。
+# 弹窗打开后程序会核对弹窗里的人群名称是不是这一行的，对不上就不做（防延错人群）。
+modal_selector: '.full_ogv_data_antd-modal-content'
 date_field_label: '人群有效期至'
 date_input_selectors:
   - '.full_ogv_data_antd-modal-content input'
@@ -117,9 +122,8 @@ next_month_selectors:
 prev_month_selectors:
   - 'button.full_ogv_data_antd-picker-header-prev-btn'
 max_forward_months: 24
-month_wait: 300
-panel_open_wait: 800
-after_pick_wait: 400
+# 开面板等「浮层出现」、翻月等「标题换月」、选日期等「输入框变成这个日期」，
+# 都不固定等，上限 settings.timeout。
 
 # ---------------- 确认 / 保存 ----------------
 # ⚠ 按钮文字是「保 存」「取 消」—— antd 在两个汉字之间插了全角空格，
@@ -127,7 +131,8 @@ after_pick_wait: 400
 confirm_texts: []
 save_texts: ['保存']
 cancel_texts: ['取消']
-after_save_wait: 2000
+# 点保存后等「弹窗关了」或「页面报错」其中一个出现（上限 list_ready_timeout）。
+# 1.1.18 之前固定等 2 秒：后台慢时 2 秒内既没关也没报错，就被当成了成功。
 error_selectors:
   - '.full_ogv_data_antd-message-error'
   - '.full_ogv_data_antd-form-item-explain-error'
