@@ -142,8 +142,11 @@ src/<前缀>_runner.py              ← 这个 mode 的主流程
    1.1.19 的 DMP 延期就是这么炸的：`dmp_runner` 里十几处「点完等 N 毫秒」，网一卡就读到
    半截的列表（「找不到人群」、翻页没等到当成最后一页静默收工）。它现在是范例：
    列表刷新盯接口（`_ListWatch`），弹窗/菜单等出现或消失，「到底了」按接口总数算。
-   还没迁的：`grep -c "wait_for_timeout(" src/*.py`（循环里当轮询步长用的不算），
-   **结构和 DMP 一模一样的 `ab_runner.py` 是最该先迁的**。动到哪个文件就顺手迁哪个。
+   `ab_runner` 1.1.20 照同一个路子迁完了（代码不共用：接口是 `code:200 + items + pageVO`、
+   行上没有 data-row-key、搜索会连发两个请求，见 `docs/AB实验延期-页面结构.md`），
+   `tools\test_ab_runner.py` 里有一条「源码里不许出现 wait_for_timeout(」的检查。
+   还没迁的：`grep -c "wait_for_timeout(" src/*.py`（循环里当轮询步长用的不算）。
+   动到哪个文件就顺手迁哪个。
 2. **不用编译哈希类名**（`tw-xxxxxx` / `css-1a75fj6` / emotion 类）。发版即失效。
    定位一律 **label 文字 → 字段块 → 块内按选项文字**。
 3. **同名 label 会出现多次**，要指定第几个。人群那段一个 label 出现 5 次。
@@ -272,7 +275,7 @@ python tools\new_mode.py 新配置类型名 --prefix xx
 ## 不要通读的文件（很贵，按需 grep 就行）
 
 `src/pp_filler.py`(1129) `src/dmp_runner.py`(926)
-`src/ab_runner.py`(908) `src/usage.py`(897) `assets/webui/app.js`(3123)
+`src/ab_runner.py`(1519) `src/usage.py`(897) `assets/webui/app.js`(3123)
 `config/forms/价格面板配置.yaml`(700+) `config/forms/资源位投放.yaml`(600+)
 
 需要它们里的某个能力时，先 `grep -n "^\s*def \|^class "` 看函数列表，再定点读。

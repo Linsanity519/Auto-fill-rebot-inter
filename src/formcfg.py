@@ -62,18 +62,21 @@ BY_MODE = {
         "reset_between_rows", "sku_types", "submit_selector", "success_selector",
     },
     "ab_extension": {
-        "active_status", "after_confirm_wait", "after_filter_wait", "after_menu_wait",
-        "after_open_wait", "after_submit_wait", "cancel_texts", "date_available_selector",
-        "date_input_selectors", "dialog_close_wait", "dialog_selector", "dialog_title",
-        "dialog_wait", "empty_read_retries", "empty_read_wait", "end_date_column",
-        "error_selectors", "extension_menu_item", "id_pattern", "max_month_lookahead",
-        "max_scan_pages", "menu_item_selector", "menu_wait", "month_cells_selector",
-        "month_label_selector", "month_wait", "more_menu_selectors", "more_menu_text",
-        "my_experiment_selectors", "my_experiment_text", "name_column",
-        "next_month_selectors", "next_page_selectors", "page_wait", "panel_ready_selector",
-        "panel_wait", "popconfirm_ok_selectors", "popconfirm_wait", "prev_month_selectors",
-        "row_selector", "scope", "search_input_selectors", "search_wait", "status_column",
-        "stop_after_empty_months", "submit_texts", "success_selectors", "table_selector",
+        # ⚠ 1.1.20 删掉了一批「点完固定等 N 毫秒」的键（search_wait / after_filter_wait /
+        #   page_wait / menu_wait / after_menu_wait / dialog_wait / panel_wait / month_wait /
+        #   after_submit_wait / empty_read_wait …），改成盯列表接口 + 按条件等 + 围栏上限。
+        #   别再加回来 —— 见 src/ab_runner.py 文件头。
+        "active_status", "cancel_texts", "date_available_selector", "date_input_selectors",
+        "detail_api", "dialog_selector", "dialog_title", "end_date_column", "error_selectors",
+        "extension_menu_item", "follow_up_timeout", "id_pattern", "list_api",
+        "list_ready_timeout", "max_month_lookahead", "menu_item_selector",
+        "month_cells_selector", "month_label_selector", "more_menu_selectors", "more_menu_text",
+        "my_experiment_param", "my_experiment_selectors", "my_experiment_text", "name_column",
+        "next_month_selectors", "next_page_selectors", "page_param", "page_retries",
+        "panel_selector", "popconfirm_ok_selectors", "prev_month_selectors",
+        "prev_page_selectors", "row_selector", "scope", "search_attempts",
+        "search_input_selectors", "search_param", "status_column", "stop_after_empty_months",
+        "submit_texts", "success_selectors", "table_selector",
     },
     "ad_native": {
         "columns", "create_url_marker", "creative", "grouping", "plan_fields", "prep_fields",
