@@ -148,9 +148,125 @@ def test_docid():
             os.environ["STATS_DOCID"] = old
 
 
+def _fake_cli(stdout: dict, returncode: int):
+    """把 sheet_query 里的 subprocess.run / shutil.which 换成假的，返回还原函数。"""
+    import json
+    import shutil
+    import subprocess
+
+    o_run, o_which = subprocess.run, shutil.which
+
+    class R:
+        pass
+
+    def fake_run(*a, **kw):
+        r = R()
+        r.returncode = returncode
+        r.stdout = json.dumps(stdout, ensure_ascii=False).encode("utf-8")
+        r.stderr = b""
+        return r
+
+    subprocess.run, shutil.which = fake_run, (lambda name: "wecom-cli")
+
+    def restore():
+        subprocess.run, shutil.which = o_run, o_which
+    return restore
+
+
+EXPIRED = {
+    "errcode": 850003, "errmsg": "authorization expired, hint: [1]",
+    "help_message": "当前机器人「文档」使用权限已过期\\n若你是智能机器人创建者，可以"
+                    "[点击这里](https://work.weixin.qq.com/ai/aiHelper/authorizationList"
+                    "?aibotid=123&type=1)授权当前机器人文档使用权限；",
+}
+
+
+def test_auth_expired():
+    print("\n[授权过期] 退出码非 0、原因在 stdout 里，也要认出来并抠出链接")
+    restore = _fake_cli(EXPIRED, 1)
+    try:
+        try:
+            C.sheet_query("s3_x", "SELECT 1")
+            check("过期要抛 DocAuthExpired", False, "没抛")
+        except C.DocAuthExpired as e:
+            check("过期要抛 DocAuthExpired", True)
+            check("链接抠出来了", e.link == "https://work.weixin.qq.com/ai/aiHelper/"
+                  "authorizationList?aibotid=123&type=1", e.link)
+        except Exception as e:
+            check("过期要抛 DocAuthExpired", False, f"抛的是 {type(e).__name__}：{e}")
+    finally:
+        restore()
+
+    restore = _fake_cli({"errcode": 40058, "errmsg": "bad sql"}, 1)
+    try:
+        try:
+            C.sheet_query("s3_x", "SELECT 1")
+            check("别的错误照常抛", False, "没抛")
+        except C.DocAuthExpired:
+            check("别的错误不能当成授权过期", False)
+        except RuntimeError as e:
+            check("别的错误照常抛，原因不再只剩「执行失败」", "40058" in str(e), str(e))
+    finally:
+        restore()
+
+    restore = _fake_cli({"errcode": 0, "values": ['{"rows":[{"运行ID":"a"}]}']}, 0)
+    try:
+        check("正常时照常返回 rows", C.sheet_query("s3_x", "SELECT 1") == [{"运行ID": "a"}])
+    finally:
+        restore()
+
+
+def test_auth_check():
+    print("\n[授权探测] 过期才发群、一天一句、没发出去不落标记、恢复后清标记")
+    import shutil
+    import tempfile
+
+    import check_doc_auth as A
+
+    tmp = Path(tempfile.mkdtemp(prefix="doc-auth-"))
+    mark = tmp / "mark.txt"
+    sent = []
+    ok_send = lambda t: sent.append(t) or True   # noqa: E731
+    expired = lambda d: ("expired", "https://work.weixin.qq.com/x")   # noqa: E731
+    try:
+        code, _ = A.run_check("s3_x", ok_send, mark=mark, today="2026-09-14",
+                              do_probe=lambda d: ("ok", ""))
+        check("正常：退出码 0、不发群", code == 0 and not sent)
+
+        code, msg = A.run_check("s3_x", ok_send, mark=mark, today="2026-09-14",
+                                do_probe=lambda d: ("error", "找不到 wecom-cli"))
+        check("CLI/网络问题：退出码 1、不发群", code == 1 and not sent, msg)
+
+        code, _ = A.run_check("", ok_send, mark=mark, do_probe=expired)
+        check("没配表 ID：退出码 1、不发群", code == 1 and not sent)
+
+        code, _ = A.run_check("s3_x", lambda t: False, mark=mark, today="2026-09-14",
+                              do_probe=expired)
+        check("群没发出去：不落标记（下次还会再试）", code == 2 and not mark.exists())
+
+        code, _ = A.run_check("s3_x", ok_send, mark=mark, today="2026-09-14",
+                              do_probe=expired, dry=True)
+        check("--dry：不发群", code == 2 and not sent)
+
+        code, _ = A.run_check("s3_x", ok_send, mark=mark, today="2026-09-14", do_probe=expired)
+        check("过期：发了一句，带链接", code == 2 and len(sent) == 1
+              and "https://work.weixin.qq.com/x" in sent[0], str(sent))
+        A.run_check("s3_x", ok_send, mark=mark, today="2026-09-14", do_probe=expired)
+        check("同一天再跑不重复发", len(sent) == 1, f"发了 {len(sent)} 句")
+        A.run_check("s3_x", ok_send, mark=mark, today="2026-09-15", do_probe=expired)
+        check("第二天还过期，再提醒一次", len(sent) == 2, f"发了 {len(sent)} 句")
+        check("群消息里不带表 ID", all("s3_x" not in t for t in sent))
+
+        A.run_check("s3_x", ok_send, mark=mark, today="2026-09-15",
+                    do_probe=lambda d: ("ok", ""))
+        check("授权恢复后清掉标记", not mark.exists())
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     for fn in (test_basic, test_excluded, test_dupes_are_caller_job,
-               test_legacy, test_shape, test_docid):
+               test_legacy, test_shape, test_docid, test_auth_expired, test_auth_check):
         fn()
     print("\n" + "=" * 56)
     print(f"通过 {PASS} 项，失败 {FAIL} 项")

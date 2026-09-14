@@ -428,6 +428,39 @@ def stats_docid() -> str:
     return m.group(1) if m else raw
 
 
+AUTH_EXPIRED_CODE = 850003
+
+
+class DocAuthExpired(RuntimeError):
+    """文档机器人的「文档使用权限」过期了。
+
+    ⚠ 续不了期，只能人去点：由机器人创建者在企业微信里重新授权一次。
+      `wecom-cli auth show --status` 这时照样显示 authorized，看不出来 ——
+      只有真去读一次表才会报 850003。所以 tools/check_doc_auth.py 每天读一行来探测。
+    ⚠ 过期期间**不丢数据**：客户端往表里写走的是「接收外部数据」那条地址，
+      跟这个授权无关。卡住的只是读表（收集），重新授权后再收一次就齐了。
+    """
+
+    def __init__(self, link: str = ""):
+        self.link = link
+        super().__init__("企微文档机器人的「文档使用权限」过期了，要机器人创建者重新授权"
+                         + (f"：{link}" if link else ""))
+
+
+def is_auth_expired(d: dict) -> bool:
+    return (d.get("errcode") == AUTH_EXPIRED_CODE
+            or "authorization expired" in str(d.get("errmsg") or ""))
+
+
+def auth_link(d: dict) -> str:
+    """从 CLI 返回的 help_message 里抠出授权链接（markdown 的 [..](url)）。
+
+    ⚠ 链接里带着机器人 ID，别写死 —— 换机器人就变了，以 CLI 当次给的为准。
+    """
+    m = re.search(r"\]\((https://[^)\s]+)\)", str(d.get("help_message") or ""))
+    return m.group(1) if m else ""
+
+
 def sheet_query(docid: str, sql: str) -> list[dict]:
     """跑一条只读 SQL，返回 rows。CLI 不在 / 没授权 / 查不动都抛，由调用方兜。
 
@@ -445,9 +478,21 @@ def sheet_query(docid: str, sql: str) -> list[dict]:
     r = subprocess.run([exe, "smartsheet", "records", "query",
                         "--docid", docid, "--sql", " ".join(sql.split())],
                        capture_output=True)
+    # ⚠ 先解析 stdout 再看退出码：授权过期时 CLI 退出码非 0，但原因（850003 + 授权链接）
+    #   在 stdout 里、stderr 是空的 —— 只看 stderr 的话只剩一句「执行失败」。
+    try:
+        d = json.loads((r.stdout or b"").decode("utf-8", "replace"))
+    except ValueError:
+        d = None
+    if isinstance(d, dict) and is_auth_expired(d):
+        raise DocAuthExpired(auth_link(d))
     if r.returncode != 0:
-        raise RuntimeError((r.stderr or b"").decode("utf-8", "replace")[:200] or "wecom-cli 执行失败")
-    d = json.loads((r.stdout or b"").decode("utf-8", "replace"))
+        why = (r.stderr or b"").decode("utf-8", "replace")[:200]
+        if not why and isinstance(d, dict):
+            why = f"表格返回 {d.get('errcode')}：{d.get('errmsg')}"
+        raise RuntimeError(why or "wecom-cli 执行失败")
+    if not isinstance(d, dict):
+        raise RuntimeError("wecom-cli 输出不是 JSON")
     if d.get("errcode") not in (0, None):
         raise RuntimeError(f"表格返回 {d.get('errcode')}：{d.get('errmsg')}")
     rows = []
@@ -619,6 +664,15 @@ def main() -> int:
     if not (args.clipboard or args.file or args.rebuild):
         try:
             team = collect_from_sheet()
+        except DocAuthExpired as e:
+            print("读统计表失败：企微文档机器人的「文档使用权限」过期了。")
+            print()
+            print("这个续不了期，得机器人创建者在企业微信里重新点一次授权：")
+            print(f"  {e.link or '企业微信「工作台 → 智能机器人」找到这个机器人 → 授权文档使用权限'}")
+            print("  （链接要在企业微信里打开）")
+            print()
+            print("数据没丢：同事那边照常在往表里写，授权好了再跑一次就收齐了。")
+            return 2
         except Exception as e:
             print(f"读统计表失败：{e}")
             print()
