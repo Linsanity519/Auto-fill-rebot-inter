@@ -108,7 +108,8 @@ class Adv2Runner(StateMixin):
                 page.on("dialog", _accept_dialog)
                 af = Adv2Filler(page, self.s["timeout"])
                 # 有下不下来的直接抛 —— 走下面「没能建成」，表单一项都不填
-                prefetch_covers([(c["value"], c["row"]) for c in data["covers"]], self.ui.log)
+                prefetch_covers([(c["value"], c["row"]) for c in data["covers"]], self.ui.log,
+                                checkpoint=self.ui.checkpoint)
 
                 self.ui.checkpoint()
                 self._open(page)

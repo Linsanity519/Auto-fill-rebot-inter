@@ -126,7 +126,7 @@ class AdRunner(StateMixin):
                 af = AdFiller(b.page, self.s["timeout"])
                 # 放在连上浏览器之后：连不上就立刻报错，别先等图下完。
                 # 有下不下来的直接抛 —— 走下面「没能开始」，一个单元都不填
-                prefetch_covers(covers, self.ui.log)
+                prefetch_covers(covers, self.ui.log, checkpoint=self.ui.checkpoint)
 
                 for i, u in enumerate(units):
                     self.ui.checkpoint()

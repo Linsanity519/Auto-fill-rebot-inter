@@ -29,7 +29,7 @@ import io
 import logging
 import time
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from . import images
@@ -76,17 +76,22 @@ def fetch_cover(url: str, tries: int = FETCH_TRIES) -> Path:
     raise ImageError(f"{last}（试了 {n} 次）")
 
 
-def prefetch_covers(items, say, tries: int = FETCH_TRIES) -> None:
+def prefetch_covers(items, say, tries: int = FETCH_TRIES, checkpoint=None,
+                    workers: int = WORKERS) -> None:
     """开跑前把封面网址全部并发下好；有下不下来的，列全了一次性抛 ImageError。
 
-    items: [(单元格的值, 行号), ...]，非网址的（留空 / 本地路径）自动忽略。
-    say:   ui.log
+    items:      [(单元格的值, 行号), ...]，非网址的（留空 / 本地路径）自动忽略。
+    say:        ui.log
+    checkpoint: ui.checkpoint —— 下载期间每半秒调一次，用户点「停止」时它抛 Stopped，
+                这里取消还没开始的下载、原样往上抛（正在下的那几张下完自己结束）。
 
     ⚠ 为什么「先全下完再报」而不是填到那一条再报：
       填到第 30 个单元才发现第 30 张图下不来，前 29 个单元已经填了（老的还已经保存了），
       用户得处理「跑了一半」的烂摊子；而且坏链接一次只冒一个，改一个跑一遍。
       开跑前全下完、坏的一次列全，要么全部能传，要么一个单元都不动。
-    ⚠ 内网 CDN 十几 KB/s，放在填表中间串着下，表现就是「填到封面卡住」。
+    ⚠ 内网 CDN 慢：实测 399 张 8 路并发要 11 分钟。所以必须边下边报进度 ——
+      原来只在开头说一句、下完再说一句，中间 11 分钟日志一动不动，看着就是卡死了；
+      也必须能停，否则点了「停止」要干等到下完。
     """
     rows: dict[str, list[int]] = {}
     for value, row in items:
@@ -97,19 +102,46 @@ def prefetch_covers(items, say, tries: int = FETCH_TRIES) -> None:
         return
 
     n = len(rows)
-    say(f"先把 {n} 张封面下到本地（开跑前一次并发下完，失败的自动重试 {tries - 1} 次）")
+    say(f"先把 {n} 张封面下到本地（{min(workers, n)} 路并发，失败的自动重试 {tries - 1} 次；"
+        f"网慢的话要等几分钟，下面会报进度）")
     t0 = time.monotonic()
 
-    def one(u):
-        try:
-            fetch_cover(u, tries)
-            return ""
-        except Exception as e:
-            return str(e)
+    errs: dict[str, str] = {}
+    done = 0
+    step = max(10, n // 10)             # 大约每 10% 报一次
+    next_mark, last_say = step, t0
+    pool = ThreadPoolExecutor(max_workers=min(workers, n))
+    futs = {pool.submit(fetch_cover, u, tries): u for u in rows}
+    pending = set(futs)
+    try:
+        while pending:
+            if checkpoint:
+                checkpoint()
+            finished, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+            for f in finished:
+                done += 1
+                try:
+                    f.result()
+                except Exception as e:
+                    errs[futs[f]] = str(e)
+            now = time.monotonic()
+            # 按比例报；太久没动静（大图、慢网）也报一次，免得看着像卡死
+            if pending and (done >= next_mark or now - last_say >= 30):
+                left = (now - t0) / done * (n - done) if done else 0
+                say(f"    封面已下载 {done}/{n}，用了 {now - t0:.0f}s"
+                    + (f"，预计还要 {left:.0f}s" if done else "")
+                    + (f"（{len(errs)} 张失败，最后一起报）" if errs else ""))
+                last_say = now
+                while next_mark <= done:
+                    next_mark += step
+    except BaseException:
+        # 点了「停止」（Stopped）或别的意外：没开始的全取消，正在下的让它自己跑完（有 TIMEOUT 兜底）
+        pool.shutdown(wait=False, cancel_futures=True)
+        say(f"封面下载中止（已下好 {done}/{n} 张，下次开跑会直接用缓存）", "warn")
+        raise
+    pool.shutdown(wait=True)
 
-    with ThreadPoolExecutor(max_workers=min(WORKERS, n)) as pool:
-        errs = list(pool.map(one, list(rows)))
-    bad = [(u, err) for u, err in zip(rows, errs) if err]
+    bad = [(u, errs[u]) for u in rows if u in errs]
     say(f"封面下载好 {n - len(bad)}/{n} 张，用了 {time.monotonic() - t0:.0f}s",
         "ok" if not bad else "error")
     if not bad:
