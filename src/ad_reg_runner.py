@@ -31,6 +31,9 @@ log = logging.getLogger(__name__)
 
 CAMPAIGN_ID_RE = re.compile(r"ID[:：]\s*(\d+)")
 
+# 连续失败几个单元就停下（出错不弹窗、记下接着跑；理由同 ad_runner.MAX_FAIL_STREAK）
+MAX_FAIL_STREAK = 5
+
 
 def _accept_dialog(dialog):
     try:
@@ -123,6 +126,12 @@ class AdRegRunner(StateMixin):
         prep = self._resolve_prep(prep)
         campaign_id = str(prep.get("已有计划ID", "")).strip()
         plan_name = str(prep.get("计划名称", "")).strip()
+        # ⚠ 「重跑失败的」复用同一个 runner 实例：上一轮已经建出计划的话挂回去，别再建一个同名的
+        made = getattr(self, "_created_campaign", None)
+        if not campaign_id and not dry and made and made[0] == plan_name:
+            campaign_id = made[1]
+        abort = ""          # 非空 = 中途整批停下的原因，没跑到的单元按失败记，好一键重跑
+        streak = 0          # 连续失败了几个
 
         self.ui.log(f"「{self.f['name']}」共 {total} 个单元、{n_vid} 个视频（≤10/单元）"
                     + ("（试跑：只填不保存）" if dry else ""))
@@ -143,6 +152,7 @@ class AdRegRunner(StateMixin):
                     label = f"[{i + 1}/{total}]"
                     name = u["name"]
                     new_plan = not campaign_id
+                    submitted = False
                     cs = list(u["creatives"])
                     vids = [c["video_index"] for c in cs]
                     self.ui.log(f"{label} {name} —— 填写中（{len(vids)} 个视频，"
@@ -164,6 +174,7 @@ class AdRegRunner(StateMixin):
                         self._shot(b.page, i + 1, "filled")
 
                         if dry:
+                            streak = 0
                             stats["dry"] += 1
                             results.append(self._row(i, name, "dry_run", f"试跑未保存（{note}）"))
                             self.ui.log(f"{label} 已填好，试跑不保存", "ok")
@@ -174,12 +185,15 @@ class AdRegRunner(StateMixin):
                         if action == "stop":
                             break
                         if action == "skip":
+                            streak = 0
                             stats["skipped"] += 1
                             results.append(self._row(i, name, "skipped", "用户跳过"))
                             self.ui.progress(i + 1, total, stats)
                             continue
 
+                        submitted = True
                         self._submit(af, b.page)
+                        streak = 0
                         stats["ok"] += 1
                         results.append(self._row(i, name, "ok", note))
                         self.state.mark_done(self._key(batch_prep, name))
@@ -189,9 +203,14 @@ class AdRegRunner(StateMixin):
                         if new_plan:
                             campaign_id = self._find_campaign_id(b.page, plan_name)
                             if not campaign_id:
-                                raise RuntimeError(
-                                    f"计划「{plan_name}」建出来了，但在计划列表里没找到它的ID。\n"
-                                    f"到页面上查一下计划ID，填进准备页的「已有计划ID」再重跑。")
+                                # 这个单元本身建成功了（已记 ok），不能再记一行失败；但后面的不知道挂哪，只能整批停
+                                abort = (f"计划「{plan_name}」建出来了，但在计划列表里没找到它的ID，"
+                                         f"后面的单元不知道该挂到哪。请到页面上查一下计划ID，"
+                                         f"填进准备页的「已有计划ID」，再点「重跑」。")
+                                self.ui.log(f"{label} {abort}", "error")
+                                self.ui.progress(i + 1, total, stats)
+                                break
+                            self._created_campaign = (plan_name, campaign_id)
                             self.ui.log(f"    计划ID {campaign_id}，后面的单元都挂它下面", "ok")
 
                     except Stopped:
@@ -203,9 +222,20 @@ class AdRegRunner(StateMixin):
                         stats["failed"] += 1
                         results.append(self._row(i, name, "failed", msg))
                         self.state.mark_failed(self._key(batch_prep, name), name, msg)
-                        self.ui.log(f"{label} 失败：{msg}", "error")
+                        # ⚠ 不弹窗问「继续吗」：记下原因接着跑，跑完在界面「失败清单」里一键重跑
+                        self.ui.log(f"{label} 失败（已记下，接着跑下一个）：{msg}", "error")
                         self.ui.log(f"    截图：{shot}")
-                        if not self.ui.ask_continue(msg):
+                        streak += 1
+                        if new_plan and submitted:
+                            abort = (f"建计划的单元点了「保存」但没确认成功，计划「{plan_name}」"
+                                     f"可能已经建出来了。为了不重复建计划先停下：去计划列表确认一下，"
+                                     f"建出来了就把计划ID填进准备页的「已有计划ID」，再点「重跑」。")
+                        elif streak >= MAX_FAIL_STREAK:
+                            abort = (f"连续 {streak} 个单元都失败了，多半是浏览器关了、登录掉了或者网断了，"
+                                     f"先停下。检查一下再点「重跑」。")
+                        if abort:
+                            self.ui.log(abort, "error")
+                            self.ui.progress(i + 1, total, stats)
                             break
 
                     self.ui.progress(i + 1, total, stats)
@@ -216,16 +246,31 @@ class AdRegRunner(StateMixin):
             if results:
                 log.exception("跑完之后收尾出错")
                 self.ui.log(f"收尾时出错（不影响已经建好的单元）：{e}", "warn")
+                abort = abort or f"运行中断：{e}"
             else:
                 log.exception("跑不起来")
                 self.ui.log(str(e), "error")
                 self.ui.finished("没能开始", str(e), False)
                 return results
 
+        # ⚠ 结果和要跑的单元必须一条对一条（界面「失败清单 / 重跑」按位置对回单元），没跑到的也补一行
+        if results and len(results) < total:
+            for j in range(len(results), total):
+                if abort:
+                    stats["failed"] += 1
+                    results.append(self._row(j, units[j]["name"], "failed", f"没跑到：{abort}"))
+                else:
+                    stats["skipped"] += 1
+                    results.append(self._row(j, units[j]["name"], "skipped", "停止后没跑到"))
+
         self._write_results(results)
         ok = stats["failed"] == 0
         body = (f"成功 {stats['ok']}　失败 {stats['failed']}　"
                 f"跳过 {stats['skipped']}　试跑 {stats['dry']}")
+        if abort:
+            body += f"\n\n中途停下了：{abort}"
+        if stats["failed"]:
+            body += "\n\n每个失败的原因在「执行」页下方的「失败清单」里，改好后可以单个重跑或「全部重跑」。"
         if self.created:
             body += "\n\n建好的单元：\n" + "\n".join(
                 f"　{n}（{t}）" for n, t in self.created)

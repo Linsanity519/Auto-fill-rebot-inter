@@ -1556,7 +1556,9 @@ class Api:
         if len(results) != len(kept):
             return {"failed": [], "misaligned": bool(kept),
                     "manifest_path": manifest_path}
-        failed = [{"index": row.index, "name": row.name, "error": res.get("错误", "")}
+        # 各 runner 的结果列名不统一：多数叫「错误」，原生商广 / 常规商广这几个叫「说明」
+        failed = [{"index": row.index, "name": row.name,
+                   "error": res.get("错误") or res.get("说明") or ""}
                   for row, res in zip(kept, results) if res.get("状态") == "failed"]
         return {"failed": failed, "misaligned": False,
                 "manifest_path": manifest_path}
