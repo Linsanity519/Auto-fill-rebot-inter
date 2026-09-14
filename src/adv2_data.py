@@ -17,7 +17,8 @@
   描述       → 不在表里，走准备阶段的「素材描述」
 
 ⚠ 「内容」列只当人看的备注，不参与任何逻辑。
-⚠ 隐藏的行和列直接忽略。封面两种填法都支持：单元格写本地路径 / 图片直接贴在单元格上。
+⚠ 隐藏的行和列直接忽略。封面：http 网址 / 本地路径 / 图片直接贴在单元格上；
+  全列留空 = 不传自定义封面，用稿件默认封面。
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 
+from .ad_image import cover_problem
 from .wizard_data import DataError, _apply_images, _extract_images
 
 log = logging.getLogger(__name__)
@@ -190,8 +192,9 @@ def validate(cfg: dict, data: dict) -> list[str]:
     if len(covers) > MAX_COVERS:
         issues.append(f"去重后有 {len(covers)} 张封面，超过页面上限 {MAX_COVERS}")
     for c in covers:
-        p = c["value"]
-        if ("/" in p or "\\" in p) and not Path(p).exists():
-            issues.append(f"第{c['row']}行的封面文件不存在：{p}")
+        # ⚠ 原来按「含 / 且本地不存在」判，网址也含 / —— 每个网址都被报成文件不存在
+        bad = cover_problem(c["value"])
+        if bad:
+            issues.append(f"第{c['row']}行的封面{bad}")
 
     return issues

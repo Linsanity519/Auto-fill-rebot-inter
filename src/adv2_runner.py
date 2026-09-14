@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import ad_prep as P
 from . import adv2_data as D
+from .ad_image import prefetch_covers
 from .adv2_filler import Adv2Filler
 from .browser import Browser
 from .preview import PreviewRow
@@ -106,6 +107,8 @@ class Adv2Runner(StateMixin):
                 page = b.page
                 page.on("dialog", _accept_dialog)
                 af = Adv2Filler(page, self.s["timeout"])
+                # 有下不下来的直接抛 —— 走下面「没能建成」，表单一项都不填
+                prefetch_covers([(c["value"], c["row"]) for c in data["covers"]], self.ui.log)
 
                 self.ui.checkpoint()
                 self._open(page)
@@ -220,6 +223,8 @@ class Adv2Runner(StateMixin):
         if covers:
             self.ui.log(f"素材层：传 {len(covers)} 张封面…")
             af.add_covers(m.get("cover") or {}, covers)
+        else:
+            self.ui.log("素材层：封面列全空，不传自定义封面，用稿件默认封面")
         desc_cfg = m.get("description") or {}
         desc = str(prep.get(desc_cfg.get("from_prep", "素材描述"), "")).strip()
         if desc:

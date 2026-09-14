@@ -168,7 +168,7 @@ project_fields:
 # ============================================================
 material:
   picker:
-    open_button: 添加稿件/视频
+    open_button: 添加稿件
     drawer_selector: '.product-select-drawer'
     search_ph: 请输入稿件bvid或avid搜索
     confirm_button: 确定
@@ -205,4 +205,4 @@ columns:
   - {name: 内容, _note: '选填。只当人看的备注/分组标记，不参与配置。留空也行'}
   - {name: avid, required: true, _note: '稿件 avid，抽屉里直接搜这个数字。重复的 avid 会自动去重'}
   - {name: 素材标题, required: true, _note: '2~40 字。所有行的标题去重后汇进标题池，最多 50 个'}
-  - {name: 封面, _note: '选填。本地图片路径，或直接把图片贴进单元格。所有行的封面汇进封面池，最多 100 张'}
+  - {name: 封面, _note: '选填。http 图片网址（自动下载）、本地图片路径，或直接把图片贴进单元格；超过 700KB 自动压缩。所有行的封面汇进封面池，最多 100 张；整列留空 = 用稿件默认封面'}

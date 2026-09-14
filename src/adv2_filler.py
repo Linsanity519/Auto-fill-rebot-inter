@@ -20,7 +20,7 @@ import logging
 import re
 from pathlib import Path
 
-from .ad_image import ImageError, shrink
+from .ad_image import ImageError, resolve_cover
 from .filler import FillError
 
 log = logging.getLogger(__name__)
@@ -376,7 +376,7 @@ class Adv2Filler:
     def add_archives(self, picker: dict, avids: list[str]):
         if not avids:
             return
-        open_btn = picker.get("open_button", "添加稿件/视频")
+        open_btn = picker.get("open_button", "添加稿件")
         drawer_sel = picker.get("drawer_selector", DRAWER_PICKER)
         search_ph = picker.get("search_ph", "请输入稿件bvid或avid搜索")
 
@@ -401,7 +401,7 @@ class Adv2Filler:
             self.page.wait_for_timeout(500)
             waited += 500
         if box is None:
-            raise FillError("「添加稿件/视频」抽屉打开了，但没找到 avid 搜索框")
+            raise FillError("「添加稿件」抽屉打开了，但没找到 avid 搜索框")
 
         footer = self.page.locator(f"{drawer_sel} .drawer-footer, .drawer-footer").last
         picked = 0
@@ -575,11 +575,9 @@ class Adv2Filler:
         file_sel = cfg.get("file_input", ".media-editor input[type=file]")
         count_text = cfg.get("count_text", "已添加")
         for path in paths:
-            p = Path(path)
-            if not p.exists():
-                raise FillError(f"封面文件不存在：{path}")
+            # 网址先下载、本地图直接用，都压到 700KB 以内
             try:
-                path = shrink(p, 700000)
+                path = resolve_cover(path, int(cfg.get("max_bytes", 700000)))
             except ImageError as e:
                 raise FillError(str(e)) from e
             before = self._cover_count(count_text)

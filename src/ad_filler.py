@@ -17,7 +17,7 @@ import logging
 import re
 from pathlib import Path
 
-from .ad_image import ImageError, shrink
+from .ad_image import ImageError, resolve_cover
 from .filler import FillError
 
 log = logging.getLogger(__name__)
@@ -318,11 +318,11 @@ class AdFiller:
                 self._add_one_pass(picker, avids)
 
     def _add_one_pass(self, picker: dict, avids: list[str]):
-        drawer = self._open_drawer(picker.get("open_button", "添加稿件/视频"))
+        drawer = self._open_drawer(picker.get("open_button", "添加稿件"))
         search_ph = picker.get("search_ph", "请输入稿件bvid或avid搜索")
         box = drawer.locator(f'input[placeholder*="{search_ph}"]').first
         if not box.count():
-            raise FillError("「添加稿件/视频」抽屉没打开，或者搜索框变了")
+            raise FillError("「添加稿件」抽屉没打开，或者搜索框变了")
 
         item_sel = picker.get("item_selector", ".video-drawer .video-select-item")
         check_sel = picker.get("check_selector", ".video-checkbox label")
@@ -440,13 +440,11 @@ class AdFiller:
           往抽屉里的 input[type=file] 塞文件 → 等「已选 1/1」→ 点确认。
           内联那个「添加封面」口传上去是多加一张（1/6 变 2/6），原图还在，不是要的效果。
         ⚠ 超过 max_bytes 的先压再传，压缩只降编码质量、不动尺寸。
+        ⚠ path 可以是 http 网址（先下载）。留空走不到这里 —— fill_creative 直接跳过，页面保留默认封面。
         """
-        p = Path(path)
-        if not p.exists():
-            raise FillError(f"封面文件不存在：{path}")
         cap = int(f.get("max_bytes", 700000))
         try:
-            path = shrink(p, cap)
+            path = resolve_cover(path, cap)
         except ImageError as e:
             raise FillError(str(e)) from e
 

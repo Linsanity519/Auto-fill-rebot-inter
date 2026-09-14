@@ -24,6 +24,7 @@ from pathlib import Path
 from . import ad_data as D
 from . import ad_prep as P
 from .ad_filler import AdFiller
+from .ad_image import prefetch_covers
 from .browser import Browser
 from .preview import PreviewRow
 from .runstate import StateMixin
@@ -108,6 +109,11 @@ class AdRunner(StateMixin):
         self.ui.log(f"「{self.f['name']}」共 {total} 个单元、"
                     f"{sum(len(u['creatives']) for u in units)} 条创意"
                     + ("（试跑：只填不保存）" if dry else ""))
+        covers = [(str(c.get(n, "")).strip(), c.get("_row"))
+                  for u in units for c in u["creatives"] for n in self._cover_fields()]
+        n_default = sum(1 for v, _ in covers if not v)
+        if n_default:
+            self.ui.log(f"其中 {n_default} 条创意封面留空，保留稿件默认封面")
         if campaign_id:
             self.ui.log(f"挂到已有计划（ID {campaign_id}），不新建计划")
         else:
@@ -118,6 +124,9 @@ class AdRunner(StateMixin):
             with Browser(self.s["cdp_url"], self.s["timeout"]) as b:
                 b.page.on("dialog", _accept_dialog)
                 af = AdFiller(b.page, self.s["timeout"])
+                # 放在连上浏览器之后：连不上就立刻报错，别先等图下完。
+                # 有下不下来的直接抛 —— 走下面「没能开始」，一个单元都不填
+                prefetch_covers(covers, self.ui.log)
 
                 for i, u in enumerate(units):
                     self.ui.checkpoint()
@@ -214,6 +223,10 @@ class AdRunner(StateMixin):
         return results
 
     # ---------------- 分步 ----------------
+    def _cover_fields(self) -> list[str]:
+        return [f["name"] for f in (self.f.get("creative") or {}).get("fields", [])
+                if f.get("type") == "replace_cover"]
+
     def _resolve_prep(self, prep: dict) -> dict:
         """把准备阶段里的 {今天} 替换成跑的当天。"""
         today = datetime.now().strftime("%Y-%m-%d")

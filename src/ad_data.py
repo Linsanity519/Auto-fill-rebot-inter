@@ -24,7 +24,9 @@ name_template 拼。页面上一个单元最多挂 10 条创意（抽屉里写�
 
 ⚠ 隐藏的行和列直接忽略（见 _rows）。
 
-封面列两种填法都支持（和资源位投放一致）：
+封面列（见 ad_image.resolve_cover）：
+  · 留空                  → 保留稿件默认封面，不报错
+  · http(s) 网址           → 执行时下载、压到 700KB 以内再传
   · 单元格里写本地路径    → 直接用
   · 图片直接贴在单元格上  → 从 xlsx 里抽出来存到 output/_images/ 再用
 """
@@ -40,6 +42,7 @@ from openpyxl.utils import column_index_from_string
 
 # ⚠ 抽图那两个函数和资源位投放一模一样（openpyxl 的 _images 锚点解析很啰嗦），
 #   直接复用 wizard_data 里的实现，不重写第二份。
+from .ad_image import cover_problem
 from .wizard_data import DataError, _apply_images, _extract_images
 
 log = logging.getLogger(__name__)
@@ -293,6 +296,11 @@ def validate(cfg: dict, data: dict) -> list[str]:
                 if not val:
                     if f.get("required"):
                         issues.append(f"{head} 第{r}行「{name}」没填")
+                    continue
+                if f.get("type") == "replace_cover":
+                    bad = cover_problem(val)
+                    if bad:
+                        issues.append(f"{head} 第{r}行「{name}」{bad}")
                     continue
                 mx = f.get("max")
                 if mx and len(val) > int(mx):
