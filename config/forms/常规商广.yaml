@@ -231,7 +231,9 @@ creative:
   switch_selector: '.every-card .material-card'
 
   video_picker:
-    open_button: 添加稿件/视频
+    # ⚠ 别名表，按顺序找、先全等再包含。2026-09-14 实测同一个按钮有两种叫法：
+    #   空白页「添加稿件」、填完推广目的/推广内容后「添加稿件/视频」。再改名就往这里加一行。
+    open_buttons: [添加稿件/视频, 添加稿件, 添加视频]
     tab: 我的视频
     sub_account: 三连账户       # 抽屉顶部子账户，选「三连账户」才看得到我的视频
     card_selector: '.video-select-item'

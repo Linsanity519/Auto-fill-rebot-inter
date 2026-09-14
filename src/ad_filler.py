@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .ad_image import ImageError, resolve_cover
 from .filler import FillError
+from .fill_core import wait_until
 
 log = logging.getLogger(__name__)
 
@@ -317,8 +318,39 @@ class AdFiller:
             if avids:
                 self._add_one_pass(picker, avids)
 
+    # 加视频按钮的叫法：2026-09-14 实测同一个按钮两种文案 —— 空白页「添加稿件」、
+    # 填完推广目的/推广内容后「添加稿件/视频」。一律按别名表找，别写死一个。
+    PICKER_OPENERS = ["添加稿件/视频", "添加稿件", "添加视频"]
+
+    def _picker_opener(self, picker: dict) -> str:
+        """在别名表里挑出页面上**此刻可见**的那个叫法（等到出现为止）。
+        yaml 的 open_buttons（列表）优先，再是老的 open_button，最后内置兜底。"""
+        names = list(picker.get("open_buttons") or [])
+        if picker.get("open_button"):
+            names.append(picker["open_button"])
+        names = list(dict.fromkeys(str(n).strip() for n in names + self.PICKER_OPENERS
+                                   if str(n).strip()))
+
+        def visible_name():
+            for n in names:
+                loc = self.page.get_by_text(re.compile(rf"^\s*{re.escape(n)}\s*$"))
+                for i in range(loc.count()):
+                    try:
+                        if loc.nth(i).is_visible():
+                            return n
+                    except Exception:
+                        continue
+            return None
+
+        wait_until(self.page, lambda: visible_name() is not None, self.timeout)
+        name = visible_name()
+        if name is None:
+            raise FillError(f"页面上找不到加视频的按钮（试过：{'、'.join(names)}）—— "
+                            f"按钮又改名了的话，往 yaml 的 picker.open_buttons 里加一行")
+        return name
+
     def _add_one_pass(self, picker: dict, avids: list[str]):
-        drawer = self._open_drawer(picker.get("open_button", "添加稿件"))
+        drawer = self._open_drawer(self._picker_opener(picker))
         search_ph = picker.get("search_ph", "请输入稿件bvid或avid搜索")
         box = drawer.locator(f'input[placeholder*="{search_ph}"]').first
         if not box.count():

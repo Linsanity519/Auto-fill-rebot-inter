@@ -200,7 +200,8 @@ creative:
   # ⚠ 必须先把「推广内容」选成 OGV推广，抽屉里才搜得到 OGV 稿件 ——
   #   所以 unit_fields 里推广内容排在第 2 项，创意层永远在单元层之后填。
   picker:
-    open_button: 添加稿件
+    # ⚠ 别名表（先全等、按顺序）。同一个按钮空白页叫「添加稿件」、填完单元层叫「添加稿件/视频」
+    open_buttons: [添加稿件/视频, 添加稿件, 添加视频]
     # ⚠ 点卡片本身不算选中（实测勾不上），要点卡片右下角那个 checkbox
     check_selector: '.video-checkbox label'
     search_ph: 请输入稿件bvid或avid搜索

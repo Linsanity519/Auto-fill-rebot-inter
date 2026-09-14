@@ -152,6 +152,13 @@ def main() -> int:
         check("只配了老的 open_button 也认",
               AdRegCreative._opener_names({"open_button": "批量添加"}) == ["批量添加"])
 
+        print("\n[别名表] 加视频按钮：yaml 列表优先、老 open_button 也认、内置兜底去重")
+        got = AdRegCreative._picker_openers({"open_buttons": ["添加稿件"], "open_button": "选视频"})
+        check("open_buttons 排最前", got[:2] == ["添加稿件", "选视频"])
+        check("内置兜底带上两种实测叫法", "添加稿件/视频" in got and "添加稿件" in got)
+        check("去重", len(got) == len(set(got)))
+        check("什么都不配也能用", AdRegCreative._picker_openers({})[:2] == ["添加稿件/视频", "添加稿件"])
+
         browser.close()
 
     print("\n" + "=" * 56)

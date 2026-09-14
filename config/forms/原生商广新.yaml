@@ -168,7 +168,8 @@ project_fields:
 # ============================================================
 material:
   picker:
-    open_button: 添加稿件
+    # ⚠ 别名表（先全等、按顺序）。同一个按钮空白页叫「添加稿件」、填完单元层叫「添加稿件/视频」
+    open_buttons: [添加稿件/视频, 添加稿件, 添加视频]
     drawer_selector: '.product-select-drawer'
     search_ph: 请输入稿件bvid或avid搜索
     confirm_button: 确定

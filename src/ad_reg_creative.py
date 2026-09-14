@@ -43,7 +43,7 @@ class AdRegCreative:
             raise FillError("这个单元没有要加的视频")
         per = int(picker.get("per_page", 20))
 
-        drawer = self._open_drawer(picker.get("open_button", "添加稿件/视频"))
+        drawer = self._open_drawer(self._picker_openers(picker))
         self._pick_sub_account(drawer, picker.get("sub_account", ""))
         self._switch_tab(drawer, picker.get("tab", "我的视频"))
 
@@ -507,9 +507,30 @@ class AdRegCreative:
                             f"创意切换没走完，或者页面结构变了")
         return vis.first
 
-    def _open_drawer(self, button_text: str):
+    # 「加视频」按钮的叫法：页面**同时**存在两种 —— 2026-09-14 实测，
+    # 空白页上叫「添加稿件」，填完推广目的/推广内容后又变回「添加稿件/视频」。
+    # 所以永远按别名表找，写死哪一个都会在另一种状态下挂掉。
+    PICKER_OPENERS = ["添加稿件/视频", "添加稿件", "添加视频"]
+
+    @classmethod
+    def _picker_openers(cls, picker: dict) -> list[str]:
+        """yaml 里 open_buttons（列表）优先，再是老的 open_button，最后是内置别名兜底。"""
+        names = list(picker.get("open_buttons") or [])
+        if picker.get("open_button"):
+            names.append(picker["open_button"])
+        names += cls.PICKER_OPENERS
+        out = []
+        for n in names:
+            n = str(n).strip()
+            if n and n not in out:
+                out.append(n)
+        return out
+
+    def _open_drawer(self, button_text):
+        names = [button_text] if isinstance(button_text, str) else list(button_text)
+        button_text = "/".join(names[:2])
         for attempt in (1, 2):
-            self._click_visible(button_text)
+            self._click_any_visible(names)
             drawer = self.page.locator(".ivu-drawer").filter(
                 has=self.page.locator(".tab-link")).filter(visible=True).first
             try:
@@ -659,6 +680,29 @@ class AdRegCreative:
             wait_until(self.page, lambda: not drawer.is_visible(), 3000)
         except Exception:
             log.warning("关抽屉失败", exc_info=True)
+
+    def _click_any_visible(self, names: list[str]):
+        """按别名表点一个可见按钮：先逐个全等匹配，再退到「包含」匹配（按钮常带图标/前后缀）。"""
+        for n in names:
+            loc = self.page.get_by_text(re.compile(rf"^\s*{re.escape(n)}\s*$"))
+            for i in range(loc.count()):
+                el = loc.nth(i)
+                try:
+                    if el.is_visible():
+                        el.click()
+                        return n
+                except Exception:
+                    continue
+        pat = re.compile("|".join(re.escape(n) for n in names))
+        for sel in ("button", ".ivu-btn", "[role=button]"):
+            loc = self.page.locator(sel).filter(has_text=pat).filter(visible=True)
+            if loc.count():
+                txt = " ".join((loc.first.inner_text() or "").split())
+                log.info("加视频按钮全等没命中，按包含匹配点了「%s」", txt)
+                loc.first.click()
+                return txt
+        raise FillError(f"页面上找不到加视频的按钮（试过：{'、'.join(names)}）—— "
+                        f"按钮又改名了的话，往 yaml 的 video_picker.open_buttons 里加一行")
 
     def _click_visible(self, text: str):
         loc = self.page.get_by_text(re.compile(rf"^\s*{re.escape(text)}\s*$"))
