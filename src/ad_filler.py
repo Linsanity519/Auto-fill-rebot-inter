@@ -223,24 +223,40 @@ class AdFiller:
         self.page.wait_for_timeout(400)
 
     def _date_range(self, f, value, values):
-        """iView 的日期区间框：直接打字，回车收起面板，再回读校验。"""
+        """iView 的日期区间框：打字 → 等框里确实出现这串字 → 回车收起 → 回读校验。
+
+        ⚠ 两个坑都是实跑才看出来的，别照着"看起来够用"的写法改回去：
+
+        1. 准备页上手打的常是「2026-9-24」，iView 会自己补成「2026-09-24」。
+           回读按字面比就会把"填对了"判成"没填进去"（1.1.21 整批失败的由来），
+           所以两边都过 norm_time 再比。
+        2. `fill()` 之后立刻回车，大约三次里有一次会提交成「今天 - 今天」——
+           Vue 那边还没收到这串字，回车就把面板当前高亮的那天确认掉了。
+           所以回车前先等框里真的出现这串字；万一还是歪了，重来一遍再报错。
+        """
         el = self._visible_inputs(f["ph"]).first
         if not el.count():
             raise FillError(f"找不到日期框（placeholder 含「{f['ph']}」）")
-        # 准备页上手打的常是「2026-9-24」，iView 会自己补成「2026-09-24」——
-        # 打字前先补齐，回读时两边都按补齐后的比，不然日期填对了也报失败
         value = norm_time(value)
-        el.click()
-        self.page.wait_for_timeout(300)
-        el.fill("")
-        el.fill(value)
-        self.page.keyboard.press("Enter")
-        self.page.wait_for_timeout(600)
-        self.page.keyboard.press("Escape")
-        self.page.wait_for_timeout(300)
-        got = (el.input_value() or "").strip()
-        if norm_time(got).replace(" ", "") != value.replace(" ", ""):
-            raise FillError(f"日期没填进去：想填「{value}」，框里现在是「{got}」")
+        same = lambda a, b: norm_time(a).replace(" ", "") == b.replace(" ", "")
+
+        got = ""
+        for attempt in range(3):
+            el.click()
+            self.page.wait_for_timeout(300)
+            el.fill("")
+            el.fill(value)
+            # ⚠ 这一步就是防「今天 - 今天」的：等 Vue 真的收到了再回车
+            wait_until(self.page, lambda: same(el.input_value() or "", value), 3000)
+            self.page.keyboard.press("Enter")
+            self.page.wait_for_timeout(600)
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(300)
+            got = (el.input_value() or "").strip()
+            if same(got, value):
+                return
+            log.warning("日期填成了「%s」（想填「%s」），第 %d 次重来", got, value, attempt + 1)
+        raise FillError(f"日期没填进去：想填「{value}」，框里现在是「{got}」")
 
     # ---------------------------------------------------------- 定向人群
     def _audience(self, f, value, values):

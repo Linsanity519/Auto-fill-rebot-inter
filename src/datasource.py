@@ -52,12 +52,16 @@ def _cell_text(v) -> str:
 DATE_TYPES = ("date_by_label", "date_range_start", "date_range_end", "pp_date",
               "date_range", "bd_date_range", "daterange")
 
-_TIME_TEXT = re.compile(
-    r"^(\d{4})\D(\d{1,2})\D(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$")
+# 一个日期（可带时分秒）。不加 ^$ —— 「2026-9-24 - 2026-10-11」这种区间串里
+# 有两个，得逐个换；只认整串的话区间就被整个漏过去了（这个坑踩过，见下）。
+_ONE_TIME = re.compile(
+    r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?")
 
 
 def norm_time(val) -> str:
-    """把日期/时间文本补成标准写法：2026-9-4 9:00 → 2026-09-04 09:00:00。
+    """把日期/时间补成标准写法：2026-9-4 9:00 → 2026-09-04 09:00:00。
+
+    区间串（「开始 - 结束」）里的两头都会换。
 
     ⚠ 存在的理由：校验用 strptime，而 strptime 是**不挑补没补 0 的**
       （"2026-9-24" 照样过），页面上的日期框却挑。于是「校验全过、一跑全炸」——
@@ -65,17 +69,18 @@ def norm_time(val) -> str:
       「想填 2026-9-24，框里现在是 2026-09-24」，看着像没填进去，其实填对了。
       所以日期一律在这儿收敛成一种写法，别让两套宽严不一的判断各活各的。
 
+    ⚠ 别改成整串 ^$ 全匹配。写这个函数时就是那么写的，单个日期全对、
+      区间串一个都不换 —— 而区间串正是出事的那种值。实跑才看出来。
+
     认不出来的原样返回（让各自的校验去报错，这儿不替它们判对错）。
     """
-    s = str(val or "").strip()
-    m = _TIME_TEXT.match(s)
-    if not m:
-        return s
-    y, mo, d, hh, mi, ss = m.groups()
-    out = f"{y}-{int(mo):02d}-{int(d):02d}"
-    if hh is not None:
-        out += f" {int(hh):02d}:{mi}:{ss or '00'}"
-    return out
+    def one(m):
+        y, mo, d, hh, mi, ss = m.groups()
+        out = f"{y}-{int(mo):02d}-{int(d):02d}"
+        if hh is not None:
+            out += f" {int(hh):02d}:{mi}:{ss or '00'}"
+        return out
+    return _ONE_TIME.sub(one, str(val or "").strip())
 
 
 def _rows_to_records(rows) -> list[dict]:
