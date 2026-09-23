@@ -1,0 +1,65 @@
+# ============================================================
+# 普通内容授权
+# 结构抓取：见 docs/普通内容授权-配置项抓取.md ——【改这个文件之前先看那份】
+# ============================================================
+# ⚠ 定位一律走「label 文字 → 字段块 → 块内按选项文字」。
+#   不要用编译哈希类名（tw-xxxxxx / css-1a75fj6 / emotion 类），发版即失效。
+# ⚠ 往这里加新的**顶层**键时，回 src/formcfg.py 的 BY_MODE["nc"] 里登记一下，
+#   不然 tools\check_mode.py 会提示「不认识这个键」。纯 YAML 锚点用 _ 开头。
+#
+# ⚠ 和「花火稿件授权」是**同一个页面的两个 tab**，弹窗 DOM 一模一样
+#   （同一套 page-edit-v2 组件），所以 dialog: 段和那边逐字相同、
+#   填表也复用 src/hh_filler.py。**两者的差别只有三处**，都在下面标了 ←：
+#     1. subTab 不同；2. 校验接口不同；3. 3 次/7 天的上限算在「同一账号」而不是「同一视频」。
+
+name: 普通内容授权
+description: 按 Excel 里的稿件 bvid，在「普通内容授权」里逐条发起授权申请（非花火商单稿件走这里）
+
+# 侧栏归类
+nav:
+  group: 商业化广告
+  group_order: 5
+  label: 普通内容授权
+  order: 10
+
+mode: nc
+
+# ---------------- 页面 ----------------
+# ← 差别 1：subTab=normal_video_auth（花火那边是 video_auth）
+form_url: 'https://ad.bilibili.co/#/assets/index?activeTab=authorization&type=list&subTab=normal_video_auth'
+ready_selector: 'text=添加稿件授权'
+
+# ---------------- 弹窗里的三个控件 ----------------
+# 全是 iView（ivu-*）+ 业务自己的语义类名，不是编译哈希类名。和花火那边完全一致。
+dialog:
+  modal: '.ivu-modal-content'
+  title: '添加稿件授权'
+  type_select: '.search-type-select'
+  type_value: '稿件bvid'          # 下拉默认是「稿件链接」，每次都要切
+  video_input: '.video-auto-complete input.ivu-input'
+  time_group: '.bind-time-type'
+  range_group: '.bind-auth-range'
+  agree_checkbox: '.form-footer input[type=checkbox]'
+  submit_text: '确定'
+  cancel_text: '取消'
+
+# ← 差别 2：这一页自己的校验接口。返回 status=success 才能在这页授权；
+#   花火商单稿件在这里返回 fail +「该稿件是商单稿件，请到花火平台进行绑定」。
+#   （两个接口正好互补：一条稿件只会在其中一页能授权。）
+status_api: '/platform/api/web_api/v6/resource/sanlian/general_video/authorize/state?archive_id='
+
+# ← 差别 3：申请次数上限的口径。花火那边是「同一视频 7 日内 3 次」，
+#   这里是**同一账号（UP主）7 日内 3 次** —— 所以预检要按 UP 主归并着数，
+#   同一个 UP 主超过 3 条的部分会被标红拦下。
+quota:
+  per: up            # up = 按 UP主 算；video = 按稿件算
+  limit: 3
+  days: 7
+
+# ---------------- 默认值 ----------------
+defaults:
+  授权时间: 不限
+  共享范围: 同客户&同品牌&同代理
+
+# 列定义写在 src/nc_template.py 的 COLS 里（模板和读取共用），这里不重复。
+fields: []

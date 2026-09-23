@@ -55,6 +55,17 @@ CORE = {
 }
 
 BY_MODE = {
+    # 往 普通内容授权.yaml 加了新顶层键，就登记进这一格
+    "nc": {
+        # 和 hh 同构，多一个 quota（3 次/7 天的上限按 UP主 还是按稿件算）
+        "defaults", "dialog", "fields", "quota", "status_api",
+    },
+    # 往 花火稿件授权.yaml 加了新顶层键，就登记进这一格
+    "hh": {
+        # dialog: 弹窗里那几个控件的选择器；status_api: 预检用的校验接口；
+        # defaults: Excel 留空时用的默认选项
+        "defaults", "dialog", "fields", "status_api",
+    },
     "_default": {
         "antd_prefix", "cancel_selector", "fields", "list", "open_dialog", "open_steps",
         # ledger：写了就在每轮跑完往 src/pt_ledger.py 的台账记一批（价格配置在用）

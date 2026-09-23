@@ -88,6 +88,16 @@ def _runner_dl(settings, cfg, ui):
     return DlToggleRunner(settings, cfg, ui)
 
 
+def _runner_hh(settings, cfg, ui):
+    from .hh_runner import HhRunner
+    return HhRunner(settings, cfg, ui)
+
+
+def _runner_nc(settings, cfg, ui):
+    from .nc_runner import NcRunner
+    return NcRunner(settings, cfg, ui)
+
+
 def _runner_default(settings, cfg, ui):
     from .runner import Runner
     return Runner(settings, cfg, ui)
@@ -101,6 +111,26 @@ def _template_dmp(name: str) -> str:
 def _template_ab(name: str) -> str:
     from . import ab_template
     return ab_template.build(name)
+
+
+def _template_hh(name: str) -> str:
+    from . import hh_template
+    return hh_template.build(name)
+
+
+def _columns_hh(cfg: dict, opts: dict) -> dict:
+    from . import hh_template
+    return hh_template.columns(cfg, opts)
+
+
+def _template_nc(name: str) -> str:
+    from . import nc_template
+    return nc_template.build(name)
+
+
+def _columns_nc(cfg: dict, opts: dict) -> dict:
+    from . import nc_template
+    return nc_template.columns(cfg, opts)
 
 
 def _template_ad(name: str) -> str:
@@ -291,6 +321,19 @@ MODES: dict[str, ModeSpec] = {
         no_template_hint=("「批量开关」不用 Excel 模板。\n\n"
                           "填活动ID、选层级（单元 / 创意）和范围，点「载入并检查」。"),
         no_template_hint_cli="「批量开关」不用 Excel 模板，用 --scope 选范围",
+    ),
+    # 花火稿件授权：一条 bvid = 开一次弹窗、发一次申请。没有嵌套层级，也没有策略中心。
+    "hh": ModeSpec(
+        make_runner=_runner_hh,
+        build_template=_template_hh,
+        template_columns=_columns_hh,
+    ),
+    # 普通内容授权：花火那页的双胞胎 tab，非花火商单稿件走这里。
+    # 弹窗 DOM 同构 → 复用 hh_filler；上限按 UP 主算 → 预检多一步配额归并。
+    "nc": ModeSpec(
+        make_runner=_runner_nc,
+        build_template=_template_nc,
+        template_columns=_columns_nc,
     ),
 }
 
