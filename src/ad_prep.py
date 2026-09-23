@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 
+from .datasource import norm_time
 from .paths import user_path
 
 log = logging.getLogger(__name__)
@@ -143,6 +145,27 @@ def shown(f: dict, values: dict) -> bool:
                for v in want)
 
 
+def _daterange_issue(val: str) -> str:
+    """「开始 - 结束」合不合法。开始可以是 {今天}（跑的当天）。合法返回空串。
+
+    界面上是日历选的，按说不会错；这里兜的是老版本存下来的手打值和手改的 json。"""
+    parts = [x.strip() for x in re.split(r"\s+-\s+|\s*~\s*|\s*至\s*", val)]
+    if len(parts) != 2:
+        return "要写成「开始 - 结束」"
+    days = []
+    for x in parts:
+        if x == "{今天}":
+            days.append(datetime.now().date())
+            continue
+        try:
+            days.append(datetime.strptime(norm_time(x), "%Y-%m-%d").date())
+        except ValueError:
+            return f"「{x}」不是日期"
+    if days[1] < days[0]:
+        return "结束日期早于开始日期"
+    return ""
+
+
 def validate(cfg: dict, values: dict) -> list[str]:
     """必填项有没有填、下拉值在不在选项里。返回人话的问题清单。"""
     issues = []
@@ -169,6 +192,11 @@ def validate(cfg: dict, values: dict) -> list[str]:
             if bad:
                 issues.append(f"[准备阶段] 「{name}」这些不在可选项里：{'、'.join(bad)}。"
                               f"可选：{'/'.join(opts)}")
+        if f.get("type") == "daterange":
+            bad = _daterange_issue(val)
+            if bad:
+                issues.append(f"[准备阶段] 「{name}」{bad}，现在是「{val}」")
+            continue
         # 原生商广写 number，价格面板那边是 pp_number（类型名同时给填写逻辑用）
         if "number" in str(f.get("type", "")):
             try:

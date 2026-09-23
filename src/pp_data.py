@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import re
 
+from . import datasource as DS
 from . import wizard_schema as W
 from . import wizard_strategy as S
 from .datasource import load_table
@@ -409,6 +410,10 @@ def values_for(cfg: dict, data: dict, unit: dict) -> dict:
     for k, v in (unit["header"] or {}).items():
         if str(v).strip():
             vals[k] = str(v).strip()
+    # 日期统一成 2026-09-04 09:00:00 这一种写法（见 datasource.norm_time）
+    for k in list(vals):
+        if str(k).endswith(("时间", "日期")):
+            vals[k] = DS.norm_time(vals[k])
     # 面板个数不配，由三段推出来
     vals["面板个数"] = panel_count_of(panels_for(vals))
     return vals
@@ -610,7 +615,7 @@ def _check_activity(cfg: dict, act: dict) -> list[str]:
         if f.get("required") and not str(act.get(f["name"], "")).strip():
             out.append(f"[活动] 「{f['name']}」没填")
     for col in ("活动开始时间", "活动结束时间"):
-        v = str(act.get(col, "")).strip()
+        v = DS.norm_time(act.get(col, ""))
         if v and not _TIME_RE.match(v):
             out.append(f"[活动] 「{col}」格式不对：「{v}」，要写成 2026-09-24 10:00:00")
     return out
@@ -657,7 +662,7 @@ def validate(cfg: dict, data: dict) -> list[str]:
             seen_names[name] = u["row"]
 
         for col in ("投放开始时间", "投放结束时间"):
-            v = str(h.get(col, "")).strip()
+            v = DS.norm_time(h.get(col, ""))
             if v and not _TIME_RE.match(v):
                 issues.append(f"{tag}「{col}」格式不对：{v}（要 2026-09-24 10:00:00）")
 

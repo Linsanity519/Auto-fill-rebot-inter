@@ -30,6 +30,7 @@ from xml.etree import ElementTree as ET
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+from . import datasource as DS
 from . import wizard_schema as W
 from .images import is_url
 from . import wizard_strategy as S
@@ -311,7 +312,11 @@ def _activity(wb, settings: dict) -> dict:
         raise DataError("「活动」sheet 里没有数据")
     if len(act_rows) > 1:
         raise DataError(f"「活动」sheet 有 {len(act_rows)} 行，只能填一行")
-    return act_rows[0]
+    act = act_rows[0]
+    for k in list(act):
+        if str(k).endswith(("时间", "日期")):
+            act[k] = DS.norm_time(act[k])
+    return act
 
 
 def _units_of(wb, title: str, pos: str, cfg: dict, strategy: dict,
@@ -371,6 +376,7 @@ def _units_of(wb, title: str, pos: str, cfg: dict, strategy: dict,
 
         header = {k: v for k, v in rec.items() if not k.startswith(CREATIVE_PREFIX)}
         header.update(strat)             # 策略中心接管的字段，模板里没有这些列
+        _norm_times(cfg, header, pos)    # 日期统一成 2026-09-04 09:00:00 这一种写法
         W.apply_defaults(header, unit_defaults)
         unit = {"position": pos, "header": header, "creatives": [creative],
                 "row": rec["_row"], "strategy_note": note}
@@ -378,6 +384,19 @@ def _units_of(wb, title: str, pos: str, cfg: dict, strategy: dict,
         out.append(unit)
         current_unit = unit
     return out, responsible, notes
+
+
+def _date_names(cfg: dict, pos: str) -> set:
+    """这个资源位上哪些字段是日期控件。"""
+    return {f["name"] for f in W.flatten(W.unit_fields(cfg, pos) or [])
+            if f.get("type") in DS.DATE_TYPES}
+
+
+def _norm_times(cfg: dict, row: dict, pos: str) -> None:
+    """就地把日期列补成标准写法。见 datasource.norm_time 的注释：
+    校验宽、页面严，不收敛就会「校验全过、一跑全炸」。"""
+    for k in _date_names(cfg, pos) & set(row):
+        row[k] = DS.norm_time(row[k])
 
 
 def _headers_of(ws) -> list[str]:
@@ -508,6 +527,7 @@ def _check_row(fields: list[dict], row: dict, label: str) -> list[str]:
             #   面板还会一直开着挡住后面的点击，害得后面几个字段也填不上，
             #   最后只报「点了保存并下一步但没跳转」，根本看不出是时间的问题。
             #   所以在这儿就拦住。
+            val = DS.norm_time(val)
             if not _looks_like_time(val):
                 out.append(f"{label}：「{name}」的「{val}」不是标准时间格式，"
                            f"要写成 2026-09-24 10:00:00（年-月-日 时:分:秒）")

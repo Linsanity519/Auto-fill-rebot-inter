@@ -18,8 +18,9 @@ import re
 from pathlib import Path
 
 from .ad_image import ImageError, resolve_cover
-from .filler import FillError
+from .datasource import norm_time
 from .fill_core import wait_until
+from .filler import FillError
 
 log = logging.getLogger(__name__)
 
@@ -226,6 +227,9 @@ class AdFiller:
         el = self._visible_inputs(f["ph"]).first
         if not el.count():
             raise FillError(f"找不到日期框（placeholder 含「{f['ph']}」）")
+        # 准备页上手打的常是「2026-9-24」，iView 会自己补成「2026-09-24」——
+        # 打字前先补齐，回读时两边都按补齐后的比，不然日期填对了也报失败
+        value = norm_time(value)
         el.click()
         self.page.wait_for_timeout(300)
         el.fill("")
@@ -235,7 +239,7 @@ class AdFiller:
         self.page.keyboard.press("Escape")
         self.page.wait_for_timeout(300)
         got = (el.input_value() or "").strip()
-        if got.replace(" ", "") != value.replace(" ", ""):
+        if norm_time(got).replace(" ", "") != value.replace(" ", ""):
             raise FillError(f"日期没填进去：想填「{value}」，框里现在是「{got}」")
 
     # ---------------------------------------------------------- 定向人群

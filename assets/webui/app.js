@@ -114,7 +114,7 @@
       { name: "转化目标", type: "select", required: true, options: ["表单提交"] },
       { name: "出价", type: "number", required: true, unit: "元/转化" },
       { name: "投放时间", type: "segmented", required: true, options: ["长期投放", "设置起止时间"] },
-      { name: "投放起止时间", type: "text", when: ["投放时间", "设置起止时间"] },
+      { name: "投放起止时间", type: "daterange", when: ["投放时间", "设置起止时间"] },
       { name: "指定人群", type: "text" },
       { name: "排除人群", type: "text" },
       // ⚠ 这几项是常规商广的（textarea / number），放这儿是为了让普通浏览器也能
@@ -127,7 +127,7 @@
       { name: "落地页", type: "text", required: true, ph: "https:// 开头" },
     ],
     values: { 转化目标: "表单提交", 出价: "200", 投放时间: "设置起止时间",
-              视频数量: "150", 素材标题: "大会员年卡低至6折\n大会员×百度网盘季卡" },
+              视频数量: "150", 投放起止时间: "2026-9-24 - 2026-10-11", 素材标题: "大会员年卡低至6折\n大会员×百度网盘季卡" },
     grouping: {},
   };
 
@@ -2192,6 +2192,10 @@
       });
       return ta;
     }
+    // 起止日期：两个日历 +「从跑的当天开始」。存的还是「开始 - 结束」这串字，
+    // 开始那半可以是 {今天}，runner 跑的时候才换成当天 —— 准备页隔天再用也对。
+    // 以前是纯文本框，手打「2026-9-24」这种不补 0 的写法曾经让整批失败。
+    if (kind === "daterange") return prepDateRange(f, cur);
     const opts = prepOptions(f);
 
     // 分段控件：只给「静态、3 项以内」的 select（投放时间那种）。联动下拉不用 ——
@@ -2245,6 +2249,58 @@
       u.style.cssText = "color:var(--sub);font-size:12px";
       wrap.appendChild(u);
     }
+    return wrap;
+  }
+
+  // 「2026-9-4」「2026/9/4」→「2026-09-04」；认不出来返回 ""
+  function isoDate(s) {
+    const m = String(s || "").trim().match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (!m) return "";
+    return m[1] + "-" + m[2].padStart(2, "0") + "-" + m[3].padStart(2, "0");
+  }
+
+  function prepDateRange(f, cur) {
+    const TODAY = "{今天}";
+    const parts = cur.split(/\s+-\s+|\s*~\s*|\s*至\s*/);
+    let start = (parts[0] || "").trim();
+    let end = isoDate(parts[1]);
+    let fromToday = start === TODAY || !cur.trim();
+    start = fromToday ? "" : isoDate(start);
+
+    const wrap = el("div", "row");
+    wrap.style.cssText = "gap:6px;align-items:center";
+    const a = el("input", "field");
+    a.type = "date";
+    a.style.cssText = "width:150px;flex:none";
+    const b = el("input", "field");
+    b.type = "date";
+    b.style.cssText = "width:150px;flex:none";
+    const lab = el("label", null);
+    lab.style.cssText = "display:flex;align-items:center;gap:4px;font-size:12px;color:var(--sub);cursor:pointer";
+    const chk = el("input");
+    chk.type = "checkbox";
+    lab.appendChild(chk);
+    lab.appendChild(document.createTextNode("从跑的当天开始"));
+
+    const sync = () => {
+      a.disabled = fromToday;
+      chk.checked = fromToday;
+      a.value = fromToday ? "" : start;
+      b.value = end;
+      b.min = fromToday ? "" : start;
+      const s = fromToday ? TODAY : start;
+      state.prepValues[f.name] = s && end ? s + " - " + end : "";
+      renderPrepHint();
+    };
+    a.addEventListener("change", () => { start = a.value; sync(); });
+    b.addEventListener("change", () => { end = b.value; sync(); });
+    chk.addEventListener("change", () => { fromToday = chk.checked; sync(); });
+
+    wrap.appendChild(lab);
+    wrap.appendChild(a);
+    wrap.appendChild(el("span", null, "至"));
+    wrap.appendChild(b);
+    sync();
     return wrap;
   }
 

@@ -198,7 +198,7 @@ def _prep_field(f: dict) -> dict:
 
 
 def _prep_kind(f: dict) -> str:
-    """这一项在界面上长什么样：segmented / select / number / file / textarea / text。
+    """这一项在界面上长什么样：segmented / select / number / file / textarea / text / daterange。
 
     ⚠ 不能直接拿 type 当长相。原生商广的 prep_fields 里 type 写的就是长相
       （segmented/select/number）；价格面板配置的字段是从 unit_common 借来的，
@@ -208,7 +208,7 @@ def _prep_kind(f: dict) -> str:
     t = str(f.get("type") or "")
     if f.get("options_map"):
         return "select"               # 联动下拉（常规商广的推广内容 / 转化目标）
-    if t in ("segmented", "select", "number", "file", "textarea", "text"):
+    if t in ("segmented", "select", "number", "file", "textarea", "text", "daterange"):
         return t                      # 自己就写的是长相（原生商广）
     if t == "pp_number":
         return "number"
