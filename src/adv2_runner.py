@@ -78,6 +78,8 @@ class Adv2Runner(StateMixin):
 
     # ---------------- 主流程 ----------------
     def run(self, records: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(records)
         if records is not None and not records:
             self.ui.log("没有要跑的项目", "warn")
             return []

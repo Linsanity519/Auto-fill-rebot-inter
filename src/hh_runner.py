@@ -73,11 +73,12 @@ class HhRunner(StateMixin):
             except Exception as e:                  # 接口挂了不该把预检整个堵死
                 log.warning("预检打 status 接口失败", exc_info=True)
                 self.ui.log(f"预检没能连上平台校验接口（{e}），"
-                            f"这一轮不做「是不是花火稿件」的预判", "warn")
+                            f"本轮资格未知，暂不能提交", "warn")
                 status = {}
             for it in checkable:
                 st = status.get(it["bvid"])
                 if st is None:
+                    it["issues"].append("资格未知：平台预检没有返回此稿件，暂不能提交")
                     continue
                 if st.get("ok"):
                     it["title"] = st.get("title", "")
@@ -116,18 +117,8 @@ class HhRunner(StateMixin):
         api = self.f.get("status_api") or STATUS_API
         with Browser(self.s["cdp_url"], self.s["timeout"]) as b:
             self._goto(b)
-            raw = b.page.evaluate(
-                """async ([api, ids]) => {
-                    const out = {};
-                    for (const id of ids) {
-                      try {
-                        const res = await fetch(api + encodeURIComponent(id), {credentials: 'include'});
-                        out[id] = await res.text();
-                      } catch (e) { out[id] = 'ERR ' + e; }
-                      await new Promise(s => setTimeout(s, 120));
-                    }
-                    return out;
-                }""", [api, bvids])
+            from .adapters.legacy.preflight import read_status
+            raw = read_status(b.page, api, bvids, self.s["timeout"])
 
         import json
         got = {}
@@ -160,6 +151,8 @@ class HhRunner(StateMixin):
 
     # ---------------- 主流程 ----------------
     def run(self, items: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(items)
         if items is None:
             src = self._items if self._items is not None else [
                 r.payload["_hh"] for r in self.preview()]
@@ -225,6 +218,7 @@ class HhRunner(StateMixin):
                             self.ui.progress(i + 1, total, stats)
                             continue
 
+                        self.state.begin(_key(it))
                         msg = filler.submit()       # 弹窗关掉才算发出去
                         stats["ok"] += 1
                         self.state.mark_done(_key(it))

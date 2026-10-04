@@ -24,6 +24,7 @@ import queue
 import subprocess
 import sys
 import threading
+from contextlib import nullcontext
 import time
 from pathlib import Path
 
@@ -34,6 +35,8 @@ from . import chrome, formcfg, notify, registry, update, usage
 from . import settings as settings_defaults
 from .paths import app_dir, resource, user_path
 from .ui import BaseUI, Stopped
+from .adapters.data_paths import browser_lock
+from .adapters.legacy.ui_guard import guarded
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +154,16 @@ class WebUI(BaseUI):
                 if self.sample_n and ans == "submit":
                     self._sample_submits += 1
                 return ans
+
+    def verify_unknown(self, summary: str) -> bool:
+        self._push("onConfirm", "逐条人工核实资格（不可自动确认）", summary)
+        with self._waiting():
+            while not self.stop_flag.is_set():
+                try:
+                    return self.answer.get(timeout=0.3) == "submit"
+                except queue.Empty:
+                    continue
+        return False
 
     def ask_continue(self, error):
         self._push("onAskContinue", error)
@@ -283,7 +296,7 @@ class _FlowRecSession:
         from .browser import Browser
         from .flow_record import FlowRecorder, _INJECT
         try:
-            with Browser(self.cdp_url, self.timeout) as b:
+            with browser_lock({"cdp_url": self.cdp_url}), Browser(self.cdp_url, self.timeout) as b:
                 b.front()
                 if self.source_url:
                     try:
@@ -366,6 +379,7 @@ class Api:
 
     def __init__(self, settings: dict):
         self.settings = settings
+        self._command_lock = threading.RLock()
         self._window = None          # main() 建完窗口后回填
         self.runner = None          # 载入并检查之后的那个 runner 实例，开跑时复用
         self.ui: WebUI | None = None
@@ -893,6 +907,7 @@ class Api:
             return False
 
     # ---------------- 准备：载入并检查 ----------------
+    @guarded
     def load_and_check(self, form_name: str, data_file: str | None, scope: str | None,
                        options: dict | None = None) -> dict:
         try:
@@ -906,6 +921,7 @@ class Api:
             # 价格策略批量开关：方向 + 选哪些行（keyword/ledger/list）+ 日期区间 + 策略
             s["pt_scope"] = scope
             _o = options or {}
+            s["pricing_task_host"] = bool(_o.get("pricing_task_host", s.get("pricing_task_host", False)))
             s["toggle_direction"] = "off" if _o.get("toggle_direction") == "off" else "on"
             s["toggle_params"] = str(_o.get("toggle_params", "") or "")
             s["toggle_strategies"] = str(_o.get("toggle_strategies", "") or "")
@@ -941,7 +957,8 @@ class Api:
 
             self.ui = WebUI(self._window)
             self.runner = registry.spec_for(cfg.get("mode")).make_runner(s, cfg, self.ui)
-            rows = self.runner.preview()
+            with (nullcontext() if getattr(self.runner, "managed_host", False) else browser_lock(self.settings)):
+                rows = self.runner.preview()
             self.preview_rows = rows
 
             bad = sum(1 for r in rows if r.issues)
@@ -958,6 +975,8 @@ class Api:
                 "template_diff": self._template_diff(cfg, data_file, options),
             }
         except Exception as e:
+            self.preview_rows = []
+            self.runner = None
             log.exception("载入失败")
             return {"ok": False, "error": str(e)}
 
@@ -1079,6 +1098,7 @@ class Api:
             log.exception("读台账失败")
             return {"ok": False, "error": str(e)}
 
+    @guarded
     def clear_state(self, form_name: str) -> dict:
         try:
             cfg = self._form_cfg(form_name)
@@ -1101,39 +1121,28 @@ class Api:
         self.open_path(p)
         return {"ok": True, "path": p}
 
+    @guarded
     def pt_rollback(self, run_id: str | None = None) -> dict:
-        """「把这批翻回去」：读产物清单里成功翻转过的那些行，反方向再点一遍。
-
-        只服务 reversible 的配置类型（价格策略批量开关）。走「逐条确认」，不自动提交。
-        """
+        """Prepare the exact task's reverse plan; the user sees it before executing."""
         try:
-            from . import manifest
+            from .bootstrap import task_client, price_runner
+            from .domain.pricing import PricePlan
+            task_id = run_id or getattr(self.runner, "task_id", "")
+            if not task_id:
+                raise ValueError("旧清单没有精确对象和前后状态，不能自动翻回；请到平台逐项核对")
+            client = task_client(self.settings)
+            response = client.request("reverse", {"task_id": task_id})
+            original = client.store.plan(client.store.task(task_id)["plan_id"])
+            self.form_name = original.inputs.get("form_name") or "价格策略批量开关"
             cfg = self._form_cfg(self.form_name)
-            if not cfg.get("reversible"):
-                return {"ok": False, "error": "这个配置类型不支持一键翻回"}
-            path = getattr(self, "last_manifest_path", "") or manifest.latest_for(self.form_name)
-            doc = manifest.load(path)
-            done = [it for it in (doc.get("items") or []) if str(it.get("status")) == "ok"]
-            if not done:
-                return {"ok": False, "error": "这批没有成功翻转的行，无需翻回"}
-            names = [str(it.get("name") or "") for it in done if it.get("name")]
-            verbs = {str(it.get("方向") or "") for it in done}
-            # 原方向 → 反方向
-            rev_dir = "off" if "开启" in verbs else "on"
-            r1 = self.load_and_check(self.form_name, None, "list", options={
-                "toggle_direction": rev_dir,
-                "toggle_params": "\n".join(names),
-            })
-            if not r1.get("ok"):
-                return {"ok": False, "error": "载入翻回清单失败：" + str(r1.get("error"))}
-            r2 = self.start_run("confirm", skip_done=False)
-            if not r2.get("ok"):
-                return {"ok": False, "error": r2.get("error")}
-            return {"ok": True, "total": r2.get("total"),
-                    "direction": rev_dir, "names": len(names)}
-        except Exception as e:
-            log.exception("翻回失败")
-            return {"ok": False, "error": str(e)}
+            self.runner = price_runner(dict(self.settings), cfg, WebUI(self._window))
+            self.runner.plan = PricePlan.from_dict(response["plan"])
+            self.preview_rows = self.runner.preview_plan()
+            return {"ok": True, "prepared": True, "total": len(self.preview_rows),
+                    "rows": _json_safe([self._row_summary(r) for r in self.preview_rows]),
+                    "message": "翻回计划已准备，请查看逐项变化后开始执行"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def submit_feedback(self, payload: dict | None) -> dict:
         """用户反馈：报告问题（可附最近日志）/ 功能建议。发到企微群。
@@ -1380,6 +1389,7 @@ class Api:
         return str(p)
 
     # ---------------- 执行 ----------------
+    @guarded
     def start_run(self, mode: str, skip_done: bool) -> dict:
         if not self.runner or not self.preview_rows:
             return {"ok": False, "error": "还没有载入数据，请先在「准备」页载入并检查"}
@@ -1393,6 +1403,7 @@ class Api:
             return {"ok": False, "error": "所有数据要么有问题、要么已完成"}
         return self._run(kept, mode)
 
+    @guarded
     def retry_rows(self, indices: list, mode: str) -> dict:
         """只重跑「失败清单」里选中的那几条，复用同一个 runner 实例。"""
         if not self.runner:
@@ -1407,10 +1418,14 @@ class Api:
         # retry_of 指回上一次运行：重跑的量不能再算一遍战绩（同一批活干了两遍）
         return self._run(rows, mode, retry_of=self.last_run_id)
 
+    @guarded
     def _run(self, kept, mode: str, retry_of: str | None = None) -> dict:
+        if mode not in ("dry", "step", "confirm", "auto", "sample", "rehearse"):
+            return {"ok": False, "error": "未知执行模式"}
         records = [r.payload for r in kept]
         # step = 逐步试跑（只自制配置类型有这一档）：等同 dry_run，外加每步停下核对
-        self.runner.s["dry_run"] = mode in ("dry", "step")
+        self.runner.s["dry_run"] = mode in ("dry", "step", "rehearse")
+        self.runner.s["allow_rehearsal"] = mode in ("rehearse", "step")
         self.runner.s["flow_step"] = (mode == "step")
         if hasattr(self.runner, "_step_mode"):
             self.runner._step_mode = (mode == "step")
@@ -1429,28 +1444,54 @@ class Api:
         self.last_run_id = run_id
         self.last_manifest_path = ""
 
+        lease = browser_lock(self.settings)
+        try:
+            if not getattr(self.runner, "managed_host", False):
+                lease.acquire()
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
         def work():
             t0 = time.monotonic()
+            capture = None
+            failure = ""
             try:
+                if not getattr(self.runner, "managed_host", False):
+                    from .adapters.legacy.archive_capture import LegacyCapture, ArchiveUI
+                    capture = LegacyCapture(self.runner.s, self.runner.f, records, mode, "desktop")
+                    self.runner.ui = ArchiveUI(self.ui, capture)
                 self.last_results = self.runner.run(records)
             except Exception as e:
                 log.exception("运行出错")
+                failure = str(e)
                 self.ui.log(f"运行中断：{e}", "error")
                 self.last_results = []
             finally:
-                self._record_run(run_id, mode, retry_of, len(records),
-                                 time.monotonic() - t0, self.ui.wait_seconds)
-                # 产物清单：这批到底动了哪些东西，给人工清理 / 一键翻回去用
-                if mode not in ("dry", "step"):
-                    from . import manifest
-                    self.last_manifest_path = manifest.write(
-                        run_id, self.form_name, mode, kept, self.last_results,
-                        extra={"scope": self.scope, "retry_of": retry_of})
-                self._sync_sheet_async()
-                self.ui._push("onRunDone", self._failed_summary())
+                try:
+                    if capture:
+                        capture.finish(self.last_results, failure)
+                    self._record_run(run_id, mode, retry_of, len(records),
+                                     time.monotonic() - t0, self.ui.wait_seconds)
+                    # 产物清单：这批到底动了哪些东西，给人工清理 / 一键翻回去用
+                    if mode != "dry":
+                        from . import manifest
+                        self.last_manifest_path = manifest.write(
+                            run_id, self.form_name, mode, kept, self.last_results,
+                            extra={"scope": self.scope, "retry_of": retry_of})
+                    self._sync_sheet_async()
+                except Exception:
+                    log.exception("运行后档案或汇总保存失败")
+                    self.ui.finished("档案保存需处理", "执行可能已经发生；请保留本机数据并核查，不要直接重复提交。", False)
+                finally:
+                    lease.release()
+                    self.ui._push("onRunDone", self._failed_summary())
 
         self.worker = threading.Thread(target=work, daemon=True)
-        self.worker.start()
+        try:
+            self.worker.start()
+        except BaseException:
+            lease.release()
+            raise
         return {"ok": True, "total": len(records)}
 
     def _record_run(self, run_id, mode, retry_of, total, seconds, wait_seconds):
@@ -1494,6 +1535,13 @@ class Api:
           self._sync_error，首页会显示「还有 N 次运行没上报」。欠着的不会丢 ——
           发件箱里发成功才划掉，下次连上就全补齐。
         """
+        def archive_sync():
+            try:
+                from .bootstrap import sync_archives
+                self.archive_collection_status = sync_archives(self.settings)
+            except Exception:
+                self.archive_collection_status = {"status": "pending", "message": "档案补传失败，内容保留在本机"}
+        threading.Thread(target=archive_sync, daemon=True).start()
         from . import report
         if not report.enabled(self.settings):
             return
@@ -1563,16 +1611,97 @@ class Api:
         return {"failed": failed, "misaligned": False,
                 "manifest_path": manifest_path}
 
+    def task_history(self):
+        from .bootstrap import task_client
+        client = task_client(self.settings)
+        return {"tasks": client.store.tasks(), "root": str(client.store.root),
+                "collection": getattr(self, "archive_collection_status", {})}
+
+    def task_detail(self, task_id: str):
+        from .bootstrap import task_client, collection
+        client = task_client(self.settings)
+        task = client.store.task(task_id)
+        return {"task": task, "plan": client.store.plan_document(task["plan_id"]), "items": client.store.results(task_id),
+                "events": client.store.events(task_id),
+                "collection": [{"id": x["id"], "status": x["status"], "detail": x["detail"]}
+                               for x in collection(self.settings).pending(task_id)]}
+
+    def task_export(self, task_id: str):
+        from .bootstrap import archives
+        archive = archives(self.settings)
+        path = archive.store.root / "exports" / (task_id + "-" + str(time.time_ns()) + ".zip")
+        return archive.export(task_id, path)
+
+    def task_import(self):
+        from .bootstrap import archives
+        paths = self._window.create_file_dialog(OPEN_DIALOG, file_types=("任务档案 (*.zip;*.json)",))
+        if not paths:
+            return {"status": "cancelled"}
+        try:
+            selected = Path(paths[0])
+            return (archives(self.settings).import_legacy(selected) if selected.suffix.lower() == ".json"
+                    else archives(self.settings).import_bytes(selected.read_bytes()))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def task_imported(self):
+        from .bootstrap import archives
+        return archives(self.settings).imported()
+
+    def task_sync(self):
+        from .bootstrap import sync_archives
+        return sync_archives(self.settings)
+
+    def task_cancel(self, task_id: str):
+        from .bootstrap import task_client
+        return task_client(self.settings).store.control(task_id, cancelled=1, paused=0)
+
+    def task_reconcile(self, task_id: str):
+        from .bootstrap import task_client
+        try:
+            return task_client(self.settings).request("reconcile", {"task_id": task_id})
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @guarded
+    def task_attach(self, task_id: str):
+        from .bootstrap import task_client, price_runner
+        try:
+            client = task_client(self.settings)
+            task = client.store.task(task_id)
+            plan = client.store.plan(task["plan_id"])
+            self.form_name = plan.inputs.get("form_name") or "价格策略批量开关"
+            self.ui = WebUI(self._window)
+            self.runner = price_runner(dict(self.settings), self._form_cfg(self.form_name), self.ui)
+            self.runner.plan, self.runner.task_id = plan, task_id
+            self.preview_rows = self.runner.preview_plan()
+            def watch():
+                try:
+                    self.last_results = self.runner.watch()
+                finally:
+                    self.ui._push("onRunDone", {"failed": []})
+            self.worker = threading.Thread(target=watch, daemon=True)
+            self.worker.start()
+            return {"ok": True, "task_id": task_id}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def pause_run(self) -> dict:
         if not self.ui:
             return {"paused": False}
         if self.ui.pause_flag.is_set():
             self.ui.pause_flag.clear()
+            if getattr(self.runner, "managed_host", False):
+                self.runner.control(paused=0)
             return {"paused": False}
         self.ui.pause_flag.set()
+        if getattr(self.runner, "managed_host", False):
+            self.runner.control(paused=1)
         return {"paused": True}
 
     def stop_run(self) -> bool:
+        if getattr(self.runner, "managed_host", False):
+            self.runner.control(cancelled=1, paused=0)
         if self.ui:
             self.ui.stop_flag.set()
             self.ui.pause_flag.clear()

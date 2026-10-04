@@ -110,6 +110,8 @@ class AdRegRunner(StateMixin):
 
     # ---------------- 主流程 ----------------
     def run(self, units: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(units)
         prep = getattr(self, "_prep", None) or self.s.get("ad_prep") or P.load(self.f)
         data = getattr(self, "_data", None) or D.load(self.s["data_file"], self.f, self.s)
         units = units if units is not None else data["units"]

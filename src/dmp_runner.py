@@ -325,6 +325,8 @@ class DmpRunner(StateMixin):
     # ---------------- 主流程 ----------------
     def run(self, records: list[dict] | None = None):
         # GUI 传来的 records 是 _record；真正的定位信息保留在 preview 缓存里。
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(records)
         wanted_keys = None
         if records is not None and hasattr(self, "_targets"):
             picked = {(str(r["header"].get("人群ID", "")).strip(),
@@ -534,6 +536,7 @@ class DmpRunner(StateMixin):
                 results.append(self._result(i, target, "dry_run", "未确认、未保存", picked))
                 return "next"
 
+            self.state.begin(target["key"])
             self._confirm_extension(page)
             self._save(page)
             self.state.mark_done(target["key"])

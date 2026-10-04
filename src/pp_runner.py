@@ -97,6 +97,8 @@ class PriceRunner(StateMixin):
 
     # ---------------------------------------------------------------- 主循环
     def run(self, units: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(units)
         data = self._data or D.load(self.s["data_file"], self.f, self.s)
         units = units if units is not None else data["units"]
 

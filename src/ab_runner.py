@@ -319,6 +319,8 @@ class AbRunner(StateMixin):
     # ---------------- 主流程 ----------------
     def run(self, records: list[dict] | None = None):
         # 勾选范围从 records 的实验 ID 还原（预检界面上用户可能删掉了几行）
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(records)
         wanted = None
         if records is not None:
             wanted = {str(r.get("header", {}).get("实验ID")): str(r.get("header", {}).get("实验名称") or "")
@@ -501,6 +503,7 @@ class AbRunner(StateMixin):
                 results.append(self._result(i, target, "dry_run", "未提交", picked))
                 return "next"
 
+            self.state.begin(target["key"])
             self._submit(page)
             self.state.mark_done(target["key"])
             stats["ok"] += 1

@@ -12,6 +12,7 @@ from .datasource import load_table, build_records
 from .filler import Filler
 from .preview import PreviewRow
 from .runstate import StateMixin
+from .domain.identity import identify_records
 from .ui import BaseUI, ConsoleUI, Stopped
 from .validate import validate_all, summarize
 
@@ -34,21 +35,26 @@ class Runner(StateMixin):
         """跑之前把数据解析 + 校验一遍，给界面显示。不碰浏览器。"""
         rows = load_table(self.s["data_file"], self.s.get("sheet_name"))
         records = build_records(rows, self.f, self.s.get("group_key", "分组"))
+        records = identify_records(records, [self.f["name"], self.s.get("execution_context")])
+        if any(isinstance(k, int) for k in self.state.done):
+            raise RuntimeError("旧断点只有行号，不能安全映射到当前数据。请先备份并核对旧任务，再清除旧断点。")
         issues = validate_all(self.f, records)
         out = []
         for i, r in enumerate(records):
             s = summarize(r, self.f)
             out.append(PreviewRow(
                 index=i + 1, name=s["名称"], kind=s["类型"], detail_count=s["明细"],
-                issues=issues[i], done=self.state.is_done(i), payload=r,
+                issues=issues[i], done=self.state.is_done(r["_execution_id"]), payload=r,
             ))
         return out
 
     # ---------- 主循环 ----------
     def run(self, records: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(records)
         if records is None:
-            rows = load_table(self.s["data_file"], self.s.get("sheet_name"))
-            records = build_records(rows, self.f, self.s.get("group_key", "分组"))
+            records = [r.payload for r in self.preview() if not r.issues and not r.done]
+        records = identify_records(records, [self.f["name"], self.s.get("execution_context")])
 
         total = len(records)
         dry = self.s.get("dry_run")
@@ -64,8 +70,11 @@ class Runner(StateMixin):
                 filler = Filler(b.page, self.f)
 
                 for i, rec in enumerate(records):
-                    if self.state.is_done(i):
+                    key = rec["_execution_id"]
+                    if self.state.is_done(key):
                         self.ui.log(f"[{i + 1}] 已完成过，跳过")
+                        stats["skipped"] += 1
+                        results.append(self._result(i, rec, "skipped", "已完成"))
                         continue
 
                     self.ui.checkpoint()          # 暂停在这里阻塞，停止抛 Stopped
@@ -96,8 +105,9 @@ class Runner(StateMixin):
                                 results.append(self._result(i, rec, "skipped", "用户跳过"))
                                 self._cancel(b.page)
                             else:
+                                self.state.begin(key)
                                 self._submit(b.page)
-                                self.state.mark_done(i)
+                                self.state.mark_done(key)
                                 stats["ok"] += 1
                                 results.append(self._result(i, rec, "ok", ""))
                                 ok_names.append(name)
@@ -109,7 +119,7 @@ class Runner(StateMixin):
                         msg = str(e)
                         log.exception("%s 失败", label)
                         shot = self._screenshot(b.page, i, tag="error")
-                        self.state.mark_failed(i, name, msg)
+                        self.state.mark_failed(key, name, msg)
                         stats["failed"] += 1
                         results.append(self._result(i, rec, "failed", msg))
                         self.ui.log(f"{label} 失败：{msg}", "error")
@@ -236,7 +246,8 @@ class Runner(StateMixin):
     # ---------- 输出 ----------
     def _result(self, idx, rec, status, error):
         return {
-            "序号": idx + 1,
+            "序号": rec.get("_execution_row", idx + 1),
+            "item_id": rec.get("_execution_id", ""),
             "状态": status,
             "错误": error,
             "明细项数": len(rec.get("items", [])),

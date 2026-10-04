@@ -4,6 +4,12 @@ Python + Playwright，挂载到你**已登录**的 Chrome，读 Excel 批量填�
 
 **脚本不处理账号密码，登录始终由你本人在浏览器里完成。**
 
+## 使用 AI 继续开发
+
+从仓库根目录开始，让 AI 读取 [AGENTS.md](AGENTS.md)。Claude Code 的入口文件也引用同一份规范。开发前查看 [架构规范](docs/engineering/ARCHITECTURE.md)，交付前运行 `python tools/check_project.py`。
+
+规范覆盖新代码分层、输入与计划契约、状态恢复、完整数据归集、验证与升级兼容。当前是增量迁移，旧模块并未因此自动完成重构。[强制检查的范围与 GitHub 配置](docs/engineering/ENFORCEMENT.md)说明哪些已有机器检查、哪些仍需业务测试，以及远端合并保护如何生效。
+
 ## 一次性准备
 
 ```bash
@@ -163,3 +169,9 @@ python main.py --row 3 --dry-run
 ```bash
 python main.py --no-resume
 ```
+
+## M0–M3 架构迭代（待内网验收）
+
+[实施记录](docs/engineering/IMPLEMENTATION_STATUS.md) · [使用与验收](docs/engineering/OPERATIONS.md) · [后续 M4–M6 规划](docs/engineering/ITERATION_PLAN.md)
+
+新增本机任务库、价格开关可选宿主试点、完整档案和可靠归集组件。默认保留旧业务入口；价格行标识与真实表格字段/容量尚待验证，不是新的正式安装包。

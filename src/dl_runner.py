@@ -338,6 +338,8 @@ class DlToggleRunner(StateMixin):
 
     # ---------------- 主流程 ----------------
     def run(self, records: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(records)
         if records is None:
             records = [r.payload for r in self.preview() if not r.issues]
         dry = bool(self.s.get("dry_run"))

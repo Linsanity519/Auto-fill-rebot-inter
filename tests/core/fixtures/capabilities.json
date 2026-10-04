@@ -1,0 +1,90 @@
+{
+  "baseline": "v1.1.24",
+  "forms": [
+    {
+      "name": "AB实验延期",
+      "file": "config/forms/AB实验延期.yaml",
+      "mode": "ab_extension",
+      "data_source": "excel"
+    },
+    {
+      "name": "DMP人群新建",
+      "file": "config/forms/DMP人群新建.yaml",
+      "mode": "default",
+      "data_source": "excel"
+    },
+    {
+      "name": "DMP延期",
+      "file": "config/forms/DMP延期.yaml",
+      "mode": "dmp_extension",
+      "data_source": "excel"
+    },
+    {
+      "name": "价格策略批量开关",
+      "file": "config/forms/价格策略批量开关.yaml",
+      "mode": "pt_toggle",
+      "data_source": "none"
+    },
+    {
+      "name": "价格配置",
+      "file": "config/forms/价格配置.yaml",
+      "mode": "default",
+      "data_source": "excel"
+    },
+    {
+      "name": "价格面板配置",
+      "file": "config/forms/价格面板配置.yaml",
+      "mode": "price_panel",
+      "data_source": "excel"
+    },
+    {
+      "name": "原生商广",
+      "file": "config/forms/原生商广.yaml",
+      "mode": "ad_native",
+      "data_source": "excel"
+    },
+    {
+      "name": "原生商广新",
+      "file": "config/forms/原生商广新.yaml",
+      "mode": "ad_v2",
+      "data_source": "excel"
+    },
+    {
+      "name": "常规商广",
+      "file": "config/forms/常规商广.yaml",
+      "mode": "ad_regular",
+      "data_source": "none"
+    },
+    {
+      "name": "常规资源位批量开关",
+      "file": "config/forms/常规资源位批量开关.yaml",
+      "mode": "dl_toggle",
+      "data_source": "none"
+    },
+    {
+      "name": "普通内容授权",
+      "file": "config/forms/普通内容授权.yaml",
+      "mode": "nc",
+      "data_source": "excel"
+    },
+    {
+      "name": "花火稿件授权",
+      "file": "config/forms/花火稿件授权.yaml",
+      "mode": "hh",
+      "data_source": "excel"
+    },
+    {
+      "name": "资源位投放",
+      "file": "config/forms/资源位投放.yaml",
+      "mode": "wizard",
+      "data_source": "excel"
+    },
+    {
+      "name": "预定会议室",
+      "file": "config/forms/预定会议室.yaml",
+      "mode": "meeting_reserve",
+      "data_source": "none"
+    }
+  ],
+  "additional_mode": "flow"
+}

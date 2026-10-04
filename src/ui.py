@@ -8,6 +8,10 @@ class Stopped(Exception):
 
 
 class BaseUI:
+    def verify_unknown(self, summary: str) -> bool:
+        """Only explicit human verification can allow this legacy request."""
+        return False
+
     def log(self, msg: str, level: str = "info"):
         raise NotImplementedError
 
@@ -54,6 +58,11 @@ def _ask(prompt: str) -> str | None:
 
 
 class ConsoleUI(BaseUI):
+    def verify_unknown(self, summary: str) -> bool:
+        if self.auto:
+            return False
+        return self._timed_ask(summary + "\n已在平台人工核实本条可申请？输入 yes 才继续：") == "yes"
+
     def __init__(self, auto: bool = False, sample_n: int = 0):
         self.auto = auto
         # 抽样确认：前 sample_n 条逐条问，确认够数了自动跑完剩下的。0 = 不抽样。

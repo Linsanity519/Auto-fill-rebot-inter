@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-04",
+  "baseline": "2236631ddfc96bddc34573188a79b2cf6ed855c0",
+  "branch": "codex/local-core-m0-m3",
+  "offline": {
+    "commands": 21,
+    "passed": 21,
+    "unittest": 52
+  },
+  "separate_passed": [
+    "task_host_process: competing hosts, detached client, crash after write, read-only reconciliation",
+    "main.py --task-host: empty queue startup and idle exit",
+    "ui_smoke: initialized local UI, price trial option, task details, text escaping, narrow viewport, close; all HTTP(S) blocked",
+    "node --check assets/webui/app.js",
+    "node --check assets/webui/tasks.js"
+  ],
+  "not_run": [
+    "four original environment-dependent tests",
+    "real internal platform/SSO/browser state transitions",
+    "live smart-sheet archive collection and receipts",
+    "packaged installation and runtime upgrade"
+  ],
+  "release_status": "draft review; not a production release; M2/M3 live acceptance pending"
+}

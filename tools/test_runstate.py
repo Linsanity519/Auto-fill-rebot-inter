@@ -122,15 +122,14 @@ def test_broken_file():
     d, p = tmp()
     try:
         p.write_text("{这不是 json", encoding="utf-8")
-        st = RunState(p, "资源位投放")
-        ok("⚠ 断点读不了也不能挡住跑，当作从头开始", st.done == [])
-        st.mark_done("a")
-        ok("　　还能正常写回去", RunState(p, "资源位投放").is_done("a"))
-
-        p.write_text('["不是字典"]', encoding="utf-8")
-        st2 = RunState(p, "资源位投放")
-        st2.mark_done("b")
-        ok("盘上是个列表也不炸", RunState(p, "资源位投放").is_done("b"))
+        from src.runstate import StateError
+        for damaged in ("{这不是 json", '["不是字典"]'):
+            p.write_text(damaged, encoding="utf-8")
+            try:
+                RunState(p, "资源位投放")
+                ok("损坏断点必须阻止续跑", False)
+            except StateError:
+                ok("损坏断点阻止续跑且保留原件", p.read_text(encoding="utf-8") == damaged)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

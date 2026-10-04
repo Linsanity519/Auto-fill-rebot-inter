@@ -1,0 +1,336 @@
+# v1.1.24 存量实现地图（历史参考）
+
+以下保留旧项目经验，仅用于定位存量实现。目录、脚手架、迁移和规范以根目录 AGENTS.md 及本目录新规范为准；原文的限制或经验结论不覆盖新规范，也不等于本轮已实测。
+
+# 给 Claude 的项目地图
+
+**这个文件的作用：让一个全新的会话不用把 src/ 翻一遍就能动手。**
+每次改完架构级的东西（加 mode、拆模块、换约定），回来更新这里。
+
+---
+
+## 一句话
+
+Python + Playwright，挂到用户**已登录**的 Chrome，读 Excel / 界面上填的参数，
+在内网后台批量填表，填完停下等人确认再提交。不处理账号密码。
+
+---
+
+## 入口
+
+| 怎么起 | 走哪儿 | 说明 |
+|---|---|---|
+| `python main.py` | `src/webapp.py` + `assets/webui/` | **默认界面**，pywebview 壳 + HTML/JS。日常改界面改这里 |
+| `python main.py --cli` | `src/ui.py` ConsoleUI | 命令行跑 |
+| 打包后的 exe | `launcher.py` | **故意不 import src**，src/ 要留在磁盘上才能被 300KB 代码包更新掉 |
+
+> 老的 `--tk` tkinter 界面（`src/gui.py` / `src/theme.py`）1.1.2 起删掉了：它配不了策略中心 /
+> 「准备」页 / 活动选择，三套 UI 并存维护不划算。要退回旧界面就看 git 历史。
+
+---
+
+## 核心抽象：一个「配置类型」= 一个 mode
+
+用户在界面上选的每一项（资源位投放 / 价格面板配置 / DMP延期 …）是一个**配置类型**：
+
+```
+config/forms/<配置类型名>.yaml    ← 声明 mode: xxx，以及这个页面的全部字段/选择器
+        ↓
+src/registry.py  MODES["xxx"]     ← 唯一的分发表：执行器 / 模板生成器 / 延期范围
+        ↓
+src/<前缀>_runner.py              ← 这个 mode 的主流程
+```
+
+**`src/registry.py` 是读代码的入口，先读它。** 新增 mode 主要就是往这张表里加一条。
+
+### mode ↔ 文件家族
+
+| mode | 配置类型 | 前缀 | runner | 数据 | 模板 | 填控件 |
+|---|---|---|---|---|---|---|
+| `wizard` | 资源位投放 | `wizard_` | `wizard_runner` | `wizard_data` | `wizard_template` | `wizard_filler` |
+| `price_panel` | 价格面板配置 | `pp_` | `pp_runner` | `pp_data` | `pp_template` | `pp_filler` + `pp_creative` |
+| `ad_native` | 原生商广 | `ad_` | `ad_runner` | `ad_data` | `ad_template` | `ad_filler` + `ad_image` |
+| `ad_regular` | 常规商广 | `ad_reg_` | `ad_reg_runner` | `ad_reg_data`（不吃 Excel，读准备页） | 无 | `ad_filler` + `ad_reg_creative` |
+| `dmp_extension` | DMP延期 | `dmp_` | `dmp_runner` | `dmp_data` | `dmp_template` | 直接操作，无独立 filler |
+| `ab_extension` | AB实验延期 | `ab_` | `ab_runner` | `ab_data` | `ab_template` | 同上 |
+| `meeting_reserve` | 预定会议室 | `meeting_` | `meeting_runner` | `meeting_data` | 不吃 Excel | 走接口 `meeting_api` |
+| `pt_toggle` | 价格策略批量开关 | `pt_` | `pt_runner` | 不吃 Excel | 同上 | `pt_filler` + `pt_strategy` / `pt_ledger` |
+| `dl_toggle` | 常规资源位批量开关 | `dl_` | `dl_runner` | 不吃 Excel | 同上 | `dl_filler` + `dl_ledger` |
+| （无 mode） | 价格配置、DMP人群新建 | — | `runner` | `datasource` | `template` | `filler` |
+
+**两个「批量开关」类型（`pt_toggle` / `dl_toggle`）共用界面上那张卡**，但一行代码都不共用：
+卡上显示哪几段由 caps 决定（`toggle` / `levels` / `activity_id` / `strategy_scope`），
+文案由各自 yaml 的 `ui:` 段给。加第三个批量开关类型时**别去 app.js 里加分支**，
+在 yaml 里声明就行。
+
+**每套家族之间互不调用，改一套不会影响另一套。** 这是刻意的：各家后台的 DOM
+栈完全不同（Formily / Vue+tw- / iView / Arco / antd），共用选择器只会互相踩。
+
+### 跨 mode 共用的东西（改这些要想清楚影响面）
+
+| 模块 | 谁在用 | 干什么 |
+|---|---|---|
+| `wizard_strategy.py` | **wizard + price_panel** | 策略中心：「配一次全批套用」的字段，支持多套方案 + 按单元名关键词切 |
+| `wizard_schema.py` | **wizard + price_panel** | yaml 字段结构的读取/展开 |
+| `ad_prep.py` | **ad_native + price_panel** | 「准备」页上填一次全批共用的参数，存 `config/prep/*.json` |
+| `browser.py` / `chrome.py` | 全部 | 挂到 9222 的 CDP、把标签页拨到前台（`front()`，不拨会被 Chrome 降频 15 倍） |
+| `formcfg.py` | 全部 | **form yaml 的唯一入口**：读 + 按 mtime 缓存 + 校验顶层键名。不要再写 `yaml.safe_load(config/forms/...)` |
+| `runstate.py` | 六个执行器 | 断点（哪些已跑成功）。`StateMixin` 混进去就有 `clear_state` |
+| `paths.py` | 全部 | `user_path()` 可写目录 / `resource()` 只读资源。**不要拼相对路径** |
+| `settings.py` | 全部 | 读 `config/settings.yaml`，缺的字段用 `assets/settings.default.yaml` 兜底 |
+| `preview.py` `ui.py` `validate.py` `images.py` `usage.py` `report.py` | 全部 | 预检行 / 界面回调 / 离线校验 / 图片 / 埋点 / 结果 csv |
+| `fill_core.py` | **新写的 filler 用它** | 和 DOM 无关的填表原语，见下 |
+| `xlsx_kit.py` | **全部 6 份 template** | 生成 Excel 时的样式活儿：表头上色/批注/列宽、填写说明页、存盘。各家 template 只管「有哪几列、说明写什么」 |
+
+### `src/fill_core.py`：新 filler 从这儿起步，别再抄第五遍
+
+四套 filler 的选择器确实一行都不能互抄（DOM 栈完全不同），**这个隔离是对的，
+不要去合并它们**。但「等到条件成立 / 按文字挑一条 / 等渲染稳定 / 报错怎么措辞」
+和 DOM 无关，各写了一遍 —— 光「盯着 cond 轮询到超时」这个循环就有 4 份相同拷贝
+（`pp_filler` / `wizard_filler` / `wizard_runner` / `pp_creative`），
+外加一批套着自己判据的 `_wait_rows` / `_wait_gone` / `_wait_list_changed`。
+
+`fill_core` 把这部分抽了出来：`wait_until` `wait_stable` `norm` `pick` `pick_all`
+`value_matches` `opt_regex` `js_click` `note`，外加统一的报错构造
+（`option_error` / `missing_error` / `field_error` / `verify_error`）。
+
+- **存量四套不改**（都在线上跑着，动它们不划算），只在写新 filler 时用。
+- 新 filler 自己只负责三件 DOM 特有的事：怎么找到字段块、怎么把浮层点开、
+  怎么读出选项文字。剩下的从 `fill_core` 拿。
+- 改它之后跑 `python tools\test_fill_core.py`（51 项，不联网不开浏览器）。
+
+### 界面能力一律声明化，不许按 mode 名判断
+
+「这个配置类型有没有策略中心 / 要不要勾资源位 / 吃不吃 Excel」，
+**唯一的判据是 `webapp.Api._caps(cfg)` 按 yaml 算出来的那几个布尔**，
+随 `list_forms()` 一起发给前端：
+
+| caps | 含义 | yaml 判据 |
+|---|---|---|
+| `strategy` | 有策略中心 | `strategy_groups` / `scheme_groups`（转调 `wizard_strategy.has_strategy`）|
+| `prep` | 有「准备」页共用参数表 | `prep_fields` / `prep_from_unit`（转调 `ad_prep.has_prep`）|
+| `positions` | 要勾「本次投哪些资源位」 | `positions` 多于 1 项 |
+| `activity` | 本批共用一个活动 | 有 `activity` 或 `steps` |
+| `task_list` | 抢占任务清单那张卡 | 有 `grab` |
+| `excel` | 吃 Excel 数据文件 | `data_source` 不是 `none` |
+| `toggle` | 「批量开关」那张卡（方向 / 范围…） | `toggle: true` |
+| `levels` | 卡上多一排「层级」（单元 / 创意） | `levels` 多于 1 项 |
+| `activity_id` | 卡上多一个「活动ID」输入框 | `activity_id: true` |
+| `strategy_scope` | 卡上多一行「策略范围」 | `strategy_scope: true` |
+
+配套的还有 `ui:` 段（`deliver_label` / `deliver_hint` / `strategy_hint` / `run_kind`），
+界面上跟着类型变的几句话写在 yaml 里，不写用默认。
+
+⚠ **`_caps()` 函数体里一个 mode 名都不该出现**；`app.js` 里也不许再写
+  `modeIs("xxx")`。要一个新开关，就往 `_caps()` 加一项、在 yaml 里声明。
+
+为什么定这条：原来 `app.js` 写的是 `hasStrategy(){ return modeIs("wizard")
+|| modeIs("price_panel") }`，而 Python 那边早就改成看 yaml 了 —— **同一个判断
+两套实现**，接一个新类型两边都要改，漏改还是静默的（卡片不显示，一句报错都没有）。
+
+改了 `_caps()` / `_ui_text()` 或加了配置类型之后，跑一次
+`python tools\gen_stub_forms.py` 把 `app.js` 里那份假数据同步上
+（它是"不启动 pywebview 也能核对布局"的依据，走样了就白搭）。
+
+---
+
+## 硬约定（违反了一定出事，都是踩出来的）
+
+0. **往 form yaml 加新顶层键，回 `src/formcfg.py` 的 `BY_MODE` 登记一下。**
+   不登记 `tools\check_mode.py` 会提示「不认识这个键」—— 那是它该干的事，
+   别关提示。打错一个字母是完全静默的（`strategy_groups` → `strategy_group`，
+   yaml 照样解析、策略字段从 24 悄悄变 6），这张词汇表就是为了防它。
+   纯 YAML 锚点用 `_` 开头，一律放行。
+1. **不写死 `sleep(n)`。** 一律 `wait_until(cond)` + `settings.timeout` 上限。
+   ⚠ **这条约定晚于很多存量代码，存量里并没有全做到** —— 别因为「约定写了」就默认代码守了。
+   1.1.19 的 DMP 延期就是这么炸的：`dmp_runner` 里十几处「点完等 N 毫秒」，网一卡就读到
+   半截的列表（「找不到人群」、翻页没等到当成最后一页静默收工）。它现在是范例：
+   列表刷新盯接口（`_ListWatch`），弹窗/菜单等出现或消失，「到底了」按接口总数算。
+   `ab_runner` 1.1.20 照同一个路子迁完了（代码不共用：接口是 `code:200 + items + pageVO`、
+   行上没有 data-row-key、搜索会连发两个请求，见 `docs/AB实验延期-页面结构.md`），
+   `tools\test_ab_runner.py` 里有一条「源码里不许出现 wait_for_timeout(」的检查。
+   还没迁的：`grep -c "wait_for_timeout(" src/*.py`（循环里当轮询步长用的不算）。
+   动到哪个文件就顺手迁哪个。
+2. **不用编译哈希类名**（`tw-xxxxxx` / `css-1a75fj6` / emotion 类）。发版即失效。
+   定位一律 **label 文字 → 字段块 → 块内按选项文字**。
+3. **同名 label 会出现多次**，要指定第几个。人群那段一个 label 出现 5 次。
+4. **改 `config/forms/*.yaml` 之前先查 `docs/README.md` 有没有对应的抓取记录。**
+   凭截图或口径表猜字段名/选项，已经翻车过（见 docs/README.md 的「教训」）。
+5. **提交前一定停下来给人看截图**，除非用户明确选了全自动。
+6. **发版必须先写 `CHANGELOG.md` 的 `## X.Y.Z` 一节**，写"用户会感觉到什么变化"。
+   没写 CI 会直接失败（这是故意的：notes 缺失是静默的）。
+7. `RUNTIME_ID` **只有改了 `requirements.txt` 才 +1**。
+8. 打包不 `--add-data assets`：assets/ 和 src/ 要留在 exe 旁边当普通文件。
+9. **前端 `callApi("x", …)` 的实参个数，必须和 `webapp.Api.x` 的签名对得上。**
+   对不上时 pywebview 只是把那个 Promise **reject 掉** —— `.then()` 不跑、日志里
+   一个字都没有，界面就永远停在「读取中…」。1.1.8 发出去之后才被用户发现
+   （`ledger_view` 前端传 2 个实参、后端只收 1 个）。现在 `callApi` 统一 catch 并写
+   一条错误日志，`tools\check_mode.py` 也会把两边参数个数对一遍 ——
+   **改完 Api 方法签名跑一次它**。
+10. **界面上任何弹窗 / 可滚区，按下面那条「弹窗与滚动」的规矩来。**
+   这一条前后踩了三次（详情弹窗、更新说明弹窗、准备页），每次的表现都是
+   「点不到按钮」「以为界面卡住了」，而且**在开发机上看不出来** ——
+   内容一短就一切正常，内容一长才现形。
+
+11. **要发给存量用户的东西，只能放 `src/` 或 `assets/`。**
+   300KB 代码包（日常升级走的就是它）只投递
+   `main.py` / `src` / `assets` / `config/forms` / `config/team.json`
+   —— 见 `tools/make_payload.py` 的 `MEMBERS`。放在 `config/` 下的其它文件
+   （`webhook.txt`、`sheet_webhook.txt`、`settings.yaml`）**只有 45MB 完整安装包才会铺**，
+   而绝大多数人从来不跑完整安装包。
+   踩过两次，两次都是**静默**的：
+     · `webhook.txt` 换群之后存量机器一直往旧群发 → 补了 `BUNDLED_WEBHOOK`（在 src/ 里）；
+     · 1.1.15 的 `sheet_webhook.txt` 走代码包发不到 → 表格通道全员没打开过，
+       两个版本之后才被发现 → 改成打包时生成 `src/_bundled.py`（gitignore，
+       由 `tools/inject_release_config.py` 写）。
+   ⚠ **别想着"那就把它加进 PAYLOAD_MEMBERS"**：用户机上跑的是**旧 updater**
+   （`tools/` 同样不在投递范围里），旧 updater 见到 `PAYLOAD_MEMBERS` 之外的成员会
+   判包损坏、整包回滚 —— 加一个文件进去等于存量用户全部更新失败。
+
+---
+
+## 弹窗与滚动（写界面时的硬规矩）
+
+界面跑在 pywebview（Edge WebView2）里，窗口能被拉到很矮，
+而弹窗里的内容（更新日志、一行攒了十几条的报错、字段很多的准备页）
+**长度是没有上限的**。下面四条一条都不能省：
+
+| # | 规矩 | 不守会怎样 |
+|---|---|---|
+| 1 | 卡片**限高**：`max-height: calc(100vh - 32px)` + `display:flex; flex-direction:column` | 弹窗上下都顶出屏幕，标题和按钮全在视口外 |
+| 2 | 只让**中间那一段**滚：`flex:1 1 auto; min-height:0; overflow-y:auto` | 不写 `min-height:0` 的话 flex 子项不肯收缩，限高等于没限 |
+| 3 | **按钮必须在滚动区外面**，单独一段 `flex:none` 的页脚 | 内容一长，「关闭」被推到滚动区一千像素以下 —— 用户看到的就是「弹窗关不掉」 |
+| 4 | 关闭要有**三条路**：按钮、点遮罩空白处、按 Esc | 前三条万一还是漏了，至少 Esc 能救 |
+
+还有一条同源的：**一行控件（`.row`）一律允许换行**。窗口能被拉窄，而一行里常常是
+「一排 segmented + 几个按钮」这种压不动的东西 —— 不换行的结果不是挤一挤，而是最右边
+那个按钮**被裁到窗口外**（「开始配置」就这么消失过，实测 980px 宽必现，而开发机上
+默认窗口宽根本看不出来）。`style.css` 里 `.row` 已经全局 `flex-wrap: wrap`，
+真需要死不换行的加 `.row-nowrap`，别反过来在某一行上写 `flex-wrap:nowrap` 图好看。
+
+配套的：**滚动条要看得见**。默认的覆盖式滚动条只在滚动时现形，
+于是「这块还能往下滚」这件事一点提示都没有 —— 用户以为内容就这么多。
+`style.css` 里已经全局画了一条细滚动条（`::-webkit-scrollbar` +
+`scrollbar-width: thin`），新写的滚动区不要再用 `scrollbar-width: none`
+之类把它藏回去。
+
+⚠ **改完必须拿长内容在矮窗口下验一遍**，别用开发机默认窗口大小验：
+
+```bash
+# 把 style.css 内联进一个测试页，用 CDP 连着的 Chrome 量几何
+# 判据三条：卡片 bottom <= 视口高；正文 scrollHeight > clientHeight；
+#          按钮的 boundingBox 完整落在视口内
+```
+
+现成的两个弹窗（`#modalOverlay` / `#detailModal`）已经是三段式
+（`.modal-head` / `.modal-body` / `.modal-foot`），照抄结构就行，
+**别把 `.modal-actions` 挪回 `.modal-body` 里去**。
+
+---
+
+## 新增一个配置类型：落地清单
+
+需求侧要哪些信息 → 见 [docs/新增配置类型-需求单.md](../新增配置类型-需求单.md)。
+代码侧要动的文件，按顺序：
+
+跑之前先过一遍离线自检（不开浏览器，几秒钟）：
+
+```bash
+python tools\check_mode.py <配置类型名>
+```
+
+它查的是**接线**：yaml 必备键、name 和文件名一致、registry 有没有这条 mode、
+界面能力（caps）算出来对不对、策略/准备页的字段定义解析得了没、抓取记录在不在，
+外加 **app.js 里每个 `callApi("x", …)` 的实参个数和 `Api.x` 的签名对不对得上**
+（对不上的后果是界面永远转圈、日志里没有任何线索，见硬约定第 9 条）。
+写新 yaml 时加 `--typos` 顺带查键名打错（启发式，有已知误报）。
+给了 `--data xxx.xlsx` 还会走一遍和「载入并检查」同一条路。
+⚠ **全过 ≠ 能跑通**：选择器准不准只有实跑能验。
+
+**先跑脚手架，接线那部分不用手写**：
+
+```bash
+python tools\new_mode.py 新配置类型名 --prefix xx
+```
+
+它铺好 yaml 骨架、抓取记录占位、runner/filler 骨架，并往 `registry.py` 的 MODES、
+`formcfg.py` 的 BY_MODE、`docs/README.md` 索引各插一条。跑完立刻 `check_mode` 应该全绿。
+剩下的是真业务：抓页面、填字段、写控件填法。
+
+| # | 文件 | 干什么 | 能省吗 |
+|---|---|---|---|
+| 0 | `python tools\capture.py --out docs\<配置类型>-配置项抓取.md` | 先自动 dump 一份草稿，别从零手抓 | — |
+| 1 | `docs/<配置类型>-配置项抓取.md` | 在草稿上人工核对补全：控件真实类型 + 选项全集 + 联动 + 坑 | **不能**，跳过它后面全在返工 |
+| 2 | `docs/README.md` | 加一行索引 | 不能 |
+| 3 | `config/forms/<配置类型>.yaml` | `name` / `description` / `nav` / `mode` / url / `ready_selector` / 字段 | 不能 |
+| 4 | `src/<前缀>_data.py` | 读 Excel + 策略 → 每个单元最终要填的值；`validate()` 离线查错 | 能，简单表单直接复用 `datasource` |
+| 5 | `src/<前缀>_template.py` | 生成 Excel 模板（只出「每条都不一样」的列） | 同上，复用 `template` |
+| 6 | `src/<前缀>_filler.py` | 这套 DOM 的控件填法。**建在 `fill_core` 上** | **能且应该先试** 复用现有 filler，DOM 栈相同就别新写 |
+| 7 | `src/<前缀>_runner.py` | 主流程 + `preview()` + 截图 + 确认 + 结果记录 | 能，单弹窗表单复用 `runner` |
+| 8 | `src/registry.py` | `MODES` 加一条 + 两个 lazy 工厂函数 | 不能 |
+| 9 | `src/webapp.py` | 只有真需要「准备页 / 策略中心 / 活动选择」时才动 | 尽量能 |
+| 10 | `assets/webui/app.js` + `index.html` + `style.css` | 同上 | 尽量能 |
+| 11 | `CHANGELOG.md` + `src/__init__.py` 版本号 | 发版 | 不能 |
+
+**不用动**：`build.bat` / `build_app.spec`（hiddenimports 由 spec 扫 `src/` 自动生成）。
+
+---
+
+## 不要通读的文件（很贵，按需 grep 就行）
+
+`src/pp_filler.py`(1129) `src/dmp_runner.py`(926)
+`src/ab_runner.py`(1519) `src/usage.py`(897) `assets/webui/app.js`(3123)
+`config/forms/价格面板配置.yaml`(700+) `config/forms/资源位投放.yaml`(600+)
+
+需要它们里的某个能力时，先 `grep -n "^\s*def \|^class "` 看函数列表，再定点读。
+
+---
+
+## 抓页面
+
+**先跑 `tools/capture.py`，别一开始就手动翻 DOM。**
+
+```bash
+python tools\capture.py --out docs\XX-配置项抓取.md
+```
+
+它把当前页 dump 成抓取记录草稿：字段全表、控件类型（推断）、必填、
+**同名 label 计数**、当前不可见的字段。三个模式：
+
+| 命令 | 干什么 |
+|---|---|
+| `--out FILE` | 出 markdown 草稿 |
+| `--options "字段名"` | 把某个下拉点开、读出全部选项（草稿里读不到的那部分） |
+| `--snap a` → 人工改一个值 → `--snap b --diff a` | **抓联动**：哪些字段出现/消失/变必填 |
+
+`--diff` 是最值钱的一个：它直接产出「选了这个值之后表单换成哪一套」，
+而这决定 **Excel 模板出哪些列** —— 模板列跑之前就定死，漏一条整个模板重做。
+
+⚠ 草稿**不是结论**。控件类型是推断的（多选下拉 vs 勾选框组一定要人眼确认），
+远程搜索的下拉读回来是空（正常，得打字才拉数据）。核对完再落进 `docs/`。
+
+手动抓（capture 覆盖不到的部分，完整说明见 `docs/README.md` 末尾）：
+
+```python
+from src import chrome
+from src.paths import app_dir
+chrome.launch("http://127.0.0.1:9222", app_dir() / ".chrome-profile", "要抓的页面URL")
+# 人工在弹出窗口里扫码登录，然后：
+from src.browser import Browser
+with Browser("http://127.0.0.1:9222", 30000) as b:
+    p = b.page      # 标准 Playwright Page
+```
+
+**能拿接口就别翻 DOM。**（价格面板那套的 `config_materials` 一个接口顶几百行选项抓取）
+
+---
+
+## 发版
+
+```bash
+build.bat
+```
+
+产出两个包：`ConfigAssistant-<ver>.zip`(~300KB，日常发版) 和
+`ConfigAssistant-Setup-<ver>.exe`(~45MB，首次安装 / 动了 requirements.txt)。
+推 `vX.Y.Z` 标签，GitHub Actions 自动发布。细节见 `README.md`。

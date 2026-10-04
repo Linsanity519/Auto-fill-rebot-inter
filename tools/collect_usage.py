@@ -477,7 +477,7 @@ def sheet_query(docid: str, sql: str) -> list[dict]:
         raise RuntimeError("找不到 wecom-cli（npm install -g @wecom/cli）")
     r = subprocess.run([exe, "smartsheet", "records", "query",
                         "--docid", docid, "--sql", " ".join(sql.split())],
-                       capture_output=True)
+                       capture_output=True, timeout=60)
     # ⚠ 先解析 stdout 再看退出码：授权过期时 CLI 退出码非 0，但原因（850003 + 授权链接）
     #   在 stdout 里、stderr 是空的 —— 只看 stderr 的话只剩一句「执行失败」。
     try:
@@ -600,7 +600,7 @@ def collect_from_sheet() -> dict:
                            "或者设环境变量 STATS_DOCID")
     raw = sheet_query(docid, RUNS_SQL)
     if len(raw) >= RUNS_LIMIT:
-        print(f"  ⚠ 取到了 {RUNS_LIMIT} 行上限，可能还有没读到的 —— 该给这张表分表了")
+        raise RuntimeError(f"取到 {RUNS_LIMIT} 行查询上限，无法证明数据完整；停止生成可能漏项的统计快照，请分页或归档后重试")
     # 同一个运行ID 只留一行（重复来自客户端超时补发，见 RUNS_SQL 上面那段）
     runs, seen = [], set()
     for r in raw:

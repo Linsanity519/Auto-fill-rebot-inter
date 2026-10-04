@@ -133,7 +133,7 @@ class PtToggleFiller:
         """
         from .pt_strategy import EDIT_URL
         url = EDIT_URL.format(route_id=route_id)
-        if not self.page.url.startswith(url.split("#")[0]):
+        if self.page.url.split("#")[0].split("?")[0].rstrip("/") != url.rstrip("/"):
             self.page.goto(url, wait_until="domcontentloaded")
         try:
             self.wait_table(max(self.timeout * 3, 45000))
@@ -218,7 +218,7 @@ class PtToggleFiller:
         if not rows:
             raise FillError(f"当前页没有叫「{name}」的行")
         if len(rows) > 1:
-            self._note(f"「{name}」在当前页有 {len(rows)} 行同名，操作第 1 行")
+            raise FillError(f"「{name}」存在多条同名行，无法唯一定位，已停止操作")
         row = rows[0]
 
         if row["link"] == want_link:

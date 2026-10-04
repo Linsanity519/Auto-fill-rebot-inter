@@ -34,7 +34,13 @@ permissions:
   contents: write
 
 jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+
   release:
+    needs: quality
     runs-on: windows-latest
     env:
       CI: true
