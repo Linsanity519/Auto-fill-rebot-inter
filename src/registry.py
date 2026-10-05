@@ -74,6 +74,9 @@ def _runner_price_panel(settings, cfg, ui):
 
 
 def _runner_pt(settings, cfg, ui):
+    if settings.get("pricing_task_host"):
+        from .bootstrap import price_runner
+        return price_runner(settings, cfg, ui)
     from .pt_runner import PtToggleRunner
     return PtToggleRunner(settings, cfg, ui)
 

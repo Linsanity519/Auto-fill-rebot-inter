@@ -1,119 +1,116 @@
-"""断点：哪些已经跑成功了，重跑时跳过。
+"""Legacy checkpoints with atomic persistence and explicit uncertain submissions.
 
-## 为什么单独抽出来
-
-原来 `runner` / `dmp_runner` / `ab_runner` 各写了一份一模一样的
-`_load_state` / `_save_state` / `clear_state`，而 **`wizard_runner` /
-`pp_runner` / `ad_runner` 一份都没有** —— 这三个恰好是最该有的：
-一个单元要跑几分钟，而且**会在后台真的建出活动和单元**。
-40 个单元跑到第 30 个失败，重跑会把前 29 个再建一遍。
-
-界面上那两处也因此是坏的：
-  · 「跳过已成功的」—— 这三个的 preview() 里 done 写死 False，永远不跳
-  · 「清除断点」—— webapp 无条件调 runner.clear_state()，这三个没这个方法，
-    直接 AttributeError，界面上显示「清除断点失败」
-
-所以这不是"代码重复"的问题，是"漏了的地方没人发现"的问题 —— 正是该归一化的那类。
-
-## 存盘格式（没变，老的 output/state.json 直接能用）
-
-    {
-      "资源位投放": {"done": [key, ...], "failed": [{"key":…, "name":…, "error":…}]},
-      "价格配置":   {"done": [0, 1, 2], "failed": []}
-    }
-
-⚠ 按**配置类型名**分区，各跑各的互不干扰。
-⚠ key 的类型由调用方定，只要能进 JSON 又能相等比较就行：
-  价格配置用行号（int），DMP/AB 用人群ID/实验ID（str），
-  资源位投放用「资源位/单元名」（str）。
-
-## key 怎么选
-
-选**重跑时还认得出是同一条**的东西：
-
-  好： 人群ID、实验ID、「资源位/单元名」、Excel 行号 + 单元名
-  坏： 列表里的下标（翻页顺序会变）、时间戳、页面上的行号
-
-⚠ 拿 Excel 行号当 key 的，用户在 Excel 中间插一行，断点就对不上了 ——
-  所以能带上名字就带上（`f"{row}/{name}"`），名字变了本来也该当成新的一条。
+Old keyed records remain readable. Corrupt state must be repaired explicitly;
+it must never be interpreted as permission to replay every external write.
 """
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
-log = logging.getLogger(__name__)
+from .adapters.locking import FileLock, atomic_json
+from .domain.identity import stable_id
+
+
+class StateError(RuntimeError):
+    """Durability or recovery failure: stop submitting new changes."""
+
+
+class StateUncertain(StateError):
+    pass
 
 
 class RunState:
-    """一个配置类型的断点。构造时读盘，每次标记后立刻写盘。
-
-    ⚠ 每标记一条就写一次盘，不攒着 —— 跑到一半被关掉、断网、程序崩，
-      已经成功的那些必须还在。一次写盘几毫秒，而重跑一个单元要几分钟。
-    """
-
     def __init__(self, path: str | Path, form_name: str, resume: bool = True):
         self.path = Path(path)
         self.form_name = form_name
         self.done: list = []
         self.failed: list = []
+        self.pending: list = []
+        self._ignore_history = not resume
+        self._poison = ""
+        data = self._read().get(form_name) or {}
+        if not isinstance(data, dict):
+            raise StateError("断点分区损坏；请先备份并核查历史任务")
+        self.pending = list(data.get("pending") or [])
         if resume:
-            self._load()
+            self.done = list(data.get("done") or [])
+            self.failed = list(data.get("failed") or [])
 
-    # ---------------- 读写 ----------------
-    def _load(self):
+    def _read(self) -> dict:
         if not self.path.exists():
-            return
+            return {}
         try:
-            all_state = json.loads(self.path.read_text(encoding="utf-8"))
-            mine = all_state.get(self.form_name) or {}
-            self.done = list(mine.get("done") or [])
-            self.failed = list(mine.get("failed") or [])
-        except Exception:
-            # ⚠ 断点读不了绝不能挡住跑。最坏结果是从头跑一遍，
-            #   而抛出去的话用户连界面都进不来。
-            log.warning("断点文件读不了，当作从头开始：%s", self.path, exc_info=True)
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("expected object")
+            for partition in data.values():
+                if not isinstance(partition, dict) or any(
+                        field in partition and not isinstance(partition[field], list)
+                        for field in ("done", "failed", "pending")):
+                    raise ValueError("invalid checkpoint partition")
+            return data
+        except (OSError, ValueError) as exc:
+            raise StateError("断点文件无法可靠读取；已停止续跑，请保留文件并核查：" + str(self.path)) from exc
+
+    def _change(self, mutate):
+        if self._poison:
+            raise StateError(self._poison)
+        try:
+            with FileLock(str(self.path) + ".lock", timeout=2):
+                all_state = self._read()
+                source = all_state.get(self.form_name) or {}
+                if not isinstance(source, dict):
+                    raise StateError("断点分区损坏")
+                mine = {"done": list(self.done if self._ignore_history else source.get("done") or []),
+                        "failed": list(self.failed if self._ignore_history else source.get("failed") or []),
+                        "pending": list(source.get("pending") or [])}
+                mutate(mine)
+                all_state[self.form_name] = mine
+                atomic_json(self.path, all_state)
+                self.done, self.failed, self.pending = mine["done"], mine["failed"], mine["pending"]
+        except Exception as exc:
+            self._poison = "断点保存失败，已停止后续提交；已发生的操作需要核验：" + str(self.path)
+            raise StateError(self._poison) from exc
 
     def save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        all_state = {}
-        if self.path.exists():
-            try:
-                all_state = json.loads(self.path.read_text(encoding="utf-8"))
-            except Exception:
-                # 整个文件坏了就重写一份。别的配置类型的断点会丢，
-                # 但它本来也已经读不出来了。
-                log.warning("断点文件坏了，重写一份：%s", self.path, exc_info=True)
-                all_state = {}
-        if not isinstance(all_state, dict):
-            all_state = {}
-        all_state[self.form_name] = {"done": self.done, "failed": self.failed}
-        try:
-            self.path.write_text(
-                json.dumps(all_state, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            # 写不了也不该挡住跑（比如目录被占用），下次重跑就是多跑几条
-            log.warning("断点写不进去：%s", self.path, exc_info=True)
+        snapshot = {"done": list(self.done), "failed": list(self.failed), "pending": list(self.pending)}
+        self._change(lambda mine: mine.update(snapshot))
 
-    # ---------------- 用的 ----------------
-    def is_done(self, key) -> bool:
+    def is_done(self, key):
+        if self._poison:
+            raise StateError(self._poison)
+        if key in self.pending:
+            raise StateUncertain("此条上次提交结果未知，不能直接重跑：" + str(key))
         return key in self.done
 
+    def begin(self, key):
+        if key in self.pending:
+            raise StateUncertain("存在待核查的提交：" + str(key))
+        def change(mine):
+            if key in mine["pending"]:
+                raise StateUncertain("另一轮提交仍待核查")
+            mine["pending"].append(key)
+        self._change(change)
+
     def mark_done(self, key):
-        if key not in self.done:
-            self.done.append(key)
-        self.save()
+        def change(mine):
+            if key not in mine["done"]:
+                mine["done"].append(key)
+            mine["pending"] = [x for x in mine["pending"] if x != key]
+        self._change(change)
 
     def mark_failed(self, key, name: str, error: str):
-        self.failed.append({"key": key, "name": name, "error": error})
-        self.save()
+        self._change(lambda mine: mine["failed"].append({"key": key, "name": name, "error": error}))
+        if key in self.pending:
+            raise StateUncertain("提交结果待核查，已停止继续写入：" + str(name))
 
     def clear(self):
-        self.done, self.failed = [], []
-        self.save()
+        if self.pending:
+            raise StateUncertain("仍有结果未知的提交，不能用清除断点绕过核查")
+        self._change(lambda mine: mine.update(done=[], failed=[]))
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.done)
 
 
@@ -135,8 +132,36 @@ class StateMixin:
     """
 
     def _init_state(self):
-        self.state = RunState(self.s["state_file"], self.f["name"],
+        context = self.s.get("execution_context")
+        namespace = self.f["name"]
+        if context:
+            namespace += "@" + stable_id("context", context)
+        self.state = RunState(self.s["state_file"], namespace,
                               resume=bool(self.s.get("resume")))
 
     def clear_state(self):
         self.state.clear()
+
+    def readonly_run(self, records=None):
+        """只读模式只校验输入/读取状态，不调用 filler 或业务提交。"""
+        from .domain.identity import identify_records
+        from .ui import ConsoleUI
+        ui = getattr(self, "ui", None) or ConsoleUI()
+        rows = self.preview() if records is None else None
+        values = [r.payload for r in rows] if rows is not None else list(records)
+        values = identify_records(values, [self.f.get("name"), self.s.get("execution_context")])
+        results = []
+        for i, item in enumerate(values):
+            issues = rows[i].issues if rows is not None else []
+            results.append({"序号": item.get("_execution_row", i + 1),
+                            "item_id": item["_execution_id"],
+                            "状态": "failed" if issues else "dry_run",
+                            "错误": "；".join(issues),
+                            "名称": rows[i].name if rows is not None else str((item.get("header") or {}).get("名称", i + 1))})
+        ui.log("只读校验完成；没有调用填写、创建或提交操作")
+        failed = sum(r["状态"] == "failed" for r in results)
+        ui.progress(len(results), len(results), {"ok": 0, "failed": failed, "skipped": 0, "dry": len(results)-failed})
+        if hasattr(self, "_write_results"):
+            self._write_results(results)
+        ui.finished("只读校验完成", f"共 {len(results)} 条，问题 {failed} 条；未修改平台", not failed)
+        return results

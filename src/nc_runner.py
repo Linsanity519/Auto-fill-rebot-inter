@@ -67,11 +67,12 @@ class NcRunner(StateMixin):
                 status = self._check_status([it["bvid"] for it in checkable])
             except Exception as e:
                 log.warning("预检打 state 接口失败", exc_info=True)
-                self.ui.log(f"预检没能连上平台校验接口（{e}），这一轮不做可授权性预判", "warn")
+                self.ui.log(f"预检没能连上平台校验接口（{e}），本轮资格未知，暂不能提交", "warn")
                 status = {}
             for it in checkable:
                 st = status.get(it["bvid"])
                 if st is None:
+                    it["issues"].append("资格未知：平台预检没有返回此稿件，暂不能提交")
                     continue
                 if not st.get("ok"):
                     it["issues"].append(st.get("msg") or "平台校验没过")
@@ -79,6 +80,10 @@ class NcRunner(StateMixin):
                 it["title"] = st.get("title", "")
                 it["up"] = st.get("up", "")
                 it["mid"] = st.get("mid", "")
+                it["auth_times"] = st.get("auth_times")
+                it["eligibility"] = "unknown"
+                it.setdefault("warnings", []).append(
+                    "配额未知：历史申请次数的范围和时间窗口尚未核实；每条需人工核实，不支持自动申请")
                 if st.get("has_authorized"):
                     it["issues"].append("这条已经授权过了，不用重复申请")
             self._apply_quota(checkable)
@@ -127,18 +132,8 @@ class NcRunner(StateMixin):
         api = self.f.get("status_api") or STATUS_API
         with Browser(self.s["cdp_url"], self.s["timeout"]) as b:
             self._goto(b)
-            raw = b.page.evaluate(
-                """async ([api, ids]) => {
-                    const out = {};
-                    for (const id of ids) {
-                      try {
-                        const res = await fetch(api + encodeURIComponent(id), {credentials: 'include'});
-                        out[id] = await res.text();
-                      } catch (e) { out[id] = 'ERR ' + e; }
-                      await new Promise(s => setTimeout(s, 120));
-                    }
-                    return out;
-                }""", [api, bvids])
+            from .adapters.legacy.preflight import read_status
+            raw = read_status(b.page, api, bvids, self.s["timeout"])
 
         got = {}
         for bvid, text in raw.items():
@@ -171,6 +166,8 @@ class NcRunner(StateMixin):
 
     # ---------------- 主流程 ----------------
     def run(self, items: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(items)
         if items is None:
             src = self._items if self._items is not None else [
                 r.payload["_nc"] for r in self.preview()]
@@ -233,6 +230,17 @@ class NcRunner(StateMixin):
                             self.ui.progress(i + 1, total, stats)
                             continue
 
+                        if it.get("eligibility") == "unknown":
+                            verified = not self.auto and self.ui.verify_unknown(
+                                f"「{name}」历史申请次数返回 {it.get('auth_times')}，"
+                                "助手不能确认剩余配额。请在平台核实本条可申请。")
+                            if not verified:
+                                filler.close_dialog()
+                                results.append(self._row(i + 1, it, "skipped", "资格未知，未获人工核实"))
+                                stats["skipped"] += 1
+                                continue
+                            self.ui.log(f"{bvid}：用户声明已在平台人工核实申请资格；非程序核验")
+                        self.state.begin(_key(it))
                         msg = filler.submit()
                         stats["ok"] += 1
                         self.state.mark_done(_key(it))

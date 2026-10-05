@@ -289,6 +289,8 @@ class PtToggleRunner(StateMixin):
 
     # ---------------- 主流程 ----------------
     def run(self, records: list[dict] | None = None):
+        if self.s.get("dry_run") and not self.s.get("allow_rehearsal"):
+            return self.readonly_run(records)
         if records is None:
             records = [r.payload for r in self.preview() if not r.issues]
         dry = bool(self.s.get("dry_run"))
@@ -438,7 +440,10 @@ class PtToggleRunner(StateMixin):
 
                 try:
                     b.front()
+                    operation_id = "pt:" + self.direction + ":" + key
+                    self.state.begin(operation_id)
                     r = pf.toggle(name, self.direction)
+                    self.state.mark_done(operation_id)
                     results_by[key] = self._res(
                         name, "ok" if r == "ok" else "skipped",
                         "" if r == "ok" else "已是目标状态", kind, sname)
@@ -449,6 +454,8 @@ class PtToggleRunner(StateMixin):
                     raise
                 except Exception as e:
                     msg = str(e)
+                    if "operation_id" in locals() and operation_id in self.state.pending:
+                        self.state.mark_failed(operation_id, name, msg)
                     log.exception("%s 失败", label)
                     results_by[key] = self._res(name, "failed", msg, kind, sname)
                     stats["failed"] += 1

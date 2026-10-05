@@ -55,12 +55,25 @@ def load_form(name: str | None) -> dict:
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--task-host":
+        from src.entrypoints.task_host import run
+        run(sys.argv[2])
+        return
+    if len(sys.argv) >= 3 and sys.argv[1] == "--tasks":
+        from src.entrypoints.tasks import run
+        settings = settings_defaults.apply_defaults(yaml.safe_load((ROOT / "config/settings.yaml").read_text(encoding="utf-8")))
+        for key in ("state_file", "result_file", "log_file", "screenshot_dir", "data_file"):
+            if settings.get(key) and not Path(settings[key]).is_absolute():
+                settings[key] = str(ROOT / settings[key])
+        run(sys.argv[2:], settings)
+        return
     ap = argparse.ArgumentParser(description="大会员业务后台 配置助手")
     ap.add_argument("--cli", action="store_true", help="走命令行，不开图形界面")
     ap.add_argument("--form", help="配置类型（config/forms/ 下的文件名）")
     ap.add_argument("--settings", default="config/settings.yaml")
     ap.add_argument("--data", help="覆盖数据文件")
-    ap.add_argument("--dry-run", action="store_true", help="只填不提交")
+    ap.add_argument("--dry-run", action="store_true", help="只读校验，不填写、不创建、不提交")
+    ap.add_argument("--rehearse", action="store_true", help="真实填写演练，可能创建活动或单元，请核对平台")
     ap.add_argument("--auto", action="store_true", help="不逐条确认，连续提交")
     ap.add_argument("--sample", type=int, metavar="N", default=0,
                     help="抽样确认：前 N 条逐条确认，之后自动跑完剩下的")
@@ -72,6 +85,11 @@ def main():
                          "生成模板时也不带「活动」sheet")
     ap.add_argument("--activity-type", default="5",
                     help="wizard 模式：配合 --activity-id 用的活动类型ID，默认 5（测试验收）")
+    ap.add_argument("--task-core", action="store_true", help="启用价格策略任务宿主试点；页面标识需实测")
+    ap.add_argument("--toggle-direction", choices=["on", "off"], default="on")
+    ap.add_argument("--toggle-params", default="", help="价格开关名称关键词或清单")
+    ap.add_argument("--toggle-strategies", default="", help="价格策略 URL、路由 ID 或业务 ID")
+    ap.add_argument("--pt-scope", choices=["keyword", "list", "ledger"], default="keyword")
     ap.add_argument("--scope", choices=["active", "mine", "id_list"],
                     help="延期范围。DMP延期：active=全部生效中(默认) / mine=我创建的 / "
                          "id_list=按清单指定人群ID；AB实验延期：mine=我的实验(默认) / "
@@ -139,6 +157,9 @@ def main():
         settings["data_file"] = args.data
     if args.dry_run:
         settings["dry_run"] = True
+    if args.rehearse:
+        settings["dry_run"] = True
+        settings["allow_rehearsal"] = True
     if args.no_resume:
         settings["resume"] = False
     if args.scope:
@@ -149,6 +170,9 @@ def main():
         settings["wizard_activity"] = {"existing": True, "activity_id": args.activity_id,
                                        "activity_type": args.activity_type}
 
+    settings.update(entry="cli", pricing_task_host=args.task_core or settings.get("pricing_task_host", False), toggle_direction=args.toggle_direction,
+                    toggle_params=args.toggle_params, toggle_strategies=args.toggle_strategies,
+                    pt_scope=args.pt_scope)
     try:
         from src import registry
 
@@ -167,6 +191,10 @@ def main():
             if miss:
                 print("⚠ " + miss + "（缺的列不会被读，跑之前先补上）")
 
+        from src.adapters.data_paths import browser_lock
+        lease = browser_lock(settings)
+        if not getattr(runner, "managed_host", False):
+            lease.acquire()
         rows = runner.preview()
         bad = [r for r in rows if r.issues]
         for r in bad:
@@ -175,7 +203,7 @@ def main():
             print(f"共 {len(bad)} 条未通过校验，已跳过")
 
         # 和图形界面保持一致：校验不过的不去撞墙
-        records = [r.payload for r in rows if not r.issues]
+        records = [r.payload for r in rows if not r.issues and not r.done]
         if not records:
             print("没有可执行的记录")
             return
@@ -184,14 +212,25 @@ def main():
         from src import manifest, usage
 
         run_id = usage.new_run_id()
-        run_mode = ("dry" if settings.get("dry_run") else
+        run_mode = ("rehearse" if settings.get("allow_rehearsal") else "dry" if settings.get("dry_run") else
                     ("auto" if args.auto else ("sample" if args.sample else "confirm")))
         t0 = time.monotonic()
         results = []
         ui = runner.ui
+        capture = None
+        failure = ""
         try:
+            if not getattr(runner, "managed_host", False):
+                from src.adapters.legacy.archive_capture import LegacyCapture, ArchiveUI
+                capture = LegacyCapture(settings, form_cfg, records, run_mode, "cli")
+                runner.ui = ArchiveUI(ui, capture)
             results = runner.run(records)
+        except Exception as exc:
+            failure = str(exc)
+            raise
         finally:
+            if capture:
+                capture.finish(results, failure)
             usage.record(
                 settings, "run_finished",
                 run_id=run_id, form=form_cfg.get("name", ""),
@@ -209,6 +248,9 @@ def main():
                                     None, results, extra={"scope": args.scope})
                 if mp:
                     print(f"产物清单：{mp}")
+        from src.bootstrap import sync_archives
+        collection = sync_archives(settings)
+        print("完整档案归集：" + str(collection.get("message") or collection.get("status")))
     except KeyboardInterrupt:
         print("\n已中断。下次运行会从断点继续。")
         sys.exit(1)
@@ -216,6 +258,9 @@ def main():
         print(f"\n出错：{e}")
         logging.exception("fatal")
         sys.exit(1)
+    finally:
+        if "lease" in locals():
+            lease.release()
 
 
 if __name__ == "__main__":

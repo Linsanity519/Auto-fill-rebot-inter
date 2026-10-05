@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = "Linsanity519/Auto-fill-rebot-inter"
@@ -45,6 +46,10 @@ def main() -> int:
     if missing:
         raise SystemExit("缺少发布文件（先跑 build.bat 和 make_update_manifest.py）：\n"
                          + "\n".join(missing))
+
+    # 手工发布也必须通过同一门禁；失败时不能继续创建远端 Release。
+    subprocess.run([sys.executable, str(ROOT / "tools" / "check_project.py")],
+                   cwd=ROOT, check=True)
 
     command = [
         gh, "release", "create", f"v{args.version}", *[str(p) for p in assets],

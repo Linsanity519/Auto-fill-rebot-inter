@@ -2593,9 +2593,10 @@
    */
   function syncModeSegmented() {
     const seg = $("#modeSegmented");
+    document.getElementById("pricingTaskHostOption").classList.toggle("hidden", !caps().reversible);
     const item = (m) => seg.querySelector(`.seg-item[data-mode="${m}"]`);
     const grab = isGrabRun();
-    item("dry").textContent = grab ? "空跑（只找不订）" : "空跑（只填不提交）";
+    item("dry").textContent = "只读预检（不修改平台）";
     item("auto").textContent = grab ? "开抢" : "全自动";
     item("confirm").classList.toggle("hidden", grab);
     // 「抽样确认」：抢会议室没有，自制配置类型跑「逐步」时也不掺一档
@@ -3416,6 +3417,7 @@
 
   function doLoadCheckInner(btn) {
     const opts = wizardOptions() || {};
+    opts.pricing_task_host = !!document.getElementById("pricingTaskHost")?.checked;
     if (hasToggle()) {
       const sc = state.tgScope;
       opts.toggle_direction = state.toggleDir;
@@ -3566,6 +3568,11 @@
       appendLog("浏览器没连上，请先点右上角「启动浏览器并登录」", "warn");
       return;
     }
+    if (["rehearse", "step"].includes(state.runMode)) {
+      showModal({title: "真实填写演练", desc: "这会操作平台页面，可能创建活动或单元。仅最终提交可能被跳过，结束后请检查并清理实际产物。",
+        buttons: [{label: "开始真实演练", primary: true, onClick: doStartRun}, {label: "取消"}]});
+      return;
+    }
     if (state.runMode === "auto") {
       showModal({
         title: "确认全自动",
@@ -3706,12 +3713,21 @@
   function doRollback() {
     showModal({
       title: "把这批翻回去",
-      desc: "会读上一批的产物清单，把其中「成功翻转」的那些行反方向再点一遍（逐条确认，不自动提交）。确定？",
+      desc: "会按指定任务的对象 ID、变更前后状态生成翻回计划；当前状态不匹配时停止。生成后请查看计划，再开始执行。",
       buttons: [
         {
           label: "确定", primary: true, onClick: () => {
             callApi("pt_rollback").then((res) => {
               if (res && res.ok) {
+                if (res.prepared) {
+                  state.previewRows = res.rows;
+                  renderReviewTable();
+                  state.loaded = true;
+                  goToStep("review");
+                  updateNextButtonState();
+                  appendLog(res.message, "info");
+                  return;
+                }
                 state.running = true; setRunButtons(true);
                 appendLog(`已开始翻回：${res.names || ""} 条，方向 ${res.direction === "on" ? "开启" : "关闭"}`, "info");
               } else {

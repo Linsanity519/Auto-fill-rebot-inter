@@ -2,6 +2,10 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+REM 工程质量门禁必须在改版本号、注入配置和清理构建产物之前通过。
+python tools\check_project.py
+if errorlevel 1 goto :fail
+
 echo === 1/6 检查打包依赖 ===
 REM 走国内镜像，直连 PyPI 在内网会卡到超时
 python -c "import PyInstaller" 2>nul || pip install -i https://mirrors.aliyun.com/pypi/simple/ pyinstaller
