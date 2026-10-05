@@ -21,7 +21,8 @@
 - node --check：app.js、tasks.js；通过。
 - tools/ui_smoke.py：本地界面夹具、查看/关闭、文本转义、1100×780 与 760×560；HTTP/HTTPS 全部阻断。截图仅在忽略目录 output/quality，不含业务数据。
 - 真实 main.py --task-host 入口用空队列启动/空闲退出验证通过，未连接浏览器。
-- 四项旧环境测试 test_update/test_updater/test_filler_locate/test_ad_reg_titles 未运行。新宿主进程测试在离线门禁外独立执行，也已加入 CI。
+- 四项旧环境测试已于 2026-10-05 在 Linux 容器（Python 3.11.15、playwright 1.56.0 + chromium-1194）首次补跑，全部通过：test_update（发布站探测与缓存重算）、test_updater（回滚、目录穿越拒绝、策略配置不被劫持）、test_filler_locate（真实 Chromium 跑价格配置快照，18 项定位全在）、test_ad_reg_titles（18 项）。
+  ⚠ 这是 Linux 上的结果，不等于 Windows 验收：`tools/updater.py` 的 `ctypes.windll` 进程等待与失败弹窗分支在本次运行中没有被执行，仍须在 Windows 上实测。新宿主进程测试在离线门禁外独立执行，也已加入 CI。
 - 内网 SSO/DOM/真实写入、智能表格收齐档案、打包安装与旧运行时升级均未执行。
 
 以上检查证明本地行为，不代替生产验收。最终提交前检查链接、差异与新增凭据泄露；GitHub CI 结果需以远端实际运行记录为准。

@@ -14,8 +14,19 @@
     "node --check assets/webui/app.js",
     "node --check assets/webui/tasks.js"
   ],
+  "environment_tests_rerun": {
+    "date": "2026-10-05",
+    "platform": "Linux container, Python 3.11.15, playwright 1.56.0 + chromium-1194",
+    "passed": [
+      "test_update: release-feed probe and cache recomputation",
+      "test_updater: rollback, directory-traversal rejection, config/strategies not hijacked",
+      "test_filler_locate: real Chromium against the price-config snapshot, 18/18 locators present",
+      "test_ad_reg_titles: 18/18"
+    ],
+    "caveat": "Linux only; the ctypes.windll process-wait and failure-dialog branches of tools/updater.py were not exercised and still need a Windows run."
+  },
   "not_run": [
-    "four original environment-dependent tests",
+    "Windows-side acceptance of the four environment-dependent tests",
     "real internal platform/SSO/browser state transitions",
     "live smart-sheet archive collection and receipts",
     "packaged installation and runtime upgrade"
